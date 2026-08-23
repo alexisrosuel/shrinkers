@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust — fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy (all targets, deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test
+
+  python:
+    name: Python ${{ matrix.python-version }} — wheel + pytest
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build wheel (maturin)
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          manylinux: auto
+
+      - name: Install wheel + test deps
+        run: |
+          pip install --force-reinstall --find-links dist shrinkers
+          pip install numpy pytest
+
+      - name: Import smoke test
+        run: |
+          python -c "import shrinkers; print('shrinkers', shrinkers.__version__)"
+          python -c "
+          import numpy as np, shrinkers
+          res = shrinkers.deconvolve_spiked(np.arange(1, 11, dtype=np.float64), c=0.25)
+          assert 'spikes' in res and 'bulk' in res
+          print('deconvolve_spiked OK:', res['k'], 'spikes detected')
+          "
+
+      - name: Python API tests
+        run: pytest tests -q
