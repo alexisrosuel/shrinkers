@@ -125,9 +125,23 @@ See `docs/python_api.md` for the full API reference.
 | `Fft3` | O(p log p) | Fused FFT grid (3 FFTs) | ~0.15% grid error |
 | `Fft2` | O(p log p) | Packed 2-FFT grid | ~0.15% grid error |
 | `TreeCode` | O(p log p) | 1D balanced tree (FMM) | User-controllable |
+| `ChebCode` | O(p log p) | Chebyshev-interpolation tree | ~1e-10 rel |
 | `Ewald` | O(p·k + M log M) | Near/far splitting + coarse FFT | User-controllable |
-| `Dst` | O(p log p) | DST-I real part (odd-extension FFT) | ~0.15% grid error |
+| `Dst` | O(p log p) | Alias for the `Adaptive` composition (shared FFT grid) | ~0.15% grid error |
 | `Auto` | — | Auto-selects fastest by p | — |
+
+> **Notes.** `Dst` delegates to the same FFT grid as `Adaptive`/`Fft5`
+> (identical math, fewer transforms). `Ewald` is dominated by `ChebCode` on
+> both axes (faster *and* more accurate) and is kept for reference only.
+> With a far-field cutoff enabled, the exact `Blocked` family routes to the
+> windowed kernels: identical included terms, O(p·k) instead of O(p²).
+> Presets are data-driven: `Strategy::Speed` / `Strategy::Accuracy` resolve
+> through a measured Pareto table (`src/config/pareto_autogen.rs`,
+> regenerate via `examples/pareto_data.rs` + `scripts/build_pareto_table.py`)
+> with independent columns for Sequential/Rayon; the user's parallelism
+> choice is respected. NUFFT-based evaluation was investigated and rejected —
+> uniform grids cannot suppress the Cauchy kernel's algebraic wrap-around
+> images (see CHANGELOG); local approximation wins the accuracy frontier.
 
 ## Performance
 
@@ -231,12 +245,33 @@ Key findings:
 | Eigenvalue-only API | ❌ (needs X) | ❌ (needs X) | **✅ yes** |
 | SIMD auto-vectorization | ❌ | ❌ | **✅ NEON/AVX2** |
 | Multiple strategies | ❌ | ❌ | **✅ 13 methods** |
-| Zero unsafe code | N/A | N/A | **✅** |
+| Zero unsafe code* | N/A | N/A | **✅ (1 audited module)** |
 | Maintenance | Last updated 2017 | Sporadic | **✅ Active** |
 
-## Zero unsafe code
+## Unsafe code policy
 
-All `unsafe` blocks have been removed. `0` occurrences of `unsafe` in any source file.
+The crate is unsafe-free with **one deliberate, audited exception**:
+`src/stieltjes/simd.rs`. AArch64 NEON exposes no FP64 vector divide, so the
+hot Stieltjes kernels use a Newton–Raphson refined reciprocal
+(`vrecpeq_f64` + three `vrecpsq_f64` steps; ≥53 significant bits) to keep
+every lane on pipelined multiply/add units — measured 10–15% end-to-end on
+ChebCode at equal accuracy.
+
+All `unsafe` blocks of the entire crate live in that one module, behind the
+safe `F64x2` abstraction:
+
+- every SIMD load reads lanes `i..i+2` of a live `&[f64]`; callers guarantee
+  the bound by construction (`j + 2 <= n` loop guards, `debug_assert`
+  documents it);
+- FP64 NEON is architectural on AArch64 and builds pin
+  `-C target-cpu=native`, so the intrinsics' feature set is a compile-time
+  constant — no runtime dispatch can be missed;
+- non-AArch64 targets get an identical-semantics `[f64; 2]` fallback (true
+  division), so kernels remain a single portable code path.
+
+Everything outside `src/stieltjes/simd.rs` contains zero `unsafe`. (An even
+earlier scalar-lane `fast_reciprocal` was removed: without 128-bit lanes it
+measured 3× slower than hardware `fdiv`.)
 
 ## Development
 
