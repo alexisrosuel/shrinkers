@@ -1,0 +1,33 @@
+# Rust build artifacts
+/target
+
+# Python build artifacts
+*.so
+*.dylib
+*.dll
+*.pyd
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.whl
+
+# pixi environment (managed by pixi, not committed)
+.pixi/
+
+# Virtual environments
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+*.swp
+.vscode/
+
+# Python tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.cache/
+

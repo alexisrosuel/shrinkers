@@ -1,0 +1,45 @@
+[workspace]
+authors = ["alexisrosuel <rosuelalexis1@gmail.com>"]
+channels = ["conda-forge"]
+name = "shrinkers"
+platforms = ["osx-arm64", "linux-64"]
+version = "0.3.0"
+
+[tasks]
+# Build the Rust extension into the pixi env (dev install)
+build = "maturin develop --release"
+# Build in debug mode (faster iteration)
+build-debug = "maturin develop"
+# Run the full Rust test suite
+test = "cargo test"
+# Run the Python API tests
+test-py = "pytest tests"
+# Run the Python benchmark script
+bench-stieltjes = "python scripts/bench_stieltjes.py"
+# Run the Python measure/precision script
+measure = "python scripts/measure_current.py"
+# Run clippy lints (Rust)
+lint = "cargo clippy --all-targets -- -D warnings"
+# Lint Python code
+lint-py = "ruff check scripts tests"
+# Format Rust code
+fmt = "cargo fmt"
+# Check formatting
+fmt-check = "cargo fmt --check"
+# Type-check Python code
+type-py = "mypy scripts tests"
+
+[dependencies]
+python = "3.14.*"
+numpy = ">=2"
+scipy = ">=1"
+pip = ">=26.1.2,<27"
+matplotlib = ">=3.11.1,<4"
+# Build tool for the PyO3 extension — must be declared so the env is reproducible
+maturin = ">=1.7,<2"
+
+[pypi-dependencies]
+# Python dev tooling (linting, testing, type checking)
+pytest = ">=8"
+ruff = ">=0.6"
+mypy = ">=1.11"

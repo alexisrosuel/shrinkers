@@ -1,0 +1,50 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "shrinkers"
+dynamic = ["version"]
+requires-python = ">=3.9"
+description = "Fast RMT (Random Matrix Theory) Shrinkage Kernel — SIMD-accelerated RIE estimator"
+authors = [{name = "alexisrosuel"}]
+license = {text = "MIT"}
+keywords = ["random-matrix-theory", "shrinkage", "covariance", "finance", "ml"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+
+[tool.maturin]
+features = ["python"]
+module-name = "shrinkers"
+include = [
+    {path = "shrinkers.pyi", format = "sdist"},
+    {path = "shrinkers.pyi", format = "wheel"},
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint.per-file-ignores]
+# Prototype / benchmark scripts are one-off measurement tools: loop variables
+# in benchmark closures (B023), NaN-guard comparisons (PLR0124), broad excepts
+# around plotting teardown (BLE001), and unused unpacks from result tuples
+# (RUF059/F841) are intentional there. Keep strict linting for tests/.
+"scripts/*" = [
+    "B023",
+    "BLE001",
+    "EXE001",
+    "FA102",
+    "F841",
+    "PLC0206",
+    "PLR0124",
+    "RUF046",
+    "RUF059",
+    "UP031",
+]
+
+[tool.mypy]
+ignore_missing_imports = true

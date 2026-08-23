@@ -1,0 +1,74 @@
+[package]
+name = "shrinkers"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Fast RMT (Random Matrix Theory) shrinkage kernel: SIMD-accelerated Stieltjes transforms, spiked covariance estimation, and Marchenko-Pastur spectral deconvolution"
+readme = "README.md"
+keywords = ["random-matrix-theory", "shrinkage", "covariance", "finance", "numerical"]
+categories = ["science", "mathematics"]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[profile.release]
+# Auto-vectorization & hardware intrinsics
+codegen-units = 1
+lto = "fat"
+strip = "symbols"
+
+[dependencies]
+ndarray = "0.17"
+rayon = "1.12"
+num-complex = "0.4"
+rustfft = "6.4"
+
+[features]
+python = ["dep:pyo3", "dep:numpy"]
+
+[dependencies.pyo3]
+version = "0.29"
+optional = true
+features = ["extension-module"]
+
+[dependencies.numpy]
+version = "0.29"
+optional = true
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["rayon"] }
+rand = "0.10"
+approx = "0.5"
+
+[[bench]]
+name = "comparison"
+harness = false
+
+[[bench]]
+name = "peropt"
+harness = false
+
+[[bench]]
+name = "cache_tiling"
+harness = false
+
+[[bench]]
+name = "large_p_approx"
+harness = false
+
+[[bench]]
+name = "cache_branch"
+harness = false
+
+[[bench]]
+name = "tiled_opt"
+harness = false
+
+[[bench]]
+name = "local_expansion"
+harness = false
+
+[[bench]]
+name = "chebyshev_fmm"
+harness = false

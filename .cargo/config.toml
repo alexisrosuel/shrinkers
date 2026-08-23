@@ -1,0 +1,10 @@
+# Enable native CPU instructions (AVX2, FMA, NEON, etc.)
+# Without this, Rust only uses baseline features for the target arch.
+# On Apple M-series this enables the full NEON ISA + FMA.
+# Also enables auto-vectorization and use of advanced SIMD instructions.
+#
+# Note: We do NOT set FTZ/DAZ globally via build script because it has
+# weird interactions with some libraries. Instead, we handle it at runtime
+# in the entry points (Python bindings and public API).
+[target.'cfg(all())']
+rustflags = ["-C", "target-cpu=native"]
