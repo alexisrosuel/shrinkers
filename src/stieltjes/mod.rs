@@ -32,6 +32,7 @@ pub mod fft3;
 pub mod fft5;
 mod fftplan;
 mod naive;
+mod simd;
 pub mod term;
 mod treecode;
 

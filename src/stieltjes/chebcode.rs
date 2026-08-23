@@ -42,6 +42,7 @@
 //! - Per-query iterative walk with a reusable stack. Optional Rayon
 //!   parallelism over the independent query points.
 
+use super::simd::F64x2;
 use rayon::prelude::*;
 
 /// Flat, structure-of-arrays Chebyshev tree.
@@ -62,9 +63,6 @@ struct FlatChebTree {
     nodes: Vec<f64>,
     /// Flattened source weights: `w[node*n + j]`.
     w: Vec<f64>,
-    /// Barycentric weights λ_j of the 2nd-kind Chebyshev nodes on [-1,1]
-    /// (shared by every node; depends only on `n`).
-    lam: Vec<f64>,
     left: Vec<i32>,
     right: Vec<i32>,
     /// number of Chebyshev nodes per interval (degree+1)
@@ -97,49 +95,78 @@ fn barycentric_weights_m1(n: usize) -> Vec<f64> {
 
 /// Fill Chebyshev nodes + source weights (Lagrange basis, barycentric form)
 /// for node `idx` using `sorted[lo_idx..hi_idx]`.
-fn fill_weights(tree: &mut FlatChebTree, idx: usize, lo_idx: usize, hi_idx: usize) {
+///
+/// `sm1` holds the 2nd-kind Chebyshev nodes on [-1,1] (built ONCE per tree),
+/// `lam` the shared barycentric weights, and `scratch` a caller-owned buffer
+/// reused across nodes — this function performs no allocation itself.
+fn fill_weights(
+    tree: &mut FlatChebTree,
+    idx: usize,
+    lo_idx: usize,
+    hi_idx: usize,
+    sm1: &[f64],
+    lam: &[f64],
+    scratch: &mut [f64],
+) {
     let n = tree.n;
     let lo = tree.lo[idx];
     let hi = tree.hi[idx];
     let c = 0.5 * (lo + hi);
     let l = 0.5 * (hi - lo);
 
-    let sm1 = cheb_nodes_m1(n);
-    // Barycentric weights for the 2nd-kind nodes — shared across all nodes.
-    let lam: Vec<f64> = tree.lam.clone();
-    let mut t = vec![0.0; n];
-    for (tj, &s) in t.iter_mut().zip(sm1.iter()) {
-        *tj = c + l * s;
-    }
     let base = idx * n;
-    tree.nodes[base..base + n].copy_from_slice(&t);
-    let mut w = vec![0.0; n];
+    // Node positions on [lo, hi]: t_j = c + l·s_j (written straight into the
+    // flat node array — no temporary).
+    for (slot, &s) in tree.nodes[base..base + n].iter_mut().zip(sm1.iter()) {
+        *slot = c + l * s;
+    }
 
     // ℓ_j(x) = (λ_j/(x-t_j)) / (Σ_i λ_i/(x-t_i)); if x hits a node exactly,
     // that single basis evaluates to 1.
+    //
+    // Division-hoisted accumulation: v_j = λ_j/(x-t_j) is computed once
+    // (n divisions), s = Σ v_j normalizes, and the update is the multiply
+    // `w_j += v_j·(1/s)` — one extra division per POINT instead of one per
+    // (point, node). Numerically identical up to ≤1 ulp.
+    let t = &tree.nodes[base..base + n];
+    let w = &mut scratch[..n];
+    w.fill(0.0);
+    let mut v = [0.0f64; 64];
+    debug_assert!(tree.n <= v.len());
     for &x in &tree.sorted[lo_idx..hi_idx] {
         let mut s = 0.0;
         let mut hit = usize::MAX;
-        for j in 0..n {
+        for (j, vj) in v.iter_mut().enumerate().take(n) {
             let d = x - t[j];
             if d == 0.0 {
                 hit = j;
                 break;
             }
-            s += lam[j] / d;
+            let q = lam[j] / d;
+            *vj = q;
+            s += q;
         }
         if hit != usize::MAX {
             w[hit] += 1.0;
             continue;
         }
-        for j in 0..n {
-            w[j] += (lam[j] / (x - t[j])) / s;
+        let inv_s = 1.0 / s;
+        for (wj, &vj) in w.iter_mut().zip(v.iter()).take(n) {
+            *wj += vj * inv_s;
         }
     }
-    tree.w[base..base + n].copy_from_slice(&w);
+    tree.w[base..base + n].copy_from_slice(w);
 }
 
-fn build_cheb(tree: &mut FlatChebTree, lo_idx: usize, hi_idx: usize, leaf_cap: usize) -> i32 {
+fn build_cheb(
+    tree: &mut FlatChebTree,
+    sm1: &[f64],
+    lam: &[f64],
+    scratch: &mut [f64],
+    lo_idx: usize,
+    hi_idx: usize,
+    leaf_cap: usize,
+) -> i32 {
     let idx = tree.lo.len() as i32;
     let count = hi_idx - lo_idx;
     let lo = tree.sorted[lo_idx];
@@ -157,7 +184,7 @@ fn build_cheb(tree: &mut FlatChebTree, lo_idx: usize, hi_idx: usize, leaf_cap: u
     tree.right.push(-1);
 
     if count <= leaf_cap {
-        fill_weights(tree, idx as usize, lo_idx, hi_idx);
+        fill_weights(tree, idx as usize, lo_idx, hi_idx, sm1, lam, scratch);
         return idx;
     }
 
@@ -166,18 +193,21 @@ fn build_cheb(tree: &mut FlatChebTree, lo_idx: usize, hi_idx: usize, leaf_cap: u
     if split == lo_idx || split == hi_idx {
         split = (lo_idx + hi_idx) / 2;
     }
-    let li = build_cheb(tree, lo_idx, split, leaf_cap);
-    let ri = build_cheb(tree, split, hi_idx, leaf_cap);
+    let li = build_cheb(tree, sm1, lam, scratch, lo_idx, split, leaf_cap);
+    let ri = build_cheb(tree, sm1, lam, scratch, split, hi_idx, leaf_cap);
 
     let ni = idx as usize;
     tree.left[ni] = li;
     tree.right[ni] = ri;
-    fill_weights(tree, ni, lo_idx, hi_idx);
+    fill_weights(tree, ni, lo_idx, hi_idx, sm1, lam, scratch);
     idx
 }
 
 impl FlatChebTree {
     fn build(sorted: &[f64], n: usize, theta: f64, leaf_cap: usize) -> Self {
+        // Barycentric weights depend only on `n`; they are consumed during
+        // the build, so they live outside the (hot) query struct.
+        let lam = barycentric_weights_m1(n);
         let mut tree = FlatChebTree {
             sorted: sorted.to_vec(),
             lo: Vec::with_capacity(2 * sorted.len()),
@@ -186,13 +216,25 @@ impl FlatChebTree {
             hi_idx: Vec::with_capacity(2 * sorted.len()),
             nodes: Vec::with_capacity(2 * sorted.len() * n),
             w: Vec::with_capacity(2 * sorted.len() * n),
-            lam: barycentric_weights_m1(n),
             left: Vec::with_capacity(2 * sorted.len()),
             right: Vec::with_capacity(2 * sorted.len()),
             n,
             theta_sq: theta * theta,
         };
-        build_cheb(&mut tree, 0, sorted.len(), leaf_cap);
+        // Shared per-build data: Chebyshev nodes on [-1,1] (the per-node
+        // positions are affine rescalings) and one scratch buffer reused by
+        // every fill_weights call — no per-node allocations.
+        let sm1 = cheb_nodes_m1(n);
+        let mut scratch = vec![0.0; n];
+        build_cheb(
+            &mut tree,
+            &sm1,
+            &lam,
+            &mut scratch,
+            0,
+            sorted.len(),
+            leaf_cap,
+        );
         tree
     }
 
@@ -216,13 +258,28 @@ impl FlatChebTree {
                 // into the sorted array — cache friendly).
                 let lo_idx = self.lo_idx[ni];
                 let hi_idx = self.hi_idx[ni];
-                let mut lr = 0.0;
-                let mut li = 0.0;
-                for &x in &self.sorted[lo_idx..hi_idx] {
-                    let d = lambda_i - x;
+                // Same lane layout as the far-field: pairs of SOURCE POINTS.
+                let xs = &self.sorted[lo_idx..hi_idx];
+                let zv = F64x2::splat(lambda_i);
+                let etav = F64x2::splat(eta);
+                let eta2v = F64x2::splat(eta * eta);
+                let (mut ar, mut ai) = (F64x2::zero(), F64x2::zero());
+                let mut k = 0;
+                while k + 2 <= xs.len() {
+                    let d = zv - F64x2::load(xs, k);
+                    let inv = eta2v.fma(d, d).recip();
+                    ar = ar.fma(d, inv);
+                    ai = ai.fma(etav, inv);
+                    k += 2;
+                }
+                let mut lr = ar.hsum();
+                let mut li = ai.hsum();
+                while k < xs.len() {
+                    let d = lambda_i - xs[k];
                     let inv = 1.0 / (d * d + eta * eta);
                     lr += d * inv;
                     li += eta * inv;
+                    k += 1;
                 }
                 re += lr;
                 im += li;
@@ -254,17 +311,35 @@ impl FlatChebTree {
                 // ~10²–10³), while the per-term dot product below evaluates
                 // every denominator exactly like the near-field leaf loop —
                 // same conditioning, unconditional stability.
-                let base = ni * n;
-                let mut fr = 0.0;
-                let mut fi = 0.0;
-                for j in 0..n {
-                    // Complex denominator d = (λ - t_j) - i·η,
-                    // 1/d = (d_r + i·η) / |d|².
-                    let dj = lambda_i - self.nodes[base + j];
+                let nbase = ni * n;
+                // Vectorized across the panel's nodes (pairs of lanes): the
+                // refined reciprocal keeps the loop on pipelined mul/add —
+                // AArch64 has no FP64 vector divide (see stieltjes::simd).
+                let ts = &self.nodes[nbase..nbase + n];
+                let ws = &self.w[nbase..nbase + n];
+                let zv = F64x2::splat(lambda_i);
+                let etav = F64x2::splat(eta);
+                let eta2v = F64x2::splat(eta * eta);
+                let (mut afr, mut afi) = (F64x2::zero(), F64x2::zero());
+                let mut j = 0;
+                while j + 2 <= n {
+                    let d = zv - F64x2::load(ts, j);
+                    let inv = eta2v.fma(d, d).recip();
+                    let wj = F64x2::load(ws, j);
+                    afr = afr.fma(wj * d, inv);
+                    afi = afi.fma(wj * etav, inv);
+                    j += 2;
+                }
+                let mut fr = afr.hsum();
+                let mut fi = afi.hsum();
+                while j < n {
+                    // Scalar tail (n is typically odd).
+                    let dj = lambda_i - ts[j];
                     let inv = 1.0 / (dj * dj + eta * eta);
-                    let wj = self.w[base + j];
+                    let wj = ws[j];
                     fr += wj * dj * inv;
                     fi += wj * eta * inv;
+                    j += 1;
                 }
                 re += fr;
                 im += fi;
@@ -310,11 +385,20 @@ pub fn compute_all_stieltjes_chebcode_impl(
         return Vec::new();
     }
 
-    // Tree is built over the sorted multiset (results still in original order).
-    let mut sorted: Vec<f64> = eigenvalues.to_vec();
-    sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    // Tree is built over the sorted multiset (results still in original
+    // order). Skip the defensive sort when the input is already sorted —
+    // the O(p) check is cheaper than the O(p log p) sort, and the pipeline
+    // always passes pre-sorted eigenvalues.
+    let mut sorted_buf: Vec<f64>;
+    let sorted: &[f64] = if super::is_sorted_ascending(eigenvalues) {
+        eigenvalues
+    } else {
+        sorted_buf = eigenvalues.to_vec();
+        sorted_buf.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        &sorted_buf
+    };
 
-    let tree = FlatChebTree::build(&sorted, n, theta, leaf_cap);
+    let tree = FlatChebTree::build(sorted, n, theta, leaf_cap);
 
     if parallel {
         eigenvalues
