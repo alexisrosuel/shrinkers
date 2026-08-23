@@ -365,7 +365,15 @@ pub fn compute_all_stieltjes(
             scale_soa(reals, imags, inv_p)
         }
         StieltjesMethod::Hodlr => scale_aos(
-            hodlr::compute_all_stieltjes_hodlr_impl(eigenvalues, eta, 256, 1e-9, 32, parallel),
+            hodlr::compute_all_stieltjes_hodlr_impl(
+                eigenvalues,
+                eta,
+                256,
+                1e-9,
+                32,
+                parallel,
+                hodlr::HodlrMode::Aca,
+            ),
             inv_p,
         ),
         StieltjesMethod::Blocked => {
