@@ -21,6 +21,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `w_j += v_j·(1/s)` — one division per point instead of two per
   (point, node); numerically identical up to ≤1 ulp.
 
+### Added
+- **`StieltjesMethod::Hodlr` — hierarchical low-rank (HODLR) summation**, a
+  fundamentally different paradigm from the analytic compressions already in
+  the crate: the kernel matrix `K_ij = 1/(λᵢ−λⱼ−iη)` is applied to the
+  all-ones vector over a balanced index tree whose off-diagonal blocks are
+  compressed by **adaptive cross approximation** to a requested tolerance.
+  ACA pivots actual kernel entries and validates itself block by block — no
+  opening-angle parameter, no equivalent densities, no analytic translations
+  (the failure mode that sank the FMM prototype). Near-field is exact at the
+  leaves; cross terms apply as `U·(V·1)`; factors live only during their
+  level pass (`O(rank·p)` peak memory); Rayon-parallel over subtrees.
+  Measured (MP spectra, η=1/√p, defaults leaf=256/tol=1e-9/rank≤32):
+  accuracy 5e-10..7e-10 rel L2 at every size — ~10× more accurate than
+  ChebCode's operating point — at 203 ms seq / 89 ms rayon for p=50000
+  (~9×/10× slower than ChebCode). Verdict: dominated on this spectrum family
+  (ChebCode wins speed-at-accuracy, BlockedTiled wins exact), but kept as
+  the portfolio's kernel-agnostic member: it needs nothing but kernel
+  evaluations, so it transfers unchanged to future kernels without FFT or
+  tree structure. Implementation notes: skeleton pivots must skip previously
+  used rows/columns (re-use makes the residual column vanish identically and
+  division by the machine-zero pivot destroys the factors), and the stopping
+  rule must test the normalized next-term norm ‖u‖·‖v‖/|pivot| — the raw
+  product ignores the pivot scale and stopped ~1e4× before tolerance.
+
 ### Rejected (research track — documented negative result)
 - **Black-box FMM for the Stieltjes transform** (adaptive Chebyshev panels,
   P2M anterpolation, M2M merging, per-leaf well-separated pair DFS, direct
