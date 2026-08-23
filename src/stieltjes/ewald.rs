@@ -33,7 +33,7 @@
 //! Only `exp` is needed (no complex `erf`), so this uses only stable Rust std.
 
 use num_complex::Complex64;
-use rustfft::{FftDirection, FftPlanner};
+use rustfft::FftDirection;
 
 /// Default splitting scale: `alpha = ALPHA_OVER_ETA / eta`.
 /// Chosen so the near window `R = 3/alpha` comfortably covers the `η`-scale
@@ -178,11 +178,9 @@ fn far_part(
 
     // --- FFT density + packed kernel (2 forward FFTs) ---
     let mut dens_freq: Vec<Complex64> = density.iter().map(|&v| Complex64::new(v, 0.0)).collect();
-    let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft(m, FftDirection::Forward);
 
-    fft.process(&mut dens_freq);
-    fft.process(&mut packed_kernel);
+    super::fftplan::fft_inplace(&mut dens_freq, FftDirection::Forward);
+    super::fftplan::fft_inplace(&mut packed_kernel, FftDirection::Forward);
 
     // --- Unpack the two kernel spectra from the packed transform ---
     // If C = FFT(a + i·b), then:
@@ -201,8 +199,7 @@ fn far_part(
         packed_out[k] = Complex64::new(im_hat.re - re_hat.im, im_hat.im + re_hat.re);
     }
 
-    let ifft = planner.plan_fft(m, FftDirection::Inverse);
-    ifft.process(&mut packed_out);
+    super::fftplan::fft_inplace(&mut packed_out, FftDirection::Inverse);
 
     let inv_m = 1.0 / m_f64;
 

@@ -26,11 +26,11 @@ mod autovec;
 mod blocked_autovec;
 mod cacheblock;
 mod chebcode;
-pub mod dst;
 pub mod ewald;
 pub mod fft2;
 pub mod fft3;
 pub mod fft5;
+mod fftplan;
 mod naive;
 pub mod term;
 mod treecode;
@@ -40,7 +40,6 @@ pub use autovec::*;
 pub use blocked_autovec::*;
 pub use cacheblock::*;
 pub use chebcode::*;
-pub use dst::*;
 pub use ewald::*;
 pub use fft2::*;
 pub use fft3::*;
@@ -86,6 +85,8 @@ pub fn stieltjes_sum_for_one(
         | StieltjesMethod::ChebCode
         | StieltjesMethod::Ewald
         | StieltjesMethod::Dst
+        | StieltjesMethod::AccuracyAuto
+        | StieltjesMethod::SpeedAuto
         | StieltjesMethod::Auto => {
             // FFT/treecode/adaptive methods cannot compute a single point
             // efficiently, so we use the autovec fallback for single-point
@@ -191,6 +192,69 @@ fn scale_aos(pairs: Vec<(f64, f64)>, inv_p: f64) -> Vec<(f64, f64)> {
         .collect()
 }
 
+/// Below this p, Rayon scheduling overhead exceeds the tiled-kernel gain and
+/// the per-row autovec kernel wins (measured: par-tiled 0.26 ms vs per-row
+/// 0.22 ms at p=1000; the ordering flips between p=1000 and p=5000).
+const PAR_TILED_MIN_P: usize = 2000;
+
+/// Cheap O(p) sortedness check so the tree-code methods can skip their
+/// defensive O(p log p) sort when the caller passes pre-sorted eigenvalues
+/// (which the whole pipeline does).
+pub(crate) fn is_sorted_ascending(v: &[f64]) -> bool {
+    v.windows(2).all(|w| w[0] <= w[1])
+}
+
+/// Dispatch the exact blocked/tiled family over sequential and parallel
+/// execution — one policy, used by both the `Blocked` and `BlockedTiled`
+/// arms of [`compute_all_stieltjes`].
+///
+/// - Sequential: the 2D-tiled kernel with auto-tuned block size
+///   (output-block-outer keeps the output block resident in cache across all
+///   source sweeps; `block_size` has always been ignored by this family).
+/// - Parallel, large p: the same tiled hot body distributed over disjoint
+///   output chunks with `par_chunks_mut` (no false sharing, no reduction).
+///   Note this also gives `BlockedTiled` + Rayon a genuinely parallel path —
+///   it previously ran sequentially.
+/// - Parallel, small p: per-row autovec (scheduling overhead dominates).
+///
+/// With a far-field cutoff enabled, every path here delegates to the
+/// *windowed* implementations (see the branch below).
+fn dispatch_exact_blocked(
+    eigenvalues: &[f64],
+    eta: f64,
+    cutoff_ratio: Option<f64>,
+    parallel: bool,
+) -> (Vec<f64>, Vec<f64>) {
+    let p = eigenvalues.len();
+
+    // Cutoff ⇒ windowed kernels: identical included term set (pairs with
+    // |λᵢ-λⱼ| ≤ ratio·η), but the contiguous window is located by binary
+    // search so far-field iterations are skipped entirely — O(p·k) instead
+    // of an O(p²) sweep with per-term branch skips.
+    if let Some(cut) = cutoff_ratio {
+        return if parallel {
+            cacheblock::compute_all_stieltjes_blocked_windowed_parallel(
+                eigenvalues,
+                eta,
+                None,
+                Some(cut),
+            )
+        } else {
+            cacheblock::compute_all_stieltjes_blocked_windowed(eigenvalues, eta, None, Some(cut))
+        };
+    }
+
+    match (parallel, p >= PAR_TILED_MIN_P) {
+        (true, true) => {
+            cacheblock::compute_all_stieltjes_blocked_tiled_parallel(eigenvalues, eta, None, None)
+        }
+        (true, false) => {
+            cacheblock::compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None, None)
+        }
+        (false, _) => cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None, None),
+    }
+}
+
 /// Compute the full Stieltjes transform for all eigenvalues.
 ///
 /// Returns a Vec of (real, imag) pairs, one per eigenvalue, scaled by `1/p`.
@@ -216,8 +280,23 @@ pub fn compute_all_stieltjes(
     };
     let inv_p = 1.0 / (p as f64);
     let parallel = matches!(parallelism, Parallelism::Rayon);
+    // Data-driven presets resolve via the measured Pareto table.
+    let method = if matches!(
+        method,
+        StieltjesMethod::AccuracyAuto | StieltjesMethod::SpeedAuto
+    ) {
+        let speed = method == StieltjesMethod::SpeedAuto;
+        let rayon = matches!(parallelism, Parallelism::Rayon);
+        crate::config::pareto_autogen::pareto_pick(speed, rayon, p)
+    } else {
+        method
+    };
 
     match method {
+        // Resolved above; kept only for match exhaustiveness.
+        StieltjesMethod::AccuracyAuto | StieltjesMethod::SpeedAuto => {
+            unreachable!("preset autos resolve to concrete methods before dispatch")
+        }
         StieltjesMethod::Adaptive => scale_aos(
             adaptive::compute_all_stieltjes_adaptive(eigenvalues, eta, fft_grid_size, cutoff_ratio),
             inv_p,
@@ -247,9 +326,17 @@ pub fn compute_all_stieltjes(
             inv_p,
         ),
         StieltjesMethod::Dst => {
-            // DST computes only the real part; the imaginary part is computed
-            // exactly via the windowed method (short-range, cheap).
-            let reals = dst::compute_real_part_dst(eigenvalues, eta, fft_grid_size);
+            // The DST-I odd-extension real part is mathematically the same
+            // odd-kernel convolution that the shared fft5 grid computes with
+            // fewer transforms (1 forward + 1 inverse vs 2 forward + 1
+            // inverse). `Dst` therefore delegates to the fft5 real part plus
+            // the windowed imaginary part — i.e. the Adaptive composition
+            // with a user-configurable window. (The standalone `dst` module
+            // was removed; see the CHANGELOG.)
+            let reals = {
+                let pairs = fft5::compute_all_stieltjes_fft5(eigenvalues, eta, fft_grid_size);
+                pairs.into_iter().map(|(r, _)| r).collect::<Vec<f64>>()
+            };
             let (_, imags) = cacheblock::compute_all_stieltjes_blocked_windowed(
                 eigenvalues,
                 eta,
@@ -274,21 +361,7 @@ pub fn compute_all_stieltjes(
             scale_soa(reals, imags, inv_p)
         }
         StieltjesMethod::Blocked => {
-            let (reals, imags) = if parallel {
-                cacheblock::compute_all_stieltjes_blocked_parallel(
-                    eigenvalues,
-                    eta,
-                    cutoff_ratio,
-                    Some(block_size),
-                )
-            } else {
-                cacheblock::compute_all_stieltjes_blocked(
-                    eigenvalues,
-                    eta,
-                    Some(block_size),
-                    cutoff_ratio,
-                )
-            };
+            let (reals, imags) = dispatch_exact_blocked(eigenvalues, eta, cutoff_ratio, parallel);
             scale_soa(reals, imags, inv_p)
         }
         StieltjesMethod::BlockedAutoVec => {
@@ -310,14 +383,7 @@ pub fn compute_all_stieltjes(
             scale_soa(reals, imags, inv_p)
         }
         StieltjesMethod::BlockedTiled => {
-            // Pass None so the tiled variant auto-selects the optimal block
-            // size based on p (see auto_tiled_block_size).
-            let (reals, imags) = cacheblock::compute_all_stieltjes_blocked_tiled(
-                eigenvalues,
-                eta,
-                None,
-                cutoff_ratio,
-            );
+            let (reals, imags) = dispatch_exact_blocked(eigenvalues, eta, cutoff_ratio, parallel);
             scale_soa(reals, imags, inv_p)
         }
         StieltjesMethod::BlockedWindowed => {
@@ -540,6 +606,128 @@ mod tests {
                     "Imag mismatch at p={p} i={i}: seq={si} vs par={pi}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_blocked_cutoff_parallel_matches_sequential() {
+        // With a far-field cutoff enabled, the parallel blocked path must
+        // agree with the sequential one (both skip the same far-field terms;
+        // only the summation order differs).
+        use crate::config::CutoffConfig;
+
+        for p in [500, 2000, 8000] {
+            let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+            evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+            let eta = 0.1 / (p as f64).sqrt();
+
+            let seq = compute_all_stieltjes(
+                &evals,
+                eta,
+                StieltjesMethod::Blocked,
+                None,
+                CutoffConfig::Enabled { ratio: 10.0 },
+                64,
+                Parallelism::Sequential,
+            );
+            let par = compute_all_stieltjes(
+                &evals,
+                eta,
+                StieltjesMethod::Blocked,
+                None,
+                CutoffConfig::Enabled { ratio: 10.0 },
+                64,
+                Parallelism::Rayon,
+            );
+            for i in 0..p {
+                let scale = seq[i].0.abs().max(seq[i].1.abs()).max(1e-12);
+                assert!(
+                    ((par[i].0 - seq[i].0).abs() + (par[i].1 - seq[i].1).abs()) / scale < 1e-10,
+                    "cutoff parallel mismatch at p={p} i={i}: {:?} vs {:?}",
+                    par[i],
+                    seq[i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_tiled_parallel_matches_sequential() {
+        // The Rayon-tiled kernel (disjoint output chunks) must reproduce the
+        // sequential tiled kernel up to FP summation order.
+        use crate::config::CutoffConfig;
+
+        for p in [300, 4000] {
+            let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+            evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+            let eta = 0.1 / (p as f64).sqrt();
+
+            for &cut in &[None, Some(10.0)] {
+                let cfg_cut = match cut {
+                    Some(r) => CutoffConfig::Enabled { ratio: r },
+                    None => CutoffConfig::Disabled,
+                };
+                let seq = compute_all_stieltjes(
+                    &evals,
+                    eta,
+                    StieltjesMethod::BlockedTiled,
+                    None,
+                    cfg_cut,
+                    64,
+                    Parallelism::Sequential,
+                );
+                let par = compute_all_stieltjes(
+                    &evals,
+                    eta,
+                    StieltjesMethod::BlockedTiled,
+                    None,
+                    cfg_cut,
+                    64,
+                    Parallelism::Rayon,
+                );
+                for i in 0..p {
+                    let scale = seq[i].0.abs().max(seq[i].1.abs()).max(1e-12);
+                    assert!(
+                        ((par[i].0 - seq[i].0).abs() + (par[i].1 - seq[i].1).abs()) / scale < 1e-12,
+                        "tiled parallel mismatch at p={p} i={i} cut={cut:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_dst_matches_adaptive_composition() {
+        // `Dst` delegates to the shared fft5 grid + windowed imag (the
+        // Adaptive composition with a configurable window); with the same
+        // window it must equal `Adaptive` exactly.
+        use crate::config::CutoffConfig;
+
+        let p = 512;
+        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let eta = 0.1 / (p as f64).sqrt();
+
+        let dst_res = compute_all_stieltjes(
+            &evals,
+            eta,
+            StieltjesMethod::Dst,
+            None,
+            CutoffConfig::Enabled { ratio: 10.0 },
+            64,
+            Parallelism::Sequential,
+        );
+        let adaptive = compute_all_stieltjes(
+            &evals,
+            eta,
+            StieltjesMethod::Adaptive,
+            None,
+            CutoffConfig::Enabled { ratio: 10.0 },
+            64,
+            Parallelism::Sequential,
+        );
+        for (a, b) in dst_res.iter().zip(adaptive.iter()) {
+            assert!((a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9);
         }
     }
 

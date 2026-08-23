@@ -3,6 +3,8 @@
 //! Defines all optimization toggles so we can benchmark 2^N combinations
 //! and identify the best configuration for each problem size.
 
+pub(crate) mod pareto_autogen;
+
 /// Method for computing the Stieltjes transform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StieltjesMethod {
@@ -47,6 +49,14 @@ pub enum StieltjesMethod {
     Dst,
     /// Auto-select the fastest method based on problem size $p$.
     Auto,
+    /// Data-driven maximum-speed preset: resolves via the measured Pareto
+    /// table ([`pareto_autogen`]) to the fastest method per size and
+    /// parallelism whose error stays under a sane cap. Regenerate with
+    /// `scripts/build_pareto_table.py` after re-benchmarking.
+    SpeedAuto,
+    /// Data-driven accuracy-first preset: lowest measured error per size and
+    /// parallelism, ties broken by runtime ([`pareto_autogen`]).
+    AccuracyAuto,
 }
 
 impl StieltjesMethod {
@@ -68,6 +78,8 @@ impl StieltjesMethod {
             Self::Ewald => "ewald",
             Self::Dst => "dst",
             Self::Auto => "auto",
+            Self::SpeedAuto => "speed_auto",
+            Self::AccuracyAuto => "accuracy_auto",
         }
     }
 
@@ -89,6 +101,8 @@ impl StieltjesMethod {
             Self::Ewald => "O(p·k+M log M) Ewald near/far splitting",
             Self::Dst => "O(p log p) DST-I real part (odd-extension)",
             Self::Auto => "Auto-select based on problem size",
+            Self::SpeedAuto => "Data-driven max-speed pick from the measured Pareto table",
+            Self::AccuracyAuto => "Accuracy-first: exact O(p²) when cheap, ChebCode beyond",
         }
     }
 
@@ -231,15 +245,23 @@ impl Strategy {
                 cfg.stieltjes_method = StieltjesMethod::Blocked;
             }
             Strategy::Speed => {
-                cfg.stieltjes_method = StieltjesMethod::Auto;
-                cfg.parallelism = Parallelism::Sequential;
-                // ratio=10 → ~1% max error per skipped term (see CutoffConfig).
+                // Data-driven max-speed pick (see `pareto_autogen`). The
+                // user's parallelism choice is respected — Sequential and
+                // Rayon have independent table columns.
+                cfg.stieltjes_method = StieltjesMethod::SpeedAuto;
+                // ratio=10 → ~1% error per skipped far term; benefits the
+                // windowed family when the table picks it.
                 cfg.cutoff = CutoffConfig::Enabled { ratio: 10.0 };
-                cfg.block_size = 128;
+                // Inner blocking of the windowed/blocked_autovec kernels;
+                // measured optimum region (8–16 at large p; 128 was stale).
+                cfg.block_size = 16;
             }
             Strategy::Accuracy => {
-                cfg.stieltjes_method = StieltjesMethod::AutoVectorized;
-                cfg.parallelism = Parallelism::Sequential;
+                // Accuracy-first: lowest measured error first, ties broken by
+                // runtime (see `pareto_autogen`). The user's parallelism
+                // choice is respected. (Historically this pinned sequential
+                // AutoVectorized — brutal at large p and blind to Rayon.)
+                cfg.stieltjes_method = StieltjesMethod::AccuracyAuto;
                 cfg.cutoff = CutoffConfig::Disabled;
                 cfg.block_size = 32;
             }
@@ -393,6 +415,14 @@ impl RmtConfig {
         if resolved.stieltjes_method == StieltjesMethod::Auto {
             resolved.stieltjes_method = StieltjesMethod::resolve(p, resolved.parallelism);
         }
+        if resolved.stieltjes_method == StieltjesMethod::AccuracyAuto {
+            let parallel_rayon = matches!(resolved.parallelism, Parallelism::Rayon);
+            resolved.stieltjes_method = pareto_autogen::pareto_pick(false, parallel_rayon, p);
+        }
+        if resolved.stieltjes_method == StieltjesMethod::SpeedAuto {
+            let parallel_rayon = matches!(resolved.parallelism, Parallelism::Rayon);
+            resolved.stieltjes_method = pareto_autogen::pareto_pick(true, parallel_rayon, p);
+        }
         resolved
     }
 }
@@ -440,5 +470,68 @@ mod tests {
         assert_eq!(cfg.parallelism, Parallelism::Sequential);
         // Method resolved based on the resolved (sequential) parallelism.
         assert_eq!(cfg.stieltjes_method, StieltjesMethod::Fft2);
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+
+    #[test]
+    fn pareto_pick_returns_concrete_methods_everywhere() {
+        for &p in &[1usize, 500, 1000, 1500, 4000, 9000, 15000, 30000, 80000] {
+            for parallel in [false, true] {
+                for speed in [false, true] {
+                    let m = pareto_autogen::pareto_pick(speed, parallel, p);
+                    assert!(
+                        !matches!(
+                            m,
+                            StieltjesMethod::Auto
+                                | StieltjesMethod::SpeedAuto
+                                | StieltjesMethod::AccuracyAuto
+                        ),
+                        "p={p} par={parallel} speed={speed}: unresolved {m:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn speed_preset_respects_parallelism_choice() {
+        let mut cfg = RmtConfig::new(0.5);
+        cfg.parallelism = Parallelism::Rayon;
+        Strategy::Speed.apply(&mut cfg);
+        assert_eq!(cfg.parallelism, Parallelism::Rayon);
+        assert_eq!(cfg.stieltjes_method, StieltjesMethod::SpeedAuto);
+
+        let mut cfg = RmtConfig::new(0.5);
+        cfg.parallelism = Parallelism::Sequential;
+        Strategy::Accuracy.apply(&mut cfg);
+        assert_eq!(cfg.parallelism, Parallelism::Sequential);
+    }
+
+    #[test]
+    fn resolve_auto_resolves_presets() {
+        for (method, par) in [
+            (StieltjesMethod::SpeedAuto, Parallelism::Sequential),
+            (StieltjesMethod::SpeedAuto, Parallelism::Rayon),
+            (StieltjesMethod::AccuracyAuto, Parallelism::Sequential),
+            (StieltjesMethod::AccuracyAuto, Parallelism::Rayon),
+        ] {
+            let cfg = RmtConfig {
+                stieltjes_method: method,
+                parallelism: par,
+                ..RmtConfig::new(0.5)
+            };
+            let r = cfg.resolve_auto(12000);
+            assert!(
+                !matches!(
+                    r.stieltjes_method,
+                    StieltjesMethod::SpeedAuto | StieltjesMethod::AccuracyAuto
+                ),
+                "{method:?} did not resolve"
+            );
+        }
     }
 }

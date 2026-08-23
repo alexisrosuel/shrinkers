@@ -116,58 +116,6 @@ pub fn stieltjes_term_cutoff_hoisted(
     Some((diff * inv, inv))
 }
 
-/// **Idea 3 — fast reciprocal** using the NEON `frecpe`/`frecps` Newton-Raphson
-/// sequence on aarch64, falling back to exact division elsewhere.
-///
-/// Two NR iterations from the `frecpe` seed reach ~1e-12 relative error,
-/// which is ~4× cheaper than a full `fdiv` on Apple Silicon. This is the
-/// only place the fast-reciprocal lives; every term function can opt into it.
-///
-/// NOTE: requires `unsafe` (NEON intrinsics) and trades a small amount of
-/// precision for speed. The exact `Blocked`/`Tiled` path keeps `1.0/x` by
-/// default; callers that can tolerate ~1e-12 may use this.
-#[inline(always)]
-pub fn fast_reciprocal(x: f64) -> f64 {
-    #[cfg(target_arch = "aarch64")]
-    {
-        // 2 Newton-Raphson iterations from the frecpe seed.
-        unsafe {
-            use std::arch::aarch64::*;
-            let vx = vdup_n_f64(x);
-            let s = vrecpe_f64(vx);
-            let e = vrecps_f64(vx, s);
-            let r1 = vmul_f64(s, e);
-            let e2 = vrecps_f64(vx, r1);
-            let r2 = vmul_f64(r1, e2);
-            vget_lane_f64(r2, 0)
-        }
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        1.0 / x
-    }
-}
-
-/// **Idea 3 — fast-reciprocal term.** Same as [`stieltjes_term_fma`] but uses
-/// [`fast_reciprocal`] instead of `1.0/denom`. ~1e-12 relative error.
-#[inline(always)]
-pub fn stieltjes_term_fast(lambda_i: f64, lambda_j: f64, eta: f64) -> (f64, f64) {
-    let diff = lambda_i - lambda_j;
-    let denom = diff.mul_add(diff, eta * eta);
-    let inv = fast_reciprocal(denom);
-    (diff * inv, eta * inv)
-}
-
-/// **Idea 3 + Idea 1 combined** — fast reciprocal AND eta-hoisted.
-/// Returns `(real, inv)`; caller multiplies by `eta` once at the end.
-#[inline(always)]
-pub fn stieltjes_term_fast_hoisted(lambda_i: f64, lambda_j: f64, eta: f64) -> (f64, f64) {
-    let diff = lambda_i - lambda_j;
-    let denom = diff.mul_add(diff, eta * eta);
-    let inv = fast_reciprocal(denom);
-    (diff * inv, inv)
-}
-
 /// **Idea 2 — symmetric-pair term.** For the full eigenvalue→eigenvalue
 /// transform, the real part is antisymmetric: `R_ij = -R_ji`. This returns
 /// the contribution of the ordered pair `(i, j)` such that a caller computing
@@ -266,36 +214,6 @@ mod tests {
                     let (r_ji, i_ji) = stieltjes_term_symmetric_pair(lj, li, eta);
                     assert!((r_ij + r_ji).abs() < 5e-16, "real not antisymmetric");
                     assert!((i_ij - i_ji).abs() < 5e-16, "imag not symmetric");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_fast_reciprocal_precision() {
-        // Idea 3: fast reciprocal must be within ~1e-12 relative of exact.
-        for &x in &[0.1, 0.5, 1.0, 3.0, 10.0, 100.0, 1e-6, 1e6] {
-            let exact = 1.0 / x;
-            let fast = fast_reciprocal(x);
-            let rel = ((fast - exact).abs() / exact.abs()).max(1e-16);
-            assert!(
-                rel < 1e-10,
-                "fast reciprocal rel err {rel} too large for x={x}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_fast_term_matches_fma() {
-        // Idea 3 term must be close to the exact FMA term.
-        for &li in &[0.1, 1.0, 5.0] {
-            for &lj in &[0.0, 0.5, 3.0] {
-                for &eta in &[0.01, 0.1] {
-                    let (r1, i1) = stieltjes_term_fma(li, lj, eta);
-                    let (r2, i2) = stieltjes_term_fast(li, lj, eta);
-                    let scale = r1.abs().max(i1.abs()).max(1e-12);
-                    assert!((r1 - r2).abs() / scale < 1e-10, "real mismatch");
-                    assert!((i1 - i2).abs() / scale < 1e-10, "imag mismatch");
                 }
             }
         }

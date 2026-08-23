@@ -244,9 +244,15 @@ pub fn compute_all_stieltjes_treecode_impl(
     // The tree is built over the multiset of eigenvalues, which must be
     // sorted for the divide-and-conquer split to be correct. The input is
     // not guaranteed sorted, so sort a copy (results are still returned in
-    // the original query order).
-    let mut sorted: Vec<f64> = eigenvalues.to_vec();
-    sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    // the original query order) — skipped when already sorted.
+    let mut sorted_buf: Vec<f64>;
+    let sorted: &[f64] = if super::is_sorted_ascending(eigenvalues) {
+        eigenvalues
+    } else {
+        sorted_buf = eigenvalues.to_vec();
+        sorted_buf.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        &sorted_buf
+    };
 
     let lo = sorted[0];
     let hi = sorted[p - 1];
@@ -273,7 +279,7 @@ pub fn compute_all_stieltjes_treecode_impl(
         right: Vec::with_capacity(2 * p),
         order,
     };
-    build_flat(&sorted, lo - padding, hi + padding, &mut tree, &binom);
+    build_flat(sorted, lo - padding, hi + padding, &mut tree, &binom);
 
     let theta_sq = theta * theta;
 
