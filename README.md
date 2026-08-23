@@ -126,6 +126,7 @@ See `docs/python_api.md` for the full API reference.
 | `Fft2` | O(p log p) | Packed 2-FFT grid | ~0.15% grid error |
 | `TreeCode` | O(p log p) | 1D balanced tree (FMM) | User-controllable |
 | `ChebCode` | O(p log p) | Chebyshev-interpolation tree | ~1e-10 rel |
+| `Hodlr` | O(r² p log p) | Hierarchical low-rank (ACA / RandNLA modes) | tol-driven (5e-10 default) |
 | `Ewald` | O(p·k + M log M) | Near/far splitting + coarse FFT | User-controllable |
 | `Dst` | O(p log p) | Alias for the `Adaptive` composition (shared FFT grid) | ~0.15% grid error |
 | `Auto` | — | Auto-selects fastest by p | — |
@@ -142,6 +143,23 @@ See `docs/python_api.md` for the full API reference.
 > choice is respected. NUFFT-based evaluation was investigated and rejected —
 > uniform grids cannot suppress the Cauchy kernel's algebraic wrap-around
 > images (see CHANGELOG); local approximation wins the accuracy frontier.
+>
+> `Hodlr` compresses every off-diagonal block of the kernel matrix by adaptive
+> cross approximation (skeleton pivots on actual kernel entries,
+> self-validating per block; no opening-angle parameter, no analytic
+> translations). A randomized RandNLA path ([`HodlrMode::Random`]:
+> boundary-stratified column sketches + least-squares row fit, validated on
+> whole boundary-strip test columns) shares the same driver. Measured verdict
+> on MP spectra: `Hodlr` delivers ~10× lower error than `ChebCode`'s operating
+> point at 4–9× its runtime, and is dominated by the exact blocked family in
+> the zero-error regime — it wins no preset bin and stays as the
+> kernel-agnostic member of the portfolio; the randomized variant loses to
+> ACA everywhere on this family because near-field Cauchy mass concentrates
+> on a handful of boundary columns that fixed sampling schemes cannot see
+> (greedy pivots reach ~2e-5 block error at rank 8 where stratified sampling
+> needs ~30 ranks). Runtime-vs-p charts:
+> `docs/pareto/runtime_vs_p_{seq,rayon}.png`, banded cuts in
+> `runtime_vs_p_grid.png`.
 
 ## Performance
 
@@ -156,6 +174,23 @@ kernel the fastest exact method:
 |---|-------------------------------|
 | 1000 | **293 µs** |
 | 10000 | **29.3 ms** |
+
+### Stieltjes method frontier (bench_one, Apple M1, MP spectra, η=1/√p)
+
+Same-binary A/B, rel L2 error vs the exact reference:
+
+| p=50 000 | error | seq | rayon |
+|---|---|---|---|
+| `ChebCode` | ~9e-9 | 23 ms | 10 ms |
+| `Hodlr` (ACA, tol 1e-9) | ~7e-10 | 216 ms | 87 ms |
+| `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 2.6 s | 1.1 s |
+| `BlockedTiled` (exact) | 0 | — | ~185 ms |
+
+ChebCode owns the speed-at-accuracy frontier on this spectrum family; the
+exact family owns the zero-error regime; `Hodlr` trades runtime for an
+extra digit of accuracy plus kernel-agnosticism. Full curves:
+`docs/pareto/runtime_vs_p_{seq,rayon}.png`; accuracy-banded cuts and the
+combined grid: `docs/pareto/runtime_vs_p_grid.png`.
 
 ### Pure Rust (Criterion, Apple M-series, p=1000, c=0.5)
 

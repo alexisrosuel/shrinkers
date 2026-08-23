@@ -45,6 +45,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   rule must test the normalized next-term norm ‖u‖·‖v‖/|pivot| — the raw
   product ignores the pivot scale and stopped ~1e4× before tolerance.
 
+### Added
+- **`HodlrMode::Random` — RandNLA sketching path inside the HODLR driver**
+  (Halko–Martinsson–Tropp style double sampling): orthonormalize a
+  *stratified* sample of kernel columns (boundary strips + geometric offset
+  ladder + uniform fill — measured 1e5× better span than uniform sampling on
+  adjacent blocks), fit the row space by complex least squares on stratified
+  rows, validate against whole boundary-strip test columns and double the
+  rank until tolerance. Complex Cholesky solver unit-tested to 5e-15.
+- `scripts/plot_runtime_vs_p.py` — runtime-vs-p charts (log-log), replicated
+  per parallelism and per accuracy band (`runtime_vs_p_{seq,rayon}.png`,
+  `runtime_vs_p_grid.png`).
+
+### Rejected (research track — documented negative result)
+- **Pure-uniform RandNLA sketching for near-field Cauchy blocks.** The
+  kernel's interaction mass concentrates on a handful of boundary columns;
+  uniform column samples miss it entirely (rank-8 block error ~1e-2 where
+  greedy pivoted skeletons reach ~2e-5 — a 500× per-rank efficiency gap that
+  widens as η = 1/√p shrinks). Boundary-stratified sampling recovers most of
+  the gap at moderate rank but still loses end-to-end to ACA on MP spectra:
+  rank-capped accuracy degrades with p (7.5e-8 at p=1000 vs 1e-3 at
+  p=50000) while its O(ℓ²(m+n)) machinery costs more than ACA's deflation at
+  the same sizes. Adaptive pivoting is not an optimization detail here — it
+  is the mechanism that makes low-rank compression viable for this kernel.
+  The stratified path is kept behind `HodlrMode::Random` for future kernels
+  without boundary concentration; `HodlrMode::Aca` remains the default.
+
 ### Rejected (research track — documented negative result)
 - **Black-box FMM for the Stieltjes transform** (adaptive Chebyshev panels,
   P2M anterpolation, M2M merging, per-leaf well-separated pair DFS, direct
