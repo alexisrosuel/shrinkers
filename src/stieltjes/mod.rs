@@ -31,6 +31,7 @@ pub mod fft2;
 pub mod fft3;
 pub mod fft5;
 mod fftplan;
+mod hodlr;
 mod naive;
 mod simd;
 pub mod term;
@@ -45,6 +46,7 @@ pub use ewald::*;
 pub use fft2::*;
 pub use fft3::*;
 pub use fft5::*;
+pub use hodlr::*;
 pub use naive::*;
 pub use term::*;
 pub use treecode::*;
@@ -88,6 +90,7 @@ pub fn stieltjes_sum_for_one(
         | StieltjesMethod::Dst
         | StieltjesMethod::AccuracyAuto
         | StieltjesMethod::SpeedAuto
+        | StieltjesMethod::Hodlr
         | StieltjesMethod::Auto => {
             // FFT/treecode/adaptive methods cannot compute a single point
             // efficiently, so we use the autovec fallback for single-point
@@ -361,6 +364,10 @@ pub fn compute_all_stieltjes(
             };
             scale_soa(reals, imags, inv_p)
         }
+        StieltjesMethod::Hodlr => scale_aos(
+            hodlr::compute_all_stieltjes_hodlr_impl(eigenvalues, eta, 256, 1e-9, 32, parallel),
+            inv_p,
+        ),
         StieltjesMethod::Blocked => {
             let (reals, imags) = dispatch_exact_blocked(eigenvalues, eta, cutoff_ratio, parallel);
             scale_soa(reals, imags, inv_p)

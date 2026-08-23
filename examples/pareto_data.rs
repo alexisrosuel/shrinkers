@@ -104,6 +104,7 @@ fn main() {
             StieltjesMethod::ChebCode,
             CutoffConfig::Disabled,
         ),
+        ("hodlr", StieltjesMethod::Hodlr, CutoffConfig::Disabled),
     ];
 
     println!(

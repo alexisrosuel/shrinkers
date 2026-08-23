@@ -116,6 +116,30 @@ fn main() {
                         );
                     })
                 }
+                "hodlr" => {
+                    let leaf: usize = std::env::args()
+                        .nth(2)
+                        .map(|s| s.parse().unwrap())
+                        .unwrap_or(32);
+                    let tol: f64 = std::env::args()
+                        .nth(3)
+                        .map(|s| s.parse().unwrap())
+                        .unwrap_or(1e-9);
+                    let max_rank: usize = std::env::args()
+                        .nth(4)
+                        .map(|s| s.parse().unwrap())
+                        .unwrap_or(48);
+                    bench(|| {
+                        res = shrinkers::stieltjes::compute_all_stieltjes_hodlr_impl(
+                            &evs,
+                            eta,
+                            leaf,
+                            tol,
+                            max_rank,
+                            matches!(par, Parallelism::Rayon),
+                        );
+                    })
+                }
                 "treecode" => bench(|| {
                     res = stieltjes::compute_all_stieltjes(
                         &evs,

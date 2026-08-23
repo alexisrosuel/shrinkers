@@ -192,6 +192,7 @@ fn parse_method(method: &str) -> PyResult<StieltjesMethod> {
         "ewald" => StieltjesMethod::Ewald,
         "dst" => StieltjesMethod::Dst,
         "auto" => StieltjesMethod::Auto,
+        "hodlr" => StieltjesMethod::Hodlr,
         "speed_auto" | "speed" => StieltjesMethod::SpeedAuto,
         "accuracy_auto" | "accuracy" => StieltjesMethod::AccuracyAuto,
         other => {

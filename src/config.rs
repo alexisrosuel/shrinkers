@@ -49,6 +49,11 @@ pub enum StieltjesMethod {
     Dst,
     /// Auto-select the fastest method based on problem size $p$.
     Auto,
+    /// Hierarchical low-rank (HODLR) summation: off-diagonal kernel blocks
+    /// compressed by adaptive cross approximation to a requested tolerance,
+    /// exact near-field at the leaves. Algebraic and self-validating — no
+    /// geometric opening-angle parameter, no analytic translations.
+    Hodlr,
     /// Data-driven maximum-speed preset: resolves via the measured Pareto
     /// table ([`pareto_autogen`]) to the fastest method per size and
     /// parallelism whose error stays under a sane cap. Regenerate with
@@ -78,6 +83,7 @@ impl StieltjesMethod {
             Self::Ewald => "ewald",
             Self::Dst => "dst",
             Self::Auto => "auto",
+            Self::Hodlr => "hodlr",
             Self::SpeedAuto => "speed_auto",
             Self::AccuracyAuto => "accuracy_auto",
         }
@@ -101,6 +107,7 @@ impl StieltjesMethod {
             Self::Ewald => "O(p·k+M log M) Ewald near/far splitting",
             Self::Dst => "O(p log p) DST-I real part (odd-extension)",
             Self::Auto => "Auto-select based on problem size",
+            Self::Hodlr => "O(p·r·log p) hierarchical low-rank (ACA) sums",
             Self::SpeedAuto => "Data-driven max-speed pick from the measured Pareto table",
             Self::AccuracyAuto => "Accuracy-first: exact O(p²) when cheap, ChebCode beyond",
         }
