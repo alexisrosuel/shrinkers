@@ -55,7 +55,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release --out dist
+          args: --release --out dist --find-interpreter
           manylinux: auto
 
       - name: Install wheel + test deps
