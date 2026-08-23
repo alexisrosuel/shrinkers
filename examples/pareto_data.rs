@@ -128,6 +128,25 @@ fn main() {
             Parallelism::Sequential,
         );
 
+        // Extra direct-call rows that bypass the dispatch enum.
+        type ExtraRow<'a> = (&'a str, f64, Vec<(f64, f64)>);
+        let mut extra_rows: Vec<ExtraRow> = Vec::new();
+        for &(par_name, par) in &[("seq", false), ("rayon", true)] {
+            let mut res = Vec::new();
+            let ms = bench(|| {
+                res = stieltjes::compute_all_stieltjes_hodlr_impl(
+                    &evs,
+                    eta,
+                    256,
+                    1e-6,
+                    32,
+                    par,
+                    stieltjes::HodlrMode::Random,
+                );
+            });
+            extra_rows.push((par_name, ms, res));
+        }
+
         for &(name, method, cutoff) in methods {
             for &(par_name, par) in &[
                 ("seq", Parallelism::Sequential),
@@ -153,6 +172,26 @@ fn main() {
                     comma, name, par_name, p, ms, err
                 );
             }
+        }
+
+        for (par_name, ms_rand, res) in extra_rows {
+            // The raw-sum impl skips the dispatcher's 1/p scaling.
+            let inv_p = 1.0 / p as f64;
+            let scaled: Vec<(f64, f64)> = res.iter().map(|(a, b)| (a * inv_p, b * inv_p)).collect();
+            let num: f64 = scaled
+                .iter()
+                .zip(refr.iter())
+                .map(|((gr, gi), (rr, ri))| (gr - rr).powi(2) + (gi - ri).powi(2))
+                .sum();
+            let den: f64 = refr.iter().map(|(rr, ri)| rr * rr + ri * ri).sum();
+            let err = (num / den).sqrt();
+            eprintln!("  done hodlr_rand {} p={}", par_name, p);
+            let comma = if first { "" } else { "," };
+            first = false;
+            println!(
+                "{}  {{\"method\": \"hodlr_rand\", \"par\": \"{}\", \"p\": {}, \"ms\": {:.4}, \"err\": {:.3e}}}",
+                comma, par_name, p, ms_rand, err
+            );
         }
     }
     println!("]}}");
