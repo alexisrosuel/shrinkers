@@ -419,11 +419,109 @@ pub fn compute_all_stieltjes_chebcode_impl(
     }
 }
 
+/// Amortized multi-η driver for ChebCode (γ-sweeps).
+///
+/// The Chebyshev tree depends only on the sorted spectrum, the interpolation
+/// order and the opening angle — not on η — so one build serves any number
+/// of evaluations. Beyond skipping repeated builds, [`Self::evaluate_par`]
+/// parallelizes ACROSS the η values with the tree shared read-only, which is
+/// the dominant win when a RIE workflow sweeps many γ (each γ fixes one η).
+pub struct ChebCodeBatch {
+    tree: FlatChebTree,
+    perm: Option<Vec<u32>>,
+}
+
+impl ChebCodeBatch {
+    /// Build the tree once. Results of every [`Self::evaluate`] call are
+    /// indexed like `eigenvalues`.
+    pub fn build(eigenvalues: &[f64], theta: f64, n: usize, leaf_cap: usize) -> Self {
+        let already_sorted = crate::stieltjes::is_sorted_ascending(eigenvalues);
+        if already_sorted {
+            return Self {
+                tree: FlatChebTree::build(eigenvalues, n, theta, leaf_cap),
+                perm: None,
+            };
+        }
+        let mut sorted_buf: Vec<f64> = eigenvalues.to_vec();
+        sorted_buf.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut idx: Vec<u32> = (0..eigenvalues.len() as u32).collect();
+        idx.sort_unstable_by(|&i, &j| {
+            eigenvalues[i as usize]
+                .partial_cmp(&eigenvalues[j as usize])
+                .unwrap()
+        });
+        // Scatter: row s of an evaluation is the s-th smallest eigenvalue,
+        // which came from original index idx[s].
+        Self {
+            tree: FlatChebTree::build(&sorted_buf, n, theta, leaf_cap),
+            perm: Some(idx),
+        }
+    }
+
+    /// Evaluate all sums for one η.
+    pub fn evaluate(&self, eta: f64) -> Vec<(f64, f64)> {
+        let mut stack = Vec::with_capacity(64);
+        let flat: Vec<(f64, f64)> = self
+            .tree
+            .sorted
+            .iter()
+            .map(|&x| self.tree.contribution(x, eta, &mut stack))
+            .collect();
+        match &self.perm {
+            None => flat,
+            Some(perm) => {
+                let mut ordered = vec![(0.0f64, 0.0f64); flat.len()];
+                for (s, &orig) in perm.iter().enumerate() {
+                    ordered[orig as usize] = flat[s];
+                }
+                ordered
+            }
+        }
+    }
+
+    /// Evaluate all sums for many η, parallelizing across the η axis with
+    /// the tree shared read-only (Rayon).
+    pub fn evaluate_many(&self, etas: &[f64]) -> Vec<Vec<(f64, f64)>> {
+        use rayon::prelude::*;
+        etas.par_iter().map(|&eta| self.evaluate(eta)).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::stieltjes::autovec::autovec_stieltjes_sum;
     use crate::stieltjes::treecode::compute_all_stieltjes_treecode_impl;
+
+    #[test]
+    fn chebcode_batch_matches_single_and_unsorted() {
+        // Multi-η evaluations must equal per-η single calls, including for
+        // unsorted input (scatter correctness).
+        let p = 512;
+        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut shuffled = evals.clone();
+        let mut seed = 7u64;
+        for i in (1..p).rev() {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let j = (seed >> 33) as usize % (i + 1);
+            shuffled.swap(i, j);
+        }
+        for build_input in [&evals, &shuffled] {
+            let batch = ChebCodeBatch::build(build_input, 0.3, 9, 16);
+            let etas = [0.02, 0.05, 0.11];
+            let many = batch.evaluate_many(&etas);
+            for (k, &eta) in etas.iter().enumerate() {
+                let single = compute_all_stieltjes_chebcode(build_input, eta);
+                for i in 0..p {
+                    assert!(
+                        (many[k][i].0 - single[i].0).abs() < 1e-12
+                            && (many[k][i].1 - single[i].1).abs() < 1e-12,
+                        "batch mismatch at eta={eta} i={i}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn chebcode_agrees_with_autovec() {

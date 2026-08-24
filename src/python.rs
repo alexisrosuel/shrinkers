@@ -463,6 +463,45 @@ fn clean_correlation_matrix_py<'py>(
 /// Returns a dict with "real" and "imag" arrays (p,).
 #[pyfunction]
 #[pyo3(
+    name = "stieltjes_transform_with_deriv",
+    signature = (eigenvalues, eta = InferredF64::Inferred)
+)]
+fn stieltjes_transform_with_deriv_py<'py>(
+    py: Python<'py>,
+    eigenvalues: PyReadonlyArray1<'py, f64>,
+    eta: InferredF64,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let ev_vec: Vec<f64> = eigenvalues
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
+        .to_vec();
+    require_finite(&ev_vec, "eigenvalues")?;
+    let p = ev_vec.len();
+    if p == 0 {
+        return Err(PyValueError::new_err("eigenvalues must be non-empty"));
+    }
+    let eta_val = eta.value().unwrap_or(0.1 / (p as f64).sqrt());
+    if !(eta_val.is_finite() && eta_val > 0.0) {
+        return Err(PyValueError::new_err(format!(
+            "eta must be a positive finite number, got {eta_val}"
+        )));
+    }
+    let (vals, derivs) =
+        py.detach(|| crate::stieltjes::compute_all_stieltjes_with_deriv(&ev_vec, eta_val));
+    let dict = pyo3::types::PyDict::new(py);
+    for (key, v) in [
+        ("real", vals.iter().map(|t| t.0).collect::<Vec<_>>()),
+        ("imag", vals.iter().map(|t| t.1).collect::<Vec<_>>()),
+        ("deriv_real", derivs.iter().map(|t| t.0).collect::<Vec<_>>()),
+        ("deriv_imag", derivs.iter().map(|t| t.1).collect::<Vec<_>>()),
+    ] {
+        dict.set_item(key, v.into_pyarray(py))?;
+    }
+    Ok(dict)
+}
+
+#[pyfunction]
+#[pyo3(
     name = "stieltjes_transform",
     signature = (eigenvalues, eta = InferredF64::Inferred, method = "blocked", precision = "f64", cutoff = InferredF64::Inferred, parallelism = "seq")
 )]
@@ -790,6 +829,7 @@ fn shrinkers(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(direct_precision_shrinkage_py, m)?)?;
     m.add_function(wrap_pyfunction!(clean_correlation_matrix_py, m)?)?;
     m.add_function(wrap_pyfunction!(stieltjes_transform_py, m)?)?;
+    m.add_function(wrap_pyfunction!(stieltjes_transform_with_deriv_py, m)?)?;
     m.add_function(wrap_pyfunction!(detect_spikes_bema_py, m)?)?;
     m.add_function(wrap_pyfunction!(detect_spikes_tracy_widom_py, m)?)?;
     m.add_function(wrap_pyfunction!(inverse_bbp_py, m)?)?;
