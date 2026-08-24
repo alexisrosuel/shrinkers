@@ -139,6 +139,45 @@ fn require_finite(eigenvalues: &[f64], what: &str) -> PyResult<()> {
     Ok(())
 }
 
+/// Copy a 1-D read-only array into an owned `Vec<f64>`, rejecting
+/// non-contiguous inputs (the kernels operate on flat slices).
+fn owned_f64_vec(array: PyReadonlyArray1<'_, f64>, what: &str) -> PyResult<Vec<f64>> {
+    array
+        .as_slice()
+        .map(|s| s.to_vec())
+        .map_err(|_| PyValueError::new_err(format!("{what} must be contiguous")))
+}
+
+/// Resolve the `eta` argument: explicit float, or the crate-wide default
+/// η = 0.1/√p for the sentinel `"inferred"`. Validates positivity.
+fn validated_eta(eta: InferredF64, p: usize) -> PyResult<f64> {
+    let v = eta
+        .value()
+        .unwrap_or_else(|| crate::stieltjes::default_eta(p));
+    if !(v.is_finite() && v > 0.0) {
+        return Err(PyValueError::new_err(format!(
+            "eta must be a positive finite number, got {v}"
+        )));
+    }
+    Ok(v)
+}
+
+/// Build the cutoff configuration from the Python-facing optional ratio,
+/// validating positivity when enabled.
+fn validated_cutoff(cutoff: InferredF64) -> PyResult<CutoffConfig> {
+    Ok(match cutoff.value() {
+        Some(ratio) => {
+            if !(ratio.is_finite() && ratio > 0.0) {
+                return Err(PyValueError::new_err(format!(
+                    "cutoff ratio must be a positive finite number, got {ratio}"
+                )));
+            }
+            CutoffConfig::Enabled { ratio }
+        }
+        None => CutoffConfig::Disabled,
+    })
+}
+
 /// Require a positive spectrum, tolerating floating-point round-off.
 ///
 /// Eigendecompositions of centered sample covariances routinely produce tiny
@@ -222,22 +261,12 @@ fn config_from_kwargs(
     c: f64,
     method: &str,
     parallelism: &str,
-    cutoff: Option<f64>,
+    cutoff: InferredF64,
 ) -> PyResult<RmtConfig> {
-    let cfg = RmtConfig::new(c)
+    Ok(RmtConfig::new(c)
         .with_stieltjes(parse_method(method)?)
-        .with_parallelism(parse_parallelism(parallelism)?);
-    Ok(match cutoff {
-        Some(ratio) => {
-            if !(ratio.is_finite() && ratio > 0.0) {
-                return Err(PyValueError::new_err(format!(
-                    "cutoff ratio must be a positive finite number, got {ratio}"
-                )));
-            }
-            cfg.with_cutoff(CutoffConfig::Enabled { ratio })
-        }
-        None => cfg.with_cutoff(CutoffConfig::Disabled),
-    })
+        .with_parallelism(parse_parallelism(parallelism)?)
+        .with_cutoff(validated_cutoff(cutoff)?))
 }
 
 // ──────────────────────────────────────────────
@@ -293,10 +322,7 @@ fn deconvolve_spiked_py<'py>(
     parallelism: &str,
     cutoff: InferredF64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev_vec: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let mut ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
     sanitize_positive_spectrum(&mut ev_vec, "eigenvalues")?;
     require_concentration(c)?;
     if n_points == 0 {
@@ -310,7 +336,7 @@ fn deconvolve_spiked_py<'py>(
         )));
     }
 
-    let config = config_from_kwargs(c, method, parallelism, cutoff.value())?;
+    let config = config_from_kwargs(c, method, parallelism, cutoff)?;
 
     // Heavy computation runs without the GIL.
     let result =
@@ -378,10 +404,7 @@ fn direct_precision_shrinkage_py<'py>(
     eigenvalues: PyReadonlyArray1<'py, f64>,
     c: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev_vec: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let mut ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
     sanitize_positive_spectrum(&mut ev_vec, "eigenvalues")?;
     require_concentration(c)?;
 
@@ -448,27 +471,21 @@ fn clean_correlation_matrix_py<'py>(
 }
 
 // ──────────────────────────────────────────────
-//  stieltjes_transform (with precision option)
+//  stieltjes_transform_with_deriv (values + analytic derivative)
 // ──────────────────────────────────────────────
 
 /// Compute the empirical Stieltjes transform S(λᵢ) = (1/p) Σⱼ 1/(λᵢ-λⱼ-iη)
-/// for all eigenvalues, using the selected method and precision.
+/// for all eigenvalues, together with its analytic derivative
+/// S'(λᵢ) = −(1/p) Σⱼ 1/(λᵢ-λⱼ-iη)² (derivative w.r.t. the real query
+/// point) — exact auto-vectorized kernel, O(p²), sequential.
 ///
 /// Args:
 ///   eigenvalues: sample eigenvalues (p,), finite.
-///   eta: regularization parameter; float or "inferred" (default 0.1/sqrt(p)).
-///   method: "blocked" (default), "blocked_tiled", "autovec", "fft2", ...
-///   precision: "f64" (default, exact) or "f32" (~2× faster, ~1e-2 error)
-///   cutoff: far-field cutoff ratio (float), or None/"inferred" to disable
-///     (default: disabled). Skips terms where |λᵢ-λⱼ| > cutoff · η.
-///     ratio=10 ~1% max error/term, ratio=20 ~0.25%. Only affects methods
-///     that support a cutoff (e.g. "blocked").
-///   parallelism: "seq" (default, single-threaded), "rayon" (multi-core), or
-///     "auto". Only methods with a parallel implementation benefit from
-///     "rayon" (e.g. blocked, blocked_tiled, blocked_windowed, blocked_hybrid,
-///     blocked_autovec, treecode, chebcode).
+///   eta: regularization parameter; float or "inferred"
+///     (default 0.1/sqrt(p)).
 ///
-/// Returns a dict with "real" and "imag" arrays (p,).
+/// Returns a dict with "real", "imag", "deriv_real" and "deriv_imag"
+/// arrays (p,).
 #[pyfunction]
 #[pyo3(
     name = "stieltjes_transform_with_deriv",
@@ -479,21 +496,13 @@ fn stieltjes_transform_with_deriv_py<'py>(
     eigenvalues: PyReadonlyArray1<'py, f64>,
     eta: InferredF64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let ev_vec: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
     require_finite(&ev_vec, "eigenvalues")?;
     let p = ev_vec.len();
     if p == 0 {
         return Err(PyValueError::new_err("eigenvalues must be non-empty"));
     }
-    let eta_val = eta.value().unwrap_or(0.1 / (p as f64).sqrt());
-    if !(eta_val.is_finite() && eta_val > 0.0) {
-        return Err(PyValueError::new_err(format!(
-            "eta must be a positive finite number, got {eta_val}"
-        )));
-    }
+    let eta_val = validated_eta(eta, p)?;
     let (vals, derivs) =
         py.detach(|| crate::stieltjes::compute_all_stieltjes_with_deriv(&ev_vec, eta_val));
     let dict = pyo3::types::PyDict::new(py);
@@ -523,35 +532,17 @@ fn stieltjes_transform_py<'py>(
     cutoff: InferredF64,
     parallelism: &str,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let ev_vec: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
     require_finite(&ev_vec, "eigenvalues")?;
     let p = ev_vec.len();
     if p == 0 {
         return Err(PyValueError::new_err("eigenvalues must be non-empty"));
     }
-    let eta_val = eta.value().unwrap_or(0.1 / (p as f64).sqrt());
-    if !(eta_val.is_finite() && eta_val > 0.0) {
-        return Err(PyValueError::new_err(format!(
-            "eta must be a positive finite number, got {eta_val}"
-        )));
-    }
+    let eta_val = validated_eta(eta, p)?;
 
     let st_method = parse_method(method)?;
     let par = parse_parallelism(parallelism)?;
-    let cutoff_cfg = match cutoff.value() {
-        Some(ratio) => {
-            if !(ratio.is_finite() && ratio > 0.0) {
-                return Err(PyValueError::new_err(format!(
-                    "cutoff ratio must be a positive finite number, got {ratio}"
-                )));
-            }
-            CutoffConfig::Enabled { ratio }
-        }
-        None => CutoffConfig::Disabled,
-    };
+    let cutoff_cfg = validated_cutoff(cutoff)?;
 
     let dict = pyo3::types::PyDict::new(py);
     match precision {
@@ -611,10 +602,7 @@ fn detect_spikes_bema_py<'py>(
     c: f64,
     margin: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
     sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
     require_concentration(c)?;
     ev.sort_by(|a, b| a.partial_cmp(b).expect("validated finite"));
@@ -653,10 +641,7 @@ fn detect_spikes_tracy_widom_py<'py>(
     sigma2: Option<f64>,
     significance: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
     sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
     require_concentration(c)?;
     if !(significance.is_finite() && significance > 0.0 && significance < 1.0) {
@@ -715,10 +700,7 @@ fn analyze_spikes_py<'py>(
     c: f64,
     margin: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
     sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
     require_concentration(c)?;
 
@@ -756,10 +738,7 @@ fn estimate_population_eigenvalues_py<'py>(
     c: f64,
     margin: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
     sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
     require_concentration(c)?;
 
@@ -787,10 +766,7 @@ fn ledoit_wolf_shrinkage_py<'py>(
     eigenvalues: PyReadonlyArray1<'py, f64>,
     c: f64,
 ) -> PyResult<Py<PyAny>> {
-    let mut ev: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
     sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
     require_concentration(c)?;
 
@@ -813,16 +789,13 @@ fn shrink_eigenvalues_py<'py>(
     method: &str,
     parallel: &str,
 ) -> PyResult<Py<PyAny>> {
-    let ev: Vec<f64> = eigenvalues
-        .as_slice()
-        .map_err(|_| PyValueError::new_err("eigenvalues must be contiguous"))?
-        .to_vec();
+    let ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
     require_finite(&ev, "eigenvalues")?;
     // A covariance spectrum may legitimately contain zeros after centering;
     // only finiteness is required here.
     require_concentration(c)?;
 
-    let config = config_from_kwargs(c, method, parallel, None)?;
+    let config = config_from_kwargs(c, method, parallel, InferredF64::Inferred)?;
     let result = py.detach(|| rie_shrinkage(&ev, &config));
     Ok(result.into_pyarray(py).unbind().into_any())
 }
