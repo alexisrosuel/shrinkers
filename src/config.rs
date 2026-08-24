@@ -155,13 +155,18 @@ impl StieltjesMethod {
         ]
     }
 
-    /// Select the fastest method for a given problem size $p$ and parallelism.
+    /// Select a method for a given problem size $p$ and parallelism —
+    /// a conservative HAND-TUNED policy.
     ///
-    /// The best method depends on whether Rayon parallelism is available,
-    /// because the O(p²) direct methods and the O(p log p) treecode both
-    /// parallelize well, while the FFT methods do not benefit from Rayon.
+    /// This is intentionally NOT the measured Pareto table that backs
+    /// [`StieltjesMethod::SpeedAuto`] / [`StieltjesMethod::AccuracyAuto`]:
+    /// `Auto` predates the table and stays frozen so its behaviour is
+    /// predictable across re-benchmarks. The two policies disagree at
+    /// large p (sequential `Auto` picks `Fft2`, while the measured table
+    /// prefers `Fft5`/`ChebCodeFast`) — that divergence is documented,
+    /// not accidental. Prefer the `*Auto` variants for data-driven picks.
     ///
-    /// Based on benchmarks on Apple M-series (M3 Max):
+    /// Thresholds originally tuned on Apple M-series hardware:
     ///
     /// **Sequential:**
     /// - p ≤ 200:   `AutoVectorized` (low overhead, compiler auto-vec)

@@ -4,22 +4,38 @@
 //!
 //! - `naive`: O(p²) scalar loop (baseline)
 //! - `autovec`: O(p²) auto-vectorized loop (LLVM NEON/AVX2)
-//! - `blocked`: O(p²) cache-blocked + loop-unrolled + FMA + far-field cutoff
+//! - `blocked`/`blocked_tiled`/`blocked_windowed`/`blocked_hybrid`:
+//!   O(p²) exact family — symmetric-pair sweep (sequential), tiled
+//!   kernel, binary-search far-field windowing, and the hybrid
+//!   real(exact)+imag(windowed) composition
 //! - `blocked_autovec`: O(p²) cache-blocked + auto-vectorized + binary-search window
-//! - `blocked_tiled`: O(p²) 2D-tiled cache-blocked (output block outer)
-//! - `blocked_windowed`: O(p·k) cache-blocked + binary-search far-field window
-//! - `adaptive`: balanced real(FFT) + imaginary(windowed)
-//! - `fft5`/`fft3`/`fft2`: O(p log p) FFT-based grid convolution
-//! - `treecode`: O(p log p) 1D tree code / Fast Multipole Method
+//! - `adaptive`: balanced real(FFT) + imaginary(windowed); `dst` is its alias
+//! - `fft5`/`fft3`/`fft2`: O(p log p) FFT grid convolution (all three run
+//!   the same dual-convolution kernel; the names survive for API stability)
+//! - `ewald`: O(p·k + M log M) near/far splitting
+//! - `treecode`: O(p log p) multipole tree code
+//! - `chebcode`/`chebcode_fast`/`chebcode_xtreme`: O(p log p) Chebyshev
+//!   treecode at three measured presets — the speed-at-accuracy frontier
+//! - `hodlr`: hierarchical low-rank summation via adaptive cross approximation
+//! - `auto`/`speed_auto`/`accuracy_auto`: meta-methods resolved from problem
+//!   size (`auto`) or the measured Pareto table (the other two)
 //!
-//! # Single Responsibility
+//! # Conventions
 //!
-//! - The core term `1/((λᵢ-λⱼ) - iη)` lives **only** in `term.rs`.
-//!   Every direct-sum method delegates there — no duplication of the formula.
-//! - Every method returns **raw sums** (not scaled by `1/p`). The `1/p`
-//!   scaling is applied exactly once, centrally, in [`compute_all_stieltjes`].
-//! - Parallel variants delegate to the same single-point kernels as their
-//!   sequential counterparts, so there is no duplicated inner-loop body.
+//! - The core term `1/((λᵢ-λⱼ) - iη)` is OWNED by `term.rs`. The hot loops
+//!   of the direct-sum kernels inline that arithmetic by hand so they can
+//!   unroll, fuse and vectorize it — that duplication is deliberate,
+//!   measured and documented at each site.
+//! - Every all-points method returns **raw sums** (not scaled by `1/p`).
+//!   The `1/p` scaling is applied exactly once, centrally, in
+//!   [`compute_all_stieltjes`].
+//! - Return layout: the blocked/blocked_autovec families return SoA
+//!   `(Vec<f64>, Vec<f64>)` (dense streams for SIMD); everything else
+//!   returns AoS `Vec<(f64, f64)>`. The dispatcher bridges both.
+//! - Parallelism: some kernels expose `*_parallel` twins (the O(p²)
+//!   family), others take a `parallel: bool` (tree methods). Rayon below
+//!   `PAR_TILED_MIN_P` falls back to per-row kernels where scheduling
+//!   overhead dominates.
 
 mod adaptive;
 mod autovec;

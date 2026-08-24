@@ -3,7 +3,7 @@
 
 Reads docs/pareto/bench_after.json, computes the per-size Pareto winners for
 the two preset intents, and emits src/config/pareto_autogen.rs — a static
-lookup table consumed by `StieltjesMethod::resolve` / `Strategy`.
+lookup table consumed by RmtConfig::resolve_auto (SpeedAuto/AccuracyAuto presets).
 
 Selection rules (documented in the generated file):
   * speed    : fastest method with rel-error <= SPEED_ERR_CAP
