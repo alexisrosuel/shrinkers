@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn deriv_matches_finite_difference() {
         let p = 300;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.05 / (p as f64).sqrt();
         let (vals, derivs) = compute_all_stieltjes_with_deriv(&evals, eta);
         // Cross-check values against the plain sum.

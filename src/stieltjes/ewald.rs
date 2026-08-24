@@ -227,27 +227,10 @@ fn next_pow2(n: usize) -> usize {
 mod tests {
     use super::*;
 
-    fn exact_stieltjes(evals: &[f64], eta: f64) -> Vec<(f64, f64)> {
-        let p = evals.len();
-        let mut out = Vec::with_capacity(p);
-        for &li in evals {
-            let mut sr = 0.0;
-            let mut si = 0.0;
-            for &lj in evals {
-                let d = li - lj;
-                let denom = d * d + eta * eta;
-                sr += d / denom;
-                si += eta / denom;
-            }
-            out.push((sr, si));
-        }
-        out
-    }
-
     #[test]
     fn test_ewald_runs_and_finite() {
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         let res = compute_all_stieltjes_ewald(&evals, eta, None, None);
@@ -268,11 +251,11 @@ mod tests {
         // crosses zero). The meaningful metric is the ABSOLUTE error relative
         // to the max magnitude of the real part. We use that here.
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         let res = compute_all_stieltjes_ewald(&evals, eta, None, None);
-        let exact = exact_stieltjes(&evals, eta);
+        let exact = crate::stieltjes::testutil::exact_stieltjes(&evals, eta);
 
         // Absolute error relative to max magnitude (appropriate for the
         // near-cancelling real part).
@@ -294,9 +277,9 @@ mod tests {
         // Larger alpha → smaller near window but finer far grid. Both should
         // remain accurate (absolute error relative to max magnitude).
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
-        let exact = exact_stieltjes(&evals, eta);
+        let exact = crate::stieltjes::testutil::exact_stieltjes(&evals, eta);
         let mag_re = exact.iter().fold(0.0_f64, |a, &(r, _)| a.max(r.abs()));
 
         for alpha in [0.03 / eta, 0.07 / eta, 0.15 / eta] {

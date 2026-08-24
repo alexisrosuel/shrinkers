@@ -222,7 +222,7 @@ mod tests {
         // With a very large cutoff ratio, the window covers everything,
         // so the result must match the full (no-cutoff) computation.
         let p = 200;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn test_blocked_autovec_parallel_matches_sequential() {
         let p = 300;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 

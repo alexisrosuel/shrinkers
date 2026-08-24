@@ -49,6 +49,8 @@ mod hodlr;
 mod naive;
 mod simd;
 mod term;
+#[cfg(test)]
+mod testutil;
 mod treecode;
 
 // `fft5` stays a public module: examples address `Fft5Options`/`Order`
@@ -667,7 +669,7 @@ mod tests {
         use crate::config::CutoffConfig;
 
         for p in [500, 2000, 8000] {
-            let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+            let mut evals = crate::stieltjes::testutil::log_spectrum(p);
             evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
             let eta = 0.1 / (p as f64).sqrt();
 
@@ -708,7 +710,7 @@ mod tests {
         use crate::config::CutoffConfig;
 
         for p in [300, 4000] {
-            let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+            let mut evals = crate::stieltjes::testutil::log_spectrum(p);
             evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
             let eta = 0.1 / (p as f64).sqrt();
 
@@ -754,7 +756,7 @@ mod tests {
         use crate::config::CutoffConfig;
 
         let p = 512;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
@@ -836,7 +838,7 @@ mod tests {
         use crate::config::CutoffConfig;
 
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         for method in [StieltjesMethod::Ewald, StieltjesMethod::Dst] {

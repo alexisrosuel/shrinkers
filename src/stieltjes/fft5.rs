@@ -591,7 +591,7 @@ mod tests {
         // Empirically the FFT odd kernel produces -Re[S] (sign flip), so we
         // check both signs and report which matches.
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         let fft_results = compute_all_stieltjes_fft5(&evals, eta, None);

@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn test_treecode_agrees_with_autovec() {
         let p = 1500;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.15;
 
         // Both treecode and autovec return raw sums (not scaled by 1/p).
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn test_parallel_matches_sequential() {
         let p = 2000;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.15;
 
         let seq = compute_all_stieltjes_treecode_impl(&evals, eta, 0.5, 6, false);
@@ -364,7 +364,7 @@ mod tests {
         // parts (the real part is the long-range 1/d Hilbert kernel that a
         // naive center-of-mass treecode gets wrong).
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         let tc = compute_all_stieltjes_treecode_impl(&evals, eta, 0.3, 8, false);

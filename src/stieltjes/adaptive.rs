@@ -75,7 +75,7 @@ mod tests {
         // The imaginary part of the adaptive method must match the windowed
         // imaginary part exactly (same computation).
         let p = 500;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_adaptive_finite() {
         let p = 300;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         let adaptive = compute_all_stieltjes_adaptive(&evals, eta, None, Some(10.0));
@@ -111,7 +111,7 @@ mod tests {
     fn test_adaptive_real_accuracy() {
         // The real part should be reasonably accurate (FFT odd-kernel).
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         let adaptive = compute_all_stieltjes_adaptive(&evals, eta, None, Some(10.0));
@@ -143,7 +143,7 @@ mod tests {
         // Measure the real vs imaginary error balance. The goal is that both
         // parts have comparable relative error (balanced), not one dominating.
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         let adaptive = compute_all_stieltjes_adaptive(&evals, eta, None, Some(10.0));

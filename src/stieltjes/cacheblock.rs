@@ -1774,7 +1774,7 @@ mod tests {
         // The query-point blocked kernel must agree with the single-point
         // autovec kernel at every query point (same math, batched structure).
         let p = 300;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
@@ -1814,7 +1814,7 @@ mod tests {
         // The tiled variant must produce identical results to the original
         // blocked variant (same math, different loop order).
         let p = 300;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
@@ -1855,7 +1855,7 @@ mod tests {
         // Using None (auto) must produce the same result as using the
         // auto-selected block size explicitly.
         let p = 5000;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
@@ -1871,7 +1871,7 @@ mod tests {
     #[test]
     fn test_blocked_with_cutoff_large() {
         let p = 5000;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
@@ -1890,7 +1890,7 @@ mod tests {
         // The f32 kernel must be close to the f64 kernel (within ~1e-2,
         // the documented f32 precision), and much faster.
         let p = 500;
-        let mut evals64: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals64 = crate::stieltjes::testutil::log_spectrum(p);
         evals64.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta64 = 0.1 / (p as f64).sqrt();
 
@@ -1919,7 +1919,7 @@ mod tests {
         // The windowed variant must agree with the branch-based cutoff variant
         // (both skip the same far-field terms).
         let p = 2000;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
         let cut = 10.0;
@@ -1946,7 +1946,7 @@ mod tests {
     #[test]
     fn test_windowed_parallel_matches_sequential() {
         let p = 1000;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
@@ -1980,7 +1980,7 @@ mod tests {
         // cleanly. This test documents that the windowed method is only
         // accurate for the imaginary part.
         let p = 2000;
-        let mut evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 

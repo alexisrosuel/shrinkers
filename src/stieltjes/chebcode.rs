@@ -843,7 +843,7 @@ mod tests {
         // Multi-η evaluations must equal per-η single calls, including for
         // unsorted input (scatter correctness).
         let p = 512;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let mut shuffled = evals.clone();
         let mut seed = 7u64;
         for i in (1..p).rev() {
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn chebcode_agrees_with_autovec() {
         for p in [512, 2000, 8000] {
-            let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+            let evals = crate::stieltjes::testutil::log_spectrum(p);
             let eta = 0.1 / (p as f64).sqrt();
 
             let cb = compute_all_stieltjes_chebcode(&evals, eta);
@@ -898,7 +898,7 @@ mod tests {
     #[test]
     fn chebcode_parallel_matches_sequential() {
         let p = 4000;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         let seq = compute_all_stieltjes_chebcode_impl(&evals, eta, 0.3, 9, 16, false);
@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn chebcode_beats_treecode_accuracy() {
         let p = 3000;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let eta = 0.1 / (p as f64).sqrt();
 
         // Both return raw sums; compare against exact autovec reference.
@@ -953,7 +953,7 @@ mod tests_x2 {
     #[test]
     fn contribution_x2_matches_single_with_equal_lanes() {
         let p = 256;
-        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
         let batch = ChebCodeBatch::build(&evals, 0.3, 9, 16);
         let eta = 0.05;
         let eta_v = F64x2::from_array([eta, eta]);
