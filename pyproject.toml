@@ -6,15 +6,21 @@ build-backend = "maturin"
 name = "shrinkers"
 dynamic = ["version"]
 requires-python = ">=3.9"
-description = "Fast RMT (Random Matrix Theory) Shrinkage Kernel — SIMD-accelerated RIE estimator"
+description = "Fast RMT (Random Matrix Theory) shrinkage kernel — Rust-accelerated RIE estimator"
 authors = [{name = "alexisrosuel"}]
 license = {text = "MIT"}
+readme = "README.md"
+dependencies = ["numpy>=1.22"]
 keywords = ["random-matrix-theory", "shrinkage", "covariance", "finance", "ml"]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
+
+[project.urls]
+Homepage = "https://github.com/alexisrosuel/shrinkers"
+Repository = "https://github.com/alexisrosuel/shrinkers"
 
 [tool.maturin]
 features = ["python"]

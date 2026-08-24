@@ -14,6 +14,20 @@ Chebyshev-treecode Stieltjes transforms, auto-vectorized loops,
 cache blocking, multi-threaded kernels (**~6× on an 8-core machine**, one keyword away),
 and PyO3 bindings.
 
+## Install
+
+```bash
+uv pip install shrinkers        # or: uv add shrinkers
+# pixi users:
+pixi add --pypi shrinkers       # in a pixi.toml: [pypi-dependencies]
+# plain pip works too
+pip install shrinkers
+```
+
+Wheels are published for Linux (x86_64, aarch64) and macOS (arm64,
+x86_64); Windows and other platforms build from the sdist with a Rust
+toolchain. To hack on the crate itself, see [Development](#development).
+
 ## Why shrinkers?
 
 **1 · It actually un-distorts the spectrum.** Sample eigenvalues of a
