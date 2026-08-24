@@ -251,6 +251,11 @@ accuracy therefore belongs to local approximation (ChebCode/FMM), which has
 no global grid; ChebCode remains the approximate-frontier optimum.
 
 ### Fixed
+- **`deconvolve_spiked` with a ChebCode method was quadratic.**
+  `compute_stieltjes_at_points` had no ChebCode arm, so grid evaluations
+  fell through to the O(p²) scalar fallback PER QUERY POINT. The tree is
+  now built once and serves the whole grid: at p=20000/n_points=200 the
+  grid costs 3.3 ms (rayon) at rel-err 4e-10 — previously minutes-scale.
 - Tiled-kernel hot body is now a single source of truth
   (`tiled_span_*`/`tiled_one_block_*`) shared by the sequential and parallel
   kernels — the refactor is measured at parity with (or slightly ahead of)

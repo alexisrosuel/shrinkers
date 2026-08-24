@@ -20,12 +20,48 @@ struct Bin {
 }
 
 const BINS: &[Bin] = &[
-    Bin { p_max: 1000, speed_seq: StieltjesMethod::ChebCodeFast, speed_par: StieltjesMethod::ChebCodeFast, acc_seq: StieltjesMethod::Blocked, acc_par: StieltjesMethod::BlockedTiled },
-    Bin { p_max: 2000, speed_seq: StieltjesMethod::ChebCodeFast, speed_par: StieltjesMethod::ChebCodeFast, acc_seq: StieltjesMethod::Blocked, acc_par: StieltjesMethod::BlockedTiled },
-    Bin { p_max: 5000, speed_seq: StieltjesMethod::Fft5, speed_par: StieltjesMethod::ChebCodeFast, acc_seq: StieltjesMethod::Blocked, acc_par: StieltjesMethod::BlockedTiled },
-    Bin { p_max: 10000, speed_seq: StieltjesMethod::Fft5, speed_par: StieltjesMethod::ChebCodeFast, acc_seq: StieltjesMethod::BlockedTiled, acc_par: StieltjesMethod::Blocked },
-    Bin { p_max: 20000, speed_seq: StieltjesMethod::ChebCodeFast, speed_par: StieltjesMethod::ChebCodeFast, acc_seq: StieltjesMethod::BlockedTiled, acc_par: StieltjesMethod::BlockedTiled },
-    Bin { p_max: 50000, speed_seq: StieltjesMethod::Fft5, speed_par: StieltjesMethod::ChebCodeFast, acc_seq: StieltjesMethod::BlockedTiled, acc_par: StieltjesMethod::Blocked },
+    Bin {
+        p_max: 1000,
+        speed_seq: StieltjesMethod::ChebCodeFast,
+        speed_par: StieltjesMethod::ChebCodeFast,
+        acc_seq: StieltjesMethod::Blocked,
+        acc_par: StieltjesMethod::BlockedTiled,
+    },
+    Bin {
+        p_max: 2000,
+        speed_seq: StieltjesMethod::ChebCodeFast,
+        speed_par: StieltjesMethod::ChebCodeFast,
+        acc_seq: StieltjesMethod::Blocked,
+        acc_par: StieltjesMethod::BlockedTiled,
+    },
+    Bin {
+        p_max: 5000,
+        speed_seq: StieltjesMethod::Fft5,
+        speed_par: StieltjesMethod::ChebCodeFast,
+        acc_seq: StieltjesMethod::Blocked,
+        acc_par: StieltjesMethod::BlockedTiled,
+    },
+    Bin {
+        p_max: 10000,
+        speed_seq: StieltjesMethod::Fft5,
+        speed_par: StieltjesMethod::ChebCodeFast,
+        acc_seq: StieltjesMethod::BlockedTiled,
+        acc_par: StieltjesMethod::Blocked,
+    },
+    Bin {
+        p_max: 20000,
+        speed_seq: StieltjesMethod::ChebCodeFast,
+        speed_par: StieltjesMethod::ChebCodeFast,
+        acc_seq: StieltjesMethod::BlockedTiled,
+        acc_par: StieltjesMethod::BlockedTiled,
+    },
+    Bin {
+        p_max: 50000,
+        speed_seq: StieltjesMethod::Fft5,
+        speed_par: StieltjesMethod::ChebCodeFast,
+        acc_seq: StieltjesMethod::BlockedTiled,
+        acc_par: StieltjesMethod::Blocked,
+    },
 ];
 
 /// Look up the method chosen for `(intent, parallel, p)`.
@@ -41,4 +77,3 @@ pub(crate) fn pareto_pick(speed_intent: bool, parallel: bool, p: usize) -> Stiel
         (false, true) => bin.acc_par,
     }
 }
-

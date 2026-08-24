@@ -163,6 +163,21 @@ pub fn compute_stieltjes_at_points(
         StieltjesMethod::Fft5 | StieltjesMethod::Fft3 | StieltjesMethod::Fft2 => {
             fft5::compute_stieltjes_fft_at_points(query_points, eigenvalues, eta, grid_size_opt)
         }
+        // ChebCode builds its tree once and serves every query point from
+        // it — previously this method family fell through to the O(p²)
+        // scalar fallback PER POINT, which made `deconvolve_spiked`
+        // quadratic in p even though the treecode was selected.
+        StieltjesMethod::ChebCode
+        | StieltjesMethod::ChebCodeFast
+        | StieltjesMethod::ChebCodeXtreme => {
+            let (theta, n, leaf_cap) = match method {
+                StieltjesMethod::ChebCodeFast => (0.5, 9, 32),
+                StieltjesMethod::ChebCodeXtreme => (0.25, 11, 16),
+                _ => (0.5, 11, 32),
+            };
+            let batch = chebcode::ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap);
+            batch.evaluate_points(query_points, eta, parallel)
+        }
         _ => {
             if parallel {
                 query_points

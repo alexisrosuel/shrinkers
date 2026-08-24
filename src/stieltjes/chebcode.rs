@@ -646,6 +646,36 @@ impl ChebCodeBatch {
         self.tree.contribution(x, eta, &mut stack)
     }
 
+    /// Evaluate the sum at ARBITRARY query points (e.g. a deconvolution
+    /// grid), one tree serving them all. Chunked Rayon optional.
+    pub fn evaluate_points(&self, points: &[f64], eta: f64, parallel: bool) -> Vec<(f64, f64)> {
+        if !parallel {
+            let mut stack = Vec::with_capacity(64);
+            return points
+                .iter()
+                .map(|&x| self.tree.contribution(x, eta, &mut stack))
+                .collect();
+        }
+        use rayon::prelude::*;
+        let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
+        points
+            .par_chunks(256)
+            .map(|chunk| {
+                let mut stack = Vec::with_capacity(64);
+                let mut out = Vec::with_capacity(chunk.len());
+                for &x in chunk {
+                    out.push(self.tree.contribution(x, eta, &mut stack));
+                }
+                out
+            })
+            .collect_into_vec(&mut parts);
+        let mut flat: Vec<(f64, f64)> = Vec::with_capacity(points.len());
+        for part in parts {
+            flat.extend(part);
+        }
+        flat
+    }
+
     /// Evaluate all sums for one η.
     pub fn evaluate(&self, eta: f64) -> Vec<(f64, f64)> {
         let mut stack = Vec::with_capacity(64);
