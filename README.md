@@ -175,20 +175,25 @@ kernel the fastest exact method:
 | 1000 | **293 µs** |
 | 10000 | **29.3 ms** |
 
-### Stieltjes method frontier (bench_one, Apple M1, MP spectra, η=1/√p)
+### Stieltjes method frontier (bench_one, Apple M1 Max, MP spectra, η=1/√p)
 
-Same-binary A/B, rel L2 error vs the exact reference:
+Same-binary A/B, rel L2 error vs the exact reference (overnight re-tuning
+round; the ChebCode default is now θ=0.5, n=11, leaf=32):
 
 | p=50 000 | error | seq | rayon |
 |---|---|---|---|
-| `ChebCode` | ~9e-9 | 23 ms | 10 ms |
-| `Hodlr` (ACA, tol 1e-9) | ~7e-10 | 216 ms | 87 ms |
-| `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 2.6 s | 1.1 s |
-| `BlockedTiled` (exact) | 0 | — | ~185 ms |
+| `ChebCodeFast` (θ.5 n9 L32) | ~1e-8 | 13 ms | 3.0 ms |
+| `ChebCode` (θ.5 n11 L32) | ~5e-10 | 15 ms | 3.5 ms |
+| `ChebCodeXtreme` (θ.25 n11 L16) | ~6e-13 | 25 ms | 5.2 ms |
+| `Hodlr` (ACA, tol 1e-9) | ~7e-10 | 143 ms | 65 ms |
+| `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 1.9 s | 0.9 s |
+| `BlockedTiled` (exact) | 0 | ~950 ms | ~120 ms |
 
-ChebCode owns the speed-at-accuracy frontier on this spectrum family; the
-exact family owns the zero-error regime; `Hodlr` trades runtime for an
-extra digit of accuracy plus kernel-agnosticism. Full curves:
+ChebCode owns the speed-at-accuracy frontier on this spectrum family and,
+after the re-tune, also the near-machine-precision band that previously
+required the exact family (24× faster at ~1e-12); the exact family keeps
+the strict zero-error regime; `Hodlr` trades runtime for kernel
+agnosticism. Full curves:
 `docs/pareto/runtime_vs_p_{seq,rayon}.png`; accuracy-banded cuts and the
 combined grid: `docs/pareto/runtime_vs_p_grid.png`.
 
@@ -196,11 +201,26 @@ combined grid: `docs/pareto/runtime_vs_p_grid.png`.
 
 RIE deconvolution evaluates the same spectrum for many γ (one η per γ).
 `stieltjes::ChebCodeBatch::build(...)` constructs the Chebyshev tree once;
-`evaluate_many(&etas)` then runs the sweep with the tree shared read-only,
-parallelizing ACROSS the η axis — measured **6.5–6.6×** faster than calling
-`compute_all_stieltjes_chebcode` per η (`examples/bench_batch.rs`). For
-root-finding on γ, `stieltjes_transform_with_deriv` returns S and its
-analytic derivative dS/dx in a single exact pass.
+`evaluate_many(&etas)` runs the sweep with the tree shared read-only,
+parallelizing ACROSS the η axis and evaluating etas pairwise through a
+two-lane traversal — measured **8–11×** faster than calling
+`compute_all_stieltjes_chebcode` per η (`examples/bench_batch.rs`: 16 η at
+p=20000 → 162→14 ms; 32 η at p=50000 → 702→84 ms). For root-finding on γ,
+`stieltjes_transform_with_deriv` returns S and its analytic derivative
+dS/dx in a single exact pass.
+
+Two hardware findings worth recording from the same tuning round:
+
+- **Weight composition beats rescanning.** Building each tree node's
+  barycentric weights from its children's node masses (O(n²) per child)
+  instead of rescanning every source in the node's range (O(count·n))
+  cut total build work ~10×: −20 % seq / −50 % parallel per call, error
+  unchanged.
+- **Vector reciprocals do not beat Apple's scalar FP64 divide** in this
+  elementwise kernel shape (measured slower); the exact family stays on
+  true division. PGO was attempted but blocked offline (rustc emits
+  profraw v10; the local llvm-profdata expects v8, and the matching
+  `llvm-tools-preview` component needs network).
 
 ### Pure Rust (Criterion, Apple M-series, p=1000, c=0.5)
 

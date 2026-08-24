@@ -58,6 +58,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `runtime_vs_p_grid.png`).
 
 ### Added
+- **ChebCode re-tuning (overnight round, M1 Max).** New dispatch default
+  θ=0.5, n=11, leaf=32 dominates the historical (0.3, 9, 16) on BOTH axes
+  at every size (p=50k: 5.2e-10 @ 3.5 ms rayon vs 9.2e-10 @ 9.5 ms).
+  Two measured presets join the enum/Python: `chebcode_fast` (θ.5 n9 L32;
+  ~1e-8 band speed king, 3.0 ms rayon) and `chebcode_xtreme` (θ.25 n11
+  L16; 5.8e-13 @ 5.2 ms rayon — the 1e-12 class previously cost 124 ms
+  via blocked_tiled, −96 %).
+- **Hierarchical weight composition in the ChebCode build** — parent
+  barycentric weights are merged from children's node masses
+  (O(n²)/child) instead of rescanning every source in range
+  (O(count·n)); build arithmetic drops ~10×, per-call runtime −20 % seq /
+  −50 % parallel, error unchanged.
+- **Two-lane pairwise multi-η traversal** (`contribution_x2`) — one η per
+  F64x2 lane, sources/nodes splatted across lanes so accumulator lanes
+  keep fixed meaning; γ-sweep workflow now measures 8–11× vs naive
+  per-η calls.
+- **Chunked parallel queries** for ChebCode single calls (256-query
+  blocks): 4.9 → 3.95 ms rayon at p=50k.
 - **`ChebCodeBatch` — amortized multi-η driver for γ-sweeps.** The Chebyshev
   tree depends on the spectrum and the interpolation geometry only, not on
   η, so one build serves a whole deconvolution sweep;
@@ -71,6 +89,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `examples/bench_batch.rs` — sweep-workflow benchmark.
 
 ### Rejected (research track — documented negative result)
+- **NR-refined vector reciprocals in the exact family.** A near-exact
+  blocked kernel replacing scalar FP64 divides with two-lane Newton–Raphson
+  reciprocals measured SLOWER than scalar tiled code at p=50k (1155 ms vs
+  944 ms seq): Firestorm's divide throughput plus the reciprocal's vector
+  bookkeeping (splat/sub/lane-pairing overhead) make it a net loss in this
+  elementwise pattern. Exact family keeps true division. Also fixed a
+  latent `bench_one` double-scaling bug this experiment uncovered.
+- **PGO build.** Blocked offline: rustc emits profraw v10 while the local
+  CommandLineTools llvm-profdata reads v8, and the matching
+  `llvm-tools-preview` component cannot be downloaded without network.
+  Commands recorded in the README for future re-runs.
+- **GPU offload (wgpu/Metal).** Not testable in this environment: adding
+  the dependency requires network. fp32 GPU precision would confine it to
+  the loose-error band where ChebCode already wins by orders of magnitude,
+  so expected Pareto value was low regardless.
+- **AMX (Apple Matrix eXtensions).** The Stieltjes kernels are
+  elementwise-with-reduction, not matmul-shaped; AMX has no fp64 path that
+  helps here and requires inline asm (no std intrinsics). Expected value
+  judged low against implementation risk; not attempted beyond analysis.
 - **Quantile-quadrature far field (mass-only continuum replacement).**
   Idea: exact near window ±W plus composite Gauss–Legendre over equal-mass
   panels (or geometric annuli centered on each query, weights from exact

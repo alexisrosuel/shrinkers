@@ -146,6 +146,8 @@ RUST_VARIANTS = {
     "fft2": "Fft2",
     "fmm": "TreeCode",
     "chebcode": "ChebCode",
+    "chebcode_fast": "ChebCodeFast",
+    "chebcode_xtreme": "ChebCodeXtreme",
 }
 
 
