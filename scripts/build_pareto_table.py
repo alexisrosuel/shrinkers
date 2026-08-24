@@ -33,10 +33,12 @@ def main():
 
     rows = {}
     for r in data["rows"]:
+        par_token = "parallel" if r["par"] == "rayon" else r["par"]
+        r["par"] = par_token  # normalize legacy dumps to the new token
         rows.setdefault((r["par"], r["p"]), []).append(r)
 
     sizes = sorted({p for (_, p) in rows})
-    pars = ["seq", "rayon"]
+    pars = ["seq", "parallel"]
 
     # winners[(intent, par)] = [(p_max, method), ...] cumulative bins
     bins = {p: {} for p in sizes}
@@ -96,9 +98,9 @@ def main():
         lines.append("    Bin {")
         lines.append(f"        p_max: {p},")
         lines.append(f"        speed_seq: StieltjesMethod::{rust_variant(b['seq']['speed']['method'])},")
-        lines.append(f"        speed_par: StieltjesMethod::{rust_variant(b['rayon']['speed']['method'])},")
+        lines.append(f"        speed_par: StieltjesMethod::{rust_variant(b['parallel']['speed']['method'])},")
         lines.append(f"        acc_seq: StieltjesMethod::{rust_variant(b['seq']['accuracy']['method'])},")
-        lines.append(f"        acc_par: StieltjesMethod::{rust_variant(b['rayon']['accuracy']['method'])},")
+        lines.append(f"        acc_par: StieltjesMethod::{rust_variant(b['parallel']['accuracy']['method'])},")
         lines.append("    },")
     lines += [
         "];",

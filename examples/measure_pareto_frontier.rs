@@ -142,7 +142,7 @@ fn main() {
         // Extra direct-call rows that bypass the dispatch enum.
         type ExtraRow<'a> = (&'a str, f64, Vec<(f64, f64)>);
         let mut extra_rows: Vec<ExtraRow> = Vec::new();
-        for &(par_name, par) in &[("seq", false), ("rayon", true)] {
+        for &(par_name, par) in &[("seq", false), ("parallel", true)] {
             let mut res = Vec::new();
             let ms = bench(|| {
                 res = stieltjes::compute_all_stieltjes_hodlr_impl(
@@ -161,7 +161,7 @@ fn main() {
         for &(name, method, cutoff) in methods {
             for &(par_name, par) in &[
                 ("seq", Parallelism::Sequential),
-                ("rayon", Parallelism::Rayon),
+                ("parallel", Parallelism::Parallel),
             ] {
                 let mut res = Vec::new();
                 let ms = bench(|| {

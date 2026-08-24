@@ -62,7 +62,7 @@ fn bench_config_sweep(c: &mut Criterion) {
             "blocked_rayon",
             RmtConfig::new(c_ratio)
                 .with_stieltjes(StieltjesMethod::Blocked)
-                .with_parallelism(Parallelism::Rayon),
+                .with_parallelism(Parallelism::Parallel),
         ),
         // Approximate methods for reference.
         ("fft5", seq(StieltjesMethod::Fft5)),

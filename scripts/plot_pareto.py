@@ -53,7 +53,7 @@ def main():
     da, ra = load(args.after)
 
     sizes = sorted({p for (_, p) in rb.keys()} & {p for (_, p) in ra.keys()})
-    pars = ["seq", "rayon"]
+    pars = ["seq", "rayon"]  # legacy token; new dumps say "parallel"
     colors = plt.get_cmap("tab10").colors
     method_color = {}
     all_methods = []

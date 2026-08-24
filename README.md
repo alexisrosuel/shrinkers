@@ -56,7 +56,7 @@ regenerates both figures end-to-end, and `docs/img/readme_figures.json`
 holds the raw measurements.
 
 **3 · It uses every core you give it.** The exact kernel is data-parallel
-across cache blocks — flip one argument (`parallelism="rayon"`) and the
+across cache blocks — flip one argument (`parallel=True`) and the
 same call spreads over your cores with no reduction step and no false
 sharing. Measured on the 8-core machine above (fresh sweep,
 `docs/pareto/bench_after.json`):
@@ -81,7 +81,7 @@ by roughly an order of magnitude (9.1× at p≈5000).
   precision-matrix shrinkage, Tracy–Widom spike detection;
 - Rust API + PyO3 bindings with the GIL released during computation;
 - multi-core execution built in — exact and treecode kernels parallelize
-  via Rayon (`parallelism="rayon"`).
+  multi-core (`parallel=True`).
 
 ## Quickstart
 

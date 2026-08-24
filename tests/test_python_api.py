@@ -220,11 +220,13 @@ class TestStieltjesTransform:
         assert f32["real"].dtype == np.float32
         np.testing.assert_allclose(f32["real"], f64["real"], rtol=5e-2)
 
-    def test_rayon_matches_seq(self):
+    def test_parallel_matches_serial(self):
         evals = sample_spectrum(150)
-        seq = rk.stieltjes_transform(evals, parallelism="seq")
-        par = rk.stieltjes_transform(evals, parallelism="rayon")
-        np.testing.assert_allclose(seq["real"], par["real"], atol=1e-12)
+        serial = rk.stieltjes_transform(evals, parallel=False)
+        multi = rk.stieltjes_transform(evals, parallel=True)
+        auto = rk.stieltjes_transform(evals, parallel=None)
+        np.testing.assert_allclose(serial["real"], multi["real"], atol=1e-12)
+        np.testing.assert_allclose(serial["real"], auto["real"], atol=1e-12)
 
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="non-empty"):
@@ -234,9 +236,9 @@ class TestStieltjesTransform:
         with pytest.raises(ValueError, match="eta"):
             rk.stieltjes_transform(sample_spectrum(50), eta=-0.1)
 
-    def test_bad_parallelism_raises(self):
-        with pytest.raises(ValueError, match="parallelism"):
-            rk.stieltjes_transform(sample_spectrum(50), parallelism="threads")
+    def test_bad_parallel_type_raises(self):
+        with pytest.raises(Exception):
+            rk.stieltjes_transform(sample_spectrum(50), parallel="yes")
 
     def test_non_contiguous_raises(self):
         evals = sample_spectrum(20)[::2]  # strided view
@@ -292,7 +294,7 @@ class TestSpikedToolkit:
         evals = sample_spectrum(100)
         a = rk.shrink_eigenvalues(evals, c=0.3, method="autovec")
         b = rk.shrink_eigenvalues(
-            evals, c=0.3, method="blocked_tiled", parallel="rayon"
+            evals, c=0.3, method="blocked_tiled", parallel=True
         )
         np.testing.assert_allclose(a, b, atol=1e-10)
 

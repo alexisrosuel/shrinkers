@@ -101,19 +101,19 @@ def generate_mp_spectrum(p, c=0.5, seed=42):
     return np.sort(ev)
 
 
-def bench_one(ev, eta, method, n_runs, parallelism="seq", precision="f64"):
+def bench_one(ev, eta, method, n_runs, parallel=False, precision="f64"):
     """Return mean runtime in µs for a single method at a given p."""
-    rk.stieltjes_transform(ev, eta, method, precision, parallelism=parallelism)  # warmup
+    rk.stieltjes_transform(ev, eta, method, precision, parallel=parallel)  # warmup
     t0 = time.perf_counter()
     for _ in range(n_runs):
-        rk.stieltjes_transform(ev, eta, method, precision, parallelism=parallelism)
+        rk.stieltjes_transform(ev, eta, method, precision, parallel=parallel)
     t1 = time.perf_counter()
     return (t1 - t0) / n_runs * 1e6
 
 
-def rel_error(ev, eta, method, ref_real, parallelism="seq", precision="f64"):
+def rel_error(ev, eta, method, ref_real, parallel=False, precision="f64"):
     """Max relative error of a method's real part vs the exact reference."""
-    out = rk.stieltjes_transform(ev, eta, method, precision, parallelism=parallelism)
+    out = rk.stieltjes_transform(ev, eta, method, precision, parallel=parallel)
     real = np.asarray(out["real"])
     denom = np.max(np.abs(ref_real))
     if denom <= 0:
@@ -182,7 +182,7 @@ def main():
         # Parallel (Rayon) versions of the methods that support it.
         for m in PARALLEL_METHODS:
             try:
-                t = bench_one(ev, eta, m, n_runs, parallelism="rayon")
+                t = bench_one(ev, eta, m, n_runs, parallel=True)
             except Exception as ex:
                 t = float("nan")
                 print(f"  [par {m} @ p={p}] failed: {ex}")
@@ -192,13 +192,13 @@ def main():
     csv_path = os.path.join(args.out_dir, "stieltjes_data.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["p", "method", "parallelism", "precision", "runtime_us", "rel_error"])
+        w.writerow(["p", "method", "parallel", "precision", "runtime_us", "rel_error"])
         for i, p in enumerate(ps):
             for m in METHODS:
                 w.writerow([p, m, "seq", "f64", runtime[m][i], err[m][i]])
                 w.writerow([p, m, "seq", "f32", runtime_f32[m][i], err_f32[m][i]])
             for m in PARALLEL_METHODS:
-                w.writerow([p, m, "rayon", "f64", runtime_par[m][i], err[m][i]])
+                w.writerow([p, m, True, "f64", runtime_par[m][i], err[m][i]])
     print(f"\nSaved data -> {csv_path}")
 
     # ── Figure 1: runtime vs p (sequential) ───────────────────

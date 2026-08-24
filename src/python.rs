@@ -12,7 +12,7 @@
 //!   the cleaned covariance matrix together with the eigenvectors and their
 //!   theoretical alignment with the population eigenvectors.
 //! - `stieltjes_transform`: raw empirical Stieltjes transform with a choice of
-//!   kernel, precision, far-field cutoff, and parallelism.
+//!   kernel, precision, far-field cutoff, and a parallel switch.
 //!
 //! # Threading & error behaviour
 //!
@@ -248,30 +248,30 @@ fn parse_method(method: &str) -> PyResult<StieltjesMethod> {
     })
 }
 
-/// Parse a parallelism string into a `Parallelism`.
-fn parse_parallelism(parallelism: &str) -> PyResult<Parallelism> {
-    Ok(match parallelism {
-        "seq" | "sequential" => Parallelism::Sequential,
-        "rayon" | "parallel" => Parallelism::Rayon,
-        "auto" => Parallelism::Auto,
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "unknown parallelism '{other}' (expected 'seq', 'rayon', or 'auto')"
-            )));
-        }
-    })
+/// Map the user-facing `parallel` switch onto an execution mode.
+///
+/// `None` lets the library decide from the problem size, `Some(false)`
+/// forces single-threaded execution, `Some(true)` forces multi-threaded
+/// execution. The threading backend is an implementation detail and is
+/// deliberately not part of the API.
+fn parse_parallel(parallel: Option<bool>) -> Parallelism {
+    match parallel {
+        None => Parallelism::Auto,
+        Some(false) => Parallelism::Sequential,
+        Some(true) => Parallelism::Parallel,
+    }
 }
 
 /// Build an `RmtConfig` from the parsed Python kwargs.
 fn config_from_kwargs(
     c: f64,
     method: &str,
-    parallelism: &str,
+    parallel: Option<bool>,
     cutoff: InferredF64,
 ) -> PyResult<RmtConfig> {
     Ok(RmtConfig::new(c)
         .with_stieltjes(parse_method(method)?)
-        .with_parallelism(parse_parallelism(parallelism)?)
+        .with_parallelism(parse_parallel(parallel))
         .with_cutoff(validated_cutoff(cutoff)?))
 }
 
@@ -300,7 +300,9 @@ fn config_from_kwargs(
 ///       "dst", "hodlr", "auto", "speed_auto", "accuracy_auto".
 ///     The three chebcode presets share one measured parameter set
 ///     (ChebPreset in the Rust API).
-///   parallelism: "seq" (default) or "rayon".
+///   parallel: None lets the library pick (multi-core only where its
+///     measured size thresholds say it pays off), False forces
+///     single-threaded (default), True forces multi-core.
 ///   cutoff: far-field cutoff ratio (float) or None/"inferred" to disable.
 ///
 /// Returns a dict with keys:
@@ -314,7 +316,7 @@ fn config_from_kwargs(
 #[pyfunction]
 #[pyo3(
     name = "deconvolve_spiked",
-    signature = (eigenvalues, c, n_points = 200, eta = InferredF64::Inferred, margin = 1.0, *, method = "auto", parallelism = "seq", cutoff = InferredF64::Inferred)
+    signature = (eigenvalues, c, n_points = 200, eta = InferredF64::Inferred, margin = 1.0, *, method = "auto", parallel = false, cutoff = InferredF64::Inferred)
 )]
 #[allow(clippy::too_many_arguments)]
 fn deconvolve_spiked_py<'py>(
@@ -325,7 +327,7 @@ fn deconvolve_spiked_py<'py>(
     eta: InferredF64,
     margin: f64,
     method: &str,
-    parallelism: &str,
+    parallel: Option<bool>,
     cutoff: InferredF64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
     let mut ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
@@ -342,7 +344,7 @@ fn deconvolve_spiked_py<'py>(
         )));
     }
 
-    let config = config_from_kwargs(c, method, parallelism, cutoff)?;
+    let config = config_from_kwargs(c, method, parallel, cutoff)?;
 
     // Heavy computation runs without the GIL.
     let result =
@@ -526,7 +528,7 @@ fn stieltjes_transform_with_deriv_py<'py>(
 #[pyfunction]
 #[pyo3(
     name = "stieltjes_transform",
-    signature = (eigenvalues, eta = InferredF64::Inferred, method = "blocked", precision = "f64", cutoff = InferredF64::Inferred, parallelism = "seq")
+    signature = (eigenvalues, eta = InferredF64::Inferred, method = "blocked", precision = "f64", cutoff = InferredF64::Inferred, parallel = false)
 )]
 #[allow(clippy::too_many_arguments)]
 fn stieltjes_transform_py<'py>(
@@ -536,7 +538,7 @@ fn stieltjes_transform_py<'py>(
     method: &str,
     precision: &str,
     cutoff: InferredF64,
-    parallelism: &str,
+    parallel: Option<bool>,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
     let ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
     require_finite(&ev_vec, "eigenvalues")?;
@@ -547,7 +549,7 @@ fn stieltjes_transform_py<'py>(
     let eta_val = validated_eta(eta, p)?;
 
     let st_method = parse_method(method)?;
-    let par = parse_parallelism(parallelism)?;
+    let par = parse_parallel(parallel);
     let cutoff_cfg = validated_cutoff(cutoff)?;
 
     let dict = pyo3::types::PyDict::new(py);
@@ -787,14 +789,14 @@ fn ledoit_wolf_shrinkage_py<'py>(
 #[pyfunction]
 #[pyo3(
     name = "shrink_eigenvalues",
-    signature = (eigenvalues, c, *, method = "auto", parallel = "seq")
+    signature = (eigenvalues, c, *, method = "auto", parallel = false)
 )]
 fn shrink_eigenvalues_py<'py>(
     py: Python<'py>,
     eigenvalues: PyReadonlyArray1<'py, f64>,
     c: f64,
     method: &str,
-    parallel: &str,
+    parallel: Option<bool>,
 ) -> PyResult<Py<PyAny>> {
     let ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
     require_finite(&ev, "eigenvalues")?;

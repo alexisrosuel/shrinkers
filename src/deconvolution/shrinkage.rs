@@ -89,7 +89,7 @@ pub fn rie_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Array1<f64> {
 
     // Apply shrinkage factor, optionally in parallel
     let shrinked: Vec<f64> = match resolved_config.parallelism {
-        Parallelism::Rayon => eigenvalues
+        Parallelism::Parallel => eigenvalues
             .par_iter()
             .zip(stieltjes_results.par_iter())
             .map(|(&lambda_i, &(mg_real, mg_imag))| shrinkage_factor(lambda_i, c, mg_real, mg_imag))

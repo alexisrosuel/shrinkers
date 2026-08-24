@@ -87,7 +87,7 @@ fn main() {
 
         for &(par_name, par) in &[
             ("seq", Parallelism::Sequential),
-            ("rayon", Parallelism::Rayon),
+            ("rayon", Parallelism::Parallel),
         ] {
             let mut res = Vec::new();
             let ms = match what.as_str() {
@@ -114,7 +114,7 @@ fn main() {
                             theta,
                             n,
                             leaf,
-                            matches!(par, Parallelism::Rayon),
+                            matches!(par, Parallelism::Parallel),
                         );
                     })
                 }
@@ -141,7 +141,7 @@ fn main() {
                             leaf,
                             tol,
                             max_rank,
-                            matches!(par, Parallelism::Rayon),
+                            matches!(par, Parallelism::Parallel),
                             if mode == "aca" {
                                 shrinkers::stieltjes::HodlrMode::Aca
                             } else {
@@ -163,7 +163,7 @@ fn main() {
                 }),
                 "tiled" => bench(|| {
                     // Raw kernels: this tool scales by inv_p itself.
-                    let (reals, imags) = if matches!(par, Parallelism::Rayon) {
+                    let (reals, imags) = if matches!(par, Parallelism::Parallel) {
                         stieltjes::compute_all_stieltjes_blocked_tiled_parallel(
                             &evs, eta, None, None,
                         )

@@ -98,7 +98,7 @@ fn main() {
             "exact",
             "ray",
             StieltjesMethod::BlockedTiled,
-            Parallelism::Rayon,
+            Parallelism::Parallel,
         ),
         (
             "cheb_fast",
@@ -110,7 +110,7 @@ fn main() {
             "cheb_fast",
             "ray",
             StieltjesMethod::ChebCodeFast,
-            Parallelism::Rayon,
+            Parallelism::Parallel,
         ),
         (
             "cheb_default",
@@ -122,7 +122,7 @@ fn main() {
             "cheb_default",
             "ray",
             StieltjesMethod::ChebCode,
-            Parallelism::Rayon,
+            Parallelism::Parallel,
         ),
         (
             "cheb_xtreme",
@@ -134,7 +134,7 @@ fn main() {
             "cheb_xtreme",
             "ray",
             StieltjesMethod::ChebCodeXtreme,
-            Parallelism::Rayon,
+            Parallelism::Parallel,
         ),
     ];
 

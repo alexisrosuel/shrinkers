@@ -165,7 +165,7 @@ pub fn compute_stieltjes_at_points(
     parallelism: Parallelism,
     grid_size_opt: Option<usize>,
 ) -> Vec<(f64, f64)> {
-    let parallel = matches!(parallelism, Parallelism::Rayon);
+    let parallel = matches!(parallelism, Parallelism::Parallel);
 
     // The cache-blocked write-batched kernel is the fastest exact method for
     // evaluating at arbitrary query points (it reuses the same 2-source-per-
@@ -340,14 +340,14 @@ pub fn compute_all_stieltjes(
 
     let cutoff_ratio = cutoff.ratio();
     let inv_p = 1.0 / (p as f64);
-    let parallel = matches!(parallelism, Parallelism::Rayon);
+    let parallel = matches!(parallelism, Parallelism::Parallel);
     // Data-driven presets resolve via the measured Pareto table.
     let method = if matches!(
         method,
         StieltjesMethod::AccuracyAuto | StieltjesMethod::SpeedAuto
     ) {
         let speed = method == StieltjesMethod::SpeedAuto;
-        let rayon = matches!(parallelism, Parallelism::Rayon);
+        let rayon = matches!(parallelism, Parallelism::Parallel);
         crate::config::pareto_autogen::pareto_pick(speed, rayon, p)
     } else {
         method
@@ -669,7 +669,7 @@ mod tests {
                 None,
                 CutoffConfig::Disabled,
                 64,
-                Parallelism::Rayon,
+                Parallelism::Parallel,
             );
 
             for (i, ((sr, si), (pr, pi))) in seq_results.iter().zip(par_results.iter()).enumerate()
@@ -714,7 +714,7 @@ mod tests {
                 None,
                 CutoffConfig::Enabled { ratio: 10.0 },
                 64,
-                Parallelism::Rayon,
+                Parallelism::Parallel,
             );
             for i in 0..p {
                 let scale = seq[i].0.abs().max(seq[i].1.abs()).max(1e-12);
@@ -760,7 +760,7 @@ mod tests {
                     None,
                     cfg_cut,
                     64,
-                    Parallelism::Rayon,
+                    Parallelism::Parallel,
                 );
                 for i in 0..p {
                     let scale = seq[i].0.abs().max(seq[i].1.abs()).max(1e-12);

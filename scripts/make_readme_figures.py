@@ -201,13 +201,13 @@ def fig_runtime(reuse: bool = False) -> dict:
                                         repeats=1 if p > 2048 else 3)
         reps = 9 if p <= 256 else 3
         row["numpy"] = bench(stieltjes_numpy_chunked, lam, eta, repeats=reps)
-        row["shrinkers_exact_rayon"] = bench(
+        row["shrinkers_exact_parallel"] = bench(
             lambda l=lam, e=eta: rk.stieltjes_transform(
-                l, eta=e, method="blocked_tiled", parallelism="rayon"),
+                l, eta=e, method="blocked_tiled", parallel=True),
             repeats=reps)
-        row["shrinkers_chebcode_rayon"] = bench(
+        row["shrinkers_chebcode_parallel"] = bench(
             lambda l=lam, e=eta: rk.stieltjes_transform(
-                l, eta=e, method="chebcode_fast", parallelism="rayon"),
+                l, eta=e, method="chebcode_fast", parallel=True),
             repeats=reps)
         rows.append(row)
         print(row)
@@ -217,8 +217,8 @@ def fig_runtime(reuse: bool = False) -> dict:
     series = [
         ("python_naive", "#9aa5b1", "o", "Naive Python (double loop)"),
         ("numpy", "#2b6cb0", "s", "Vectorized NumPy"),
-        ("shrinkers_exact_rayon", "#d62728", "^", "shrinkers — exact, all cores"),
-        ("shrinkers_chebcode_rayon", "#e05252", "v", "shrinkers — treecode, all cores"),
+        ("shrinkers_exact_parallel", "#d62728", "^", "shrinkers — exact, all cores"),
+        ("shrinkers_chebcode_parallel", "#e05252", "v", "shrinkers — treecode, all cores"),
     ]
     for key, color, marker, label in series:
         pts = [(r["p"], r[key]) for r in rows if key in r]
@@ -240,11 +240,11 @@ def fig_runtime(reuse: bool = False) -> dict:
     # annotate headline speedups at the largest shared p
     last_full = next(r for r in reversed(rows) if "python_naive" in r)
     if "python_naive" in last_full:
-        speedup_np = last_full["numpy"] / last_full["shrinkers_exact_rayon"]
-        speedup_py = last_full["python_naive"] / last_full["shrinkers_exact_rayon"]
+        speedup_np = last_full["numpy"] / last_full["shrinkers_exact_parallel"]
+        speedup_py = last_full["python_naive"] / last_full["shrinkers_exact_parallel"]
         ax.annotate(
             f"at p={last_full['p']}:\n{speedup_py:.0f}× vs naive Python\n{speedup_np:.1f}× vs NumPy",
-            xy=(last_full["p"], last_full["shrinkers_exact_rayon"]),
+            xy=(last_full["p"], last_full["shrinkers_exact_parallel"]),
             xytext=(-120, 30), textcoords="offset points",
             fontsize=8.5, color="#333333",
             arrowprops=dict(arrowstyle="->", color="#666666", lw=0.8))

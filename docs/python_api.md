@@ -45,7 +45,7 @@ It exposes these functions:
 
 ## Primary entry point
 
-### `deconvolve_spiked(eigenvalues, c, n_points=200, eta="inferred", margin=1.0, *, method="auto", parallelism="seq", cutoff=None)`
+### `deconvolve_spiked(eigenvalues, c, n_points=200, eta="inferred", margin=1.0, *, method="auto", parallel=False, cutoff=None)`
 
 Given the sample eigenvalues, recover the cleaned population spectrum under a
 spiked covariance model. It orchestrates the full pipeline:
@@ -83,8 +83,10 @@ spiked covariance model. It orchestrates the full pipeline:
   `"chebcode_xtreme"` (alias `"chebx"`; ~6e-13), `"hodlr"`, `"ewald"`,
   `"dst"`, `"speed_auto"` (alias `"speed"`), `"accuracy_auto"`
   (alias `"accuracy"`), or `"auto"`.
-- `parallelism` — keyword-only, `str`, default `"seq"`; `"rayon"` enables
-  multi-threaded kernels.
+- `parallel` — keyword-only, `bool | None`, default `False`.
+  `True` enables multi-core execution, `False` forces single-threaded,
+  `None` lets the library decide from the problem size. The threading
+  backend is an implementation detail and deliberately unnamed.
 - `cutoff` — keyword-only, `float | None | "inferred"`, default disabled
   (`None` and `"inferred"` are synonyms). Far-field cutoff ratio
   (10 ≈ 1% max per-term error).
@@ -201,7 +203,7 @@ omega_evals = res["precision_eigenvalues"]
 
 ## Raw Stieltjes transform
 
-### `stieltjes_transform(eigenvalues, eta="inferred", method="blocked", precision="f64", cutoff="inferred", parallelism="seq")`
+### `stieltjes_transform(eigenvalues, eta="inferred", method="blocked", precision="f64", cutoff="inferred", parallel=False)`
 
 Compute the empirical Stieltjes transform
 $S(\lambda_i) = \frac{1}{p}\sum_j \frac{1}{\lambda_i - \lambda_j - i\eta}$.
@@ -215,7 +217,8 @@ $S(\lambda_i) = \frac{1}{p}\sum_j \frac{1}{\lambda_i - \lambda_j - i\eta}$.
   ~1e-2 relative error).
 - `cutoff` — `float | None | "inferred"`, default disabled. Far-field cutoff;
   only affects methods that support it (e.g. `"blocked"`).
-- `parallelism` — `"seq"` (default), `"rayon"`, or `"auto"`.
+- `parallel` — `False` (default, single-threaded), `True`
+    (multi-core), or `None` (library picks by problem size).
 
 **Returns**
 
@@ -272,7 +275,7 @@ Ledoit–Wolf pointwise deconvolution of the bulk.
 
 Raw Ledoit–Wolf estimates ξ(λᵢ) — **not** trace-rescaled.
 
-### `shrink_eigenvalues(eigenvalues, c, *, method="auto", parallel="seq")` → ndarray
+### `shrink_eigenvalues(eigenvalues, c, *, method="auto", parallel=False)` → ndarray
 
 Trace-preserving RIE shrinkage: the sum of the shrunk eigenvalues equals the
 original trace exactly.

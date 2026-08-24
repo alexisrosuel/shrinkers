@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **Breaking (Python API): `parallelism="seq"/"rayon"` replaced by a plain
+  `parallel` switch** on `deconvolve_spiked`, `stieltjes_transform` and
+  `shrink_eigenvalues`: `False` (default) single-threaded, `True`
+  multi-core, `None` = library decides by problem size. The threading
+  backend is no longer part of the API surface; the Rust enum variant
+  `Parallelism::Rayon` was renamed `Parallelism::Parallel` to match.
 - **ChebCode query-path anatomy and first cache-locality pass**
   (`examples/profile_hot.rs` sampling harness + wall-clock ablations at
   p=50k DEFAULT sequential). Cost split of the 14.7 ms evaluation:

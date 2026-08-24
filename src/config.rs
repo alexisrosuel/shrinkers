@@ -173,14 +173,14 @@ impl StieltjesMethod {
     /// - 200 < p < 5000: `Blocked` (sequential O(p²), no core contention)
     /// - p ≥ 5000:  `Fft2` (O(p log p), sequential, predictable)
     ///
-    /// **Rayon (parallel):**
+    /// **Parallel:**
     /// - p ≤ 200:   `AutoVectorized` (parallel overhead not worth it)
     /// - 200 < p < 5000: `Blocked` (parallel λᵢ-outer, ~2.6-5.4× speedup)
     /// - p ≥ 5000:  `ChebCode` (parallel Chebyshev treecode, ~1.7-2× faster
     ///   than the multipole `TreeCode` at every size, with ~0 error)
     pub fn resolve(p: usize, parallelism: Parallelism) -> Self {
         match parallelism {
-            Parallelism::Rayon => {
+            Parallelism::Parallel => {
                 if p <= 200 {
                     Self::AutoVectorized
                 } else if p < 5000 {
@@ -207,8 +207,8 @@ impl StieltjesMethod {
 pub enum Parallelism {
     /// Single-threaded execution
     Sequential,
-    /// Parallel using Rayon (data-parallel over eigenvalues)
-    Rayon,
+    /// Multi-threaded execution (data-parallel over eigenvalues)
+    Parallel,
     /// Auto-select based on problem size and method
     Auto,
 }
@@ -217,17 +217,17 @@ impl Parallelism {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Sequential => "seq",
-            Self::Rayon => "rayon",
+            Self::Parallel => "parallel",
             Self::Auto => "auto",
         }
     }
 
     pub const fn all() -> &'static [Self] {
-        &[Self::Sequential, Self::Rayon, Self::Auto]
+        &[Self::Sequential, Self::Parallel, Self::Auto]
     }
 
     /// Resolve Auto parallelism — always uses Sequential to avoid consuming
-    /// all machine resources. Users who want Rayon must opt-in explicitly.
+    /// all machine resources. Users who want multi-core must opt in explicitly.
     pub fn resolve(_p: usize, _method: StieltjesMethod) -> Self {
         Self::Sequential
     }
@@ -282,7 +282,7 @@ impl CutoffConfig {
 /// You can still override individual fields after applying a strategy.
 ///
 /// Note: all presets use sequential execution by default. Rayon parallelism
-/// must be opted-in explicitly via `with_parallelism(Parallelism::Rayon)`.
+/// must be opted-in explicitly via `with_parallelism(Parallelism::Parallel)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     /// Balanced default (same as `RmtConfig::new`)
@@ -479,11 +479,11 @@ impl RmtConfig {
             resolved.stieltjes_method = StieltjesMethod::resolve(p, resolved.parallelism);
         }
         if resolved.stieltjes_method == StieltjesMethod::AccuracyAuto {
-            let parallel_rayon = matches!(resolved.parallelism, Parallelism::Rayon);
+            let parallel_rayon = matches!(resolved.parallelism, Parallelism::Parallel);
             resolved.stieltjes_method = pareto_autogen::pareto_pick(false, parallel_rayon, p);
         }
         if resolved.stieltjes_method == StieltjesMethod::SpeedAuto {
-            let parallel_rayon = matches!(resolved.parallelism, Parallelism::Rayon);
+            let parallel_rayon = matches!(resolved.parallelism, Parallelism::Parallel);
             resolved.stieltjes_method = pareto_autogen::pareto_pick(true, parallel_rayon, p);
         }
         resolved
@@ -499,14 +499,18 @@ mod tests {
         // (parallelism, p, expected pick)
         for (par, p, expected) in [
             (Parallelism::Sequential, 10_000usize, StieltjesMethod::Fft2),
-            (Parallelism::Rayon, 10_000usize, StieltjesMethod::ChebCode),
+            (
+                Parallelism::Parallel,
+                10_000usize,
+                StieltjesMethod::ChebCode,
+            ),
             (
                 Parallelism::Sequential,
                 100usize,
                 StieltjesMethod::AutoVectorized,
             ),
             (
-                Parallelism::Rayon,
+                Parallelism::Parallel,
                 100usize,
                 StieltjesMethod::AutoVectorized,
             ),
@@ -559,9 +563,9 @@ mod preset_tests {
     #[test]
     fn speed_preset_respects_parallelism_choice() {
         let mut cfg = RmtConfig::new(0.5);
-        cfg.parallelism = Parallelism::Rayon;
+        cfg.parallelism = Parallelism::Parallel;
         Strategy::Speed.apply(&mut cfg);
-        assert_eq!(cfg.parallelism, Parallelism::Rayon);
+        assert_eq!(cfg.parallelism, Parallelism::Parallel);
         assert_eq!(cfg.stieltjes_method, StieltjesMethod::SpeedAuto);
 
         let mut cfg = RmtConfig::new(0.5);
@@ -574,9 +578,9 @@ mod preset_tests {
     fn resolve_auto_resolves_presets() {
         for (method, par) in [
             (StieltjesMethod::SpeedAuto, Parallelism::Sequential),
-            (StieltjesMethod::SpeedAuto, Parallelism::Rayon),
+            (StieltjesMethod::SpeedAuto, Parallelism::Parallel),
             (StieltjesMethod::AccuracyAuto, Parallelism::Sequential),
-            (StieltjesMethod::AccuracyAuto, Parallelism::Rayon),
+            (StieltjesMethod::AccuracyAuto, Parallelism::Parallel),
         ] {
             let cfg = RmtConfig {
                 stieltjes_method: method,

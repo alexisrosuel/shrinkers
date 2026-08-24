@@ -99,7 +99,7 @@ pub fn direct_precision_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Ar
 
     // Apply the direct precision factor, optionally in parallel.
     let result: Vec<f64> = match resolved_config.parallelism {
-        Parallelism::Rayon => eigenvalues
+        Parallelism::Parallel => eigenvalues
             .par_iter()
             .zip(stieltjes_results.par_iter())
             .map(|(&lambda_i, &(mg_real, _))| precision_factor(lambda_i, c, mg_real))
