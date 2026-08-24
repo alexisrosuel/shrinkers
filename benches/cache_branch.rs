@@ -45,7 +45,7 @@ fn bench_kernels(c: &mut Criterion) {
         group.bench_function("blocked_default", |b| {
             b.iter_batched(
                 || evals.clone(),
-                |e| black_box(compute_all_stieltjes_blocked(&e, eta, Some(64), None)),
+                |e| black_box(compute_all_stieltjes_blocked(&e, eta, None)),
                 BatchSize::SmallInput,
             )
         });
@@ -66,7 +66,7 @@ fn bench_kernels(c: &mut Criterion) {
         group.bench_function("blocked_default", |b| {
             b.iter_batched(
                 || evals.clone(),
-                |e| black_box(compute_all_stieltjes_blocked(&e, eta, Some(64), Some(10.0))),
+                |e| black_box(compute_all_stieltjes_blocked(&e, eta, Some(10.0))),
                 BatchSize::SmallInput,
             )
         });

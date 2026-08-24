@@ -68,7 +68,7 @@ pub(crate) fn default_eta(p: usize) -> f64 {
 ///
 /// Note: the result is the raw sum (not multiplied by 1/p).
 #[inline(always)]
-pub fn stieltjes_sum_for_one(
+fn stieltjes_sum_for_one(
     lambda_i: f64,
     eigenvalues: &[f64],
     eta: f64,
@@ -261,12 +261,7 @@ fn dispatch_exact_blocked(
     // of an O(p²) sweep with per-term branch skips.
     if let Some(cut) = cutoff_ratio {
         return if parallel {
-            cacheblock::compute_all_stieltjes_blocked_windowed_parallel(
-                eigenvalues,
-                eta,
-                None,
-                Some(cut),
-            )
+            cacheblock::compute_all_stieltjes_blocked_windowed_parallel(eigenvalues, eta, Some(cut))
         } else {
             cacheblock::compute_all_stieltjes_blocked_windowed(eigenvalues, eta, None, Some(cut))
         };
@@ -276,10 +271,8 @@ fn dispatch_exact_blocked(
         (true, true) => {
             cacheblock::compute_all_stieltjes_blocked_tiled_parallel(eigenvalues, eta, None, None)
         }
-        (true, false) => {
-            cacheblock::compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None, None)
-        }
-        (false, _) => cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None, None),
+        (true, false) => cacheblock::compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None),
+        (false, _) => cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None),
     }
 }
 
@@ -384,14 +377,9 @@ pub fn compute_all_stieltjes(
             // Auto should already be resolved upstream by rie_shrinkage.
             // If reached here, fall back to Blocked which is the safe default.
             let (reals, imags) = if parallel {
-                cacheblock::compute_all_stieltjes_blocked_parallel(
-                    eigenvalues,
-                    eta,
-                    None,
-                    Some(block_size),
-                )
+                cacheblock::compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None)
             } else {
-                cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None, None)
+                cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None)
             };
             scale_soa(reals, imags, inv_p)
         }
@@ -432,7 +420,6 @@ pub fn compute_all_stieltjes(
                 blocked_autovec::compute_all_stieltjes_blocked_autovec_parallel(
                     eigenvalues,
                     eta,
-                    Some(block_size),
                     cutoff_ratio,
                 )
             } else {
@@ -450,7 +437,6 @@ pub fn compute_all_stieltjes(
                 cacheblock::compute_all_stieltjes_blocked_windowed_parallel(
                     eigenvalues,
                     eta,
-                    Some(block_size),
                     cutoff_ratio,
                 )
             } else {
@@ -468,14 +454,9 @@ pub fn compute_all_stieltjes(
             // not be truncated). Imaginary part: windowed method (short-range,
             // O(p·k)).
             let (reals, _) = if parallel {
-                cacheblock::compute_all_stieltjes_blocked_parallel(
-                    eigenvalues,
-                    eta,
-                    None,
-                    Some(block_size),
-                )
+                cacheblock::compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None)
             } else {
-                cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None, None)
+                cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None)
             };
             let (_, imags) = cacheblock::compute_all_stieltjes_blocked_windowed(
                 eigenvalues,

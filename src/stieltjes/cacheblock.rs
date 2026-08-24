@@ -50,18 +50,20 @@ use rayon::prelude::*;
 /// # Arguments
 /// * `eigenvalues` — sorted eigenvalues (length p)
 /// * `eta` — regularization parameter
-/// * `block_size` — cache block size (None = auto-tuned, Some(s) = explicit)
 /// * `cutoff` — far-field cutoff ratio (None = disabled, Some(r) = enabled with ratio r)
+///
+/// The historical `block_size` argument was removed: this kernel delegates
+/// to the 2D-tiled implementation, which always auto-selects its own block
+/// size — accepting one here was a lie in the signature.
 pub fn compute_all_stieltjes_blocked(
     eigenvalues: &[f64],
     eta: f64,
-    _block_size: Option<usize>,
     cutoff: Option<f64>,
 ) -> (Vec<f64>, Vec<f64>) {
     // Delegate to the 2D-tiled kernel: output-block-outer loop order keeps the
     // output resident in cache across all source sweeps (minimizes cache
-    // invalidation on the output arrays). Pass `None` for block_size so the
-    // tiled kernel auto-selects the cache-optimal block size for p.
+    // invalidation on the output arrays). The tiled kernel auto-selects the
+    // cache-optimal block size for p.
     compute_all_stieltjes_blocked_tiled(eigenvalues, eta, None, cutoff)
 }
 
@@ -80,11 +82,10 @@ pub fn compute_all_stieltjes_blocked(
 /// duplicated inner-loop body.
 ///
 /// Returns (real_parts, imag_parts) as separate SoA-style vectors.
-pub fn compute_all_stieltjes_blocked_parallel(
+pub(crate) fn compute_all_stieltjes_blocked_parallel(
     eigenvalues: &[f64],
     eta: f64,
     cutoff: Option<f64>,
-    _block_size: Option<usize>,
 ) -> (Vec<f64>, Vec<f64>) {
     let p = eigenvalues.len();
     if p == 0 {
@@ -117,7 +118,7 @@ pub fn compute_all_stieltjes_blocked_parallel(
 /// the single-point kernel an order of magnitude faster than a full scan at
 /// small η·√p, and it is what the parallel blocked path uses per λᵢ.
 #[inline(always)]
-pub fn stieltjes_sum_cutoff(
+pub(crate) fn stieltjes_sum_cutoff(
     lambda_i: f64,
     eigenvalues: &[f64],
     eta: f64,
@@ -160,7 +161,7 @@ pub fn stieltjes_sum_cutoff(
 ///
 /// Returns (real_parts, imag_parts) as SoA vectors, each of length
 /// `query_points.len()`.
-pub fn compute_stieltjes_blocked_at_points(
+pub(crate) fn compute_stieltjes_blocked_at_points(
     query_points: &[f64],
     eigenvalues: &[f64],
     eta: f64,
@@ -612,7 +613,7 @@ pub fn compute_all_stieltjes_blocked_windowed(
         return (Vec::new(), Vec::new());
     }
     let Some(cut) = cutoff else {
-        return compute_all_stieltjes_blocked(eigenvalues, eta, block_size, None);
+        return compute_all_stieltjes_blocked(eigenvalues, eta, None);
     };
 
     let bs = block_size.unwrap_or(BLOCK_SZ);
@@ -686,12 +687,7 @@ pub fn compute_all_stieltjes_blocked_windowed(
 /// Single-point windowed Stieltjes sum: binary-search the contiguous window
 /// of λⱼ within `cut·η` of `lambda_i` and sum only those terms.
 #[inline(always)]
-pub fn stieltjes_sum_windowed(
-    lambda_i: f64,
-    eigenvalues: &[f64],
-    eta: f64,
-    cut: f64,
-) -> (f64, f64) {
+fn stieltjes_sum_windowed(lambda_i: f64, eigenvalues: &[f64], eta: f64, cut: f64) -> (f64, f64) {
     let eta_sq = eta * eta;
     let window = cut * eta;
     let lo = eigenvalues.partition_point(|&x| x < lambda_i - window);
@@ -712,10 +708,9 @@ pub fn stieltjes_sum_windowed(
 /// Parallel windowed variant: each λᵢ is processed independently by a Rayon
 /// thread, delegating to the single-point kernel [`stieltjes_sum_windowed`].
 /// No duplicated inner-loop body.
-pub fn compute_all_stieltjes_blocked_windowed_parallel(
+pub(crate) fn compute_all_stieltjes_blocked_windowed_parallel(
     eigenvalues: &[f64],
     eta: f64,
-    _block_size: Option<usize>,
     cutoff: Option<f64>,
 ) -> (Vec<f64>, Vec<f64>) {
     let p = eigenvalues.len();
@@ -723,7 +718,7 @@ pub fn compute_all_stieltjes_blocked_windowed_parallel(
         return (Vec::new(), Vec::new());
     }
     let Some(cut) = cutoff else {
-        return compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None, None);
+        return compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None);
     };
 
     let results: Vec<(f64, f64)> = eigenvalues
@@ -751,7 +746,7 @@ pub fn compute_all_stieltjes_blocked_windowed_parallel(
 ///
 /// Empirically (M-series, p=10000): bs8=40.7ms, bs16=46.3ms, bs32=49.1ms,
 /// bs64=50.7ms, bs128=51.7ms, bs4=57.7ms. So bs8 is optimal at large p.
-pub fn auto_tiled_block_size(p: usize) -> usize {
+fn auto_tiled_block_size(p: usize) -> usize {
     if p <= 256 {
         // Small p: output fits in L1/L2 regardless; use a moderate block to
         // avoid loop overhead.
@@ -1501,15 +1496,14 @@ fn tiled_one_block_no_cutoff(
     }
 }
 
-/// Auto-select the cache block size for the **parallel** tiled kernel.
-///
-/// With several threads each owning a distinct output chunk, slightly larger
-/// blocks amortize the per-chunk source sweep better than the sequential
-/// optimum (8): measured at p=20000 on an 8-core M-series, bs=32–128 are
-/// within noise of each other and ~15% ahead of the per-row autovec path.
-pub fn auto_tiled_block_size_parallel(_p: usize) -> usize {
-    32
-}
+/// Cache block size of the **parallel** tiled kernel. A constant, not a
+/// tuner: with several threads each owning a distinct output chunk,
+/// slightly larger blocks amortize the per-chunk source sweep better than
+/// the sequential optimum (8) — measured at p=20000 on an 8-core
+/// M-series, bs=32–128 are within noise of each other and ~15% ahead of
+/// the per-row autovec path. The former `auto_tiled_block_size_parallel`
+/// function ignored its argument and returned this value regardless.
+pub(crate) const PARALLEL_TILED_BS: usize = 32;
 
 /// Parallel (Rayon) 2D-tiled Stieltjes sum.
 ///
@@ -1536,7 +1530,7 @@ pub fn compute_all_stieltjes_blocked_tiled_parallel(
         return (Vec::new(), Vec::new());
     }
 
-    let bs = block_size.unwrap_or_else(|| auto_tiled_block_size_parallel(p));
+    let bs = block_size.unwrap_or(PARALLEL_TILED_BS);
     let eta_sq = eta * eta;
     let cut_dist = cutoff.map(|r| r * eta).unwrap_or(f64::INFINITY);
 
@@ -1595,7 +1589,7 @@ pub fn compute_all_stieltjes_blocked_tiled_parallel(
 /// speed matters more than precision.
 ///
 /// Returns `(reals, imags)` as `Vec<f32>`.
-pub fn compute_all_stieltjes_blocked_tiled_f32(
+pub(crate) fn compute_all_stieltjes_blocked_tiled_f32(
     eigenvalues: &[f32],
     eta: f32,
     block_size: Option<usize>,
@@ -2139,7 +2133,7 @@ mod tests {
         let evals: Vec<f64> = (0..50).map(|i| (i as f64 + 0.5).ln_1p()).collect();
         let eta = 0.05;
 
-        let (reals, imags) = compute_all_stieltjes_blocked(&evals, eta, Some(16), None);
+        let (reals, imags) = compute_all_stieltjes_blocked(&evals, eta, None);
 
         for (i, &li) in evals.iter().enumerate() {
             let (ref_r, ref_i) = autovec_stieltjes_sum(li, &evals, eta);
@@ -2210,7 +2204,7 @@ mod tests {
         for &cut in &[None, Some(10.0)] {
             let (tiled_r, tiled_i) =
                 compute_all_stieltjes_blocked_tiled(&evals, eta, Some(64), cut);
-            let (ref_r, ref_i) = compute_all_stieltjes_blocked(&evals, eta, Some(64), cut);
+            let (ref_r, ref_i) = compute_all_stieltjes_blocked(&evals, eta, cut);
             for i in 0..p {
                 assert!(
                     (tiled_r[i] - ref_r[i]).abs() < 1e-12,
@@ -2264,7 +2258,7 @@ mod tests {
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
-        let (reals, imags) = compute_all_stieltjes_blocked(&evals, eta, Some(64), Some(10.0));
+        let (reals, imags) = compute_all_stieltjes_blocked(&evals, eta, Some(10.0));
 
         // Check that results are finite and plausible
         for (r, i) in reals.iter().zip(imags.iter()).take(10) {
@@ -2313,9 +2307,8 @@ mod tests {
         let eta = 0.1 / (p as f64).sqrt();
         let cut = 10.0;
 
-        let (win_r, win_i) =
-            compute_all_stieltjes_blocked_windowed(&evals, eta, Some(64), Some(cut));
-        let (ref_r, ref_i) = compute_all_stieltjes_blocked(&evals, eta, Some(64), Some(cut));
+        let (win_r, win_i) = compute_all_stieltjes_blocked_windowed(&evals, eta, None, Some(cut));
+        let (ref_r, ref_i) = compute_all_stieltjes_blocked(&evals, eta, Some(cut));
 
         for i in 0..p {
             assert!(
@@ -2340,10 +2333,9 @@ mod tests {
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
-        let (seq_r, seq_i) =
-            compute_all_stieltjes_blocked_windowed(&evals, eta, Some(64), Some(10.0));
+        let (seq_r, seq_i) = compute_all_stieltjes_blocked_windowed(&evals, eta, None, Some(10.0));
         let (par_r, par_i) =
-            compute_all_stieltjes_blocked_windowed_parallel(&evals, eta, Some(64), Some(10.0));
+            compute_all_stieltjes_blocked_windowed_parallel(&evals, eta, Some(10.0));
 
         for i in 0..p {
             assert!(
@@ -2375,9 +2367,8 @@ mod tests {
         evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 0.1 / (p as f64).sqrt();
 
-        let (exact_r, exact_i) = compute_all_stieltjes_blocked(&evals, eta, Some(64), None);
-        let (win_r, win_i) =
-            compute_all_stieltjes_blocked_windowed(&evals, eta, Some(64), Some(10.0));
+        let (exact_r, exact_i) = compute_all_stieltjes_blocked(&evals, eta, None);
+        let (win_r, win_i) = compute_all_stieltjes_blocked_windowed(&evals, eta, None, Some(10.0));
 
         let mut max_rel_r = 0.0_f64;
         let mut max_rel_i = 0.0_f64;

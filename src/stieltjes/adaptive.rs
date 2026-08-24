@@ -21,12 +21,17 @@ use crate::stieltjes::cacheblock::compute_all_stieltjes_blocked_windowed;
 use crate::stieltjes::fft5::compute_all_stieltjes_fft5;
 
 /// Default far-field cutoff ratio for the imaginary-part window.
-/// Chosen so the imaginary error roughly matches the FFT real-part error (~15%).
+/// Chosen so the windowing error of the imaginary part roughly matches the
+/// FFT grid's real-part accuracy (~4e-5 relative at the operating point;
+/// the "~15%" quoted by early drafts long predates the current kernel).
 const DEFAULT_CUTOFF_RATIO: f64 = 10.0;
 
 /// Compute the adaptive Stieltjes transform.
 ///
-/// Returns a Vec of (real, imag) pairs, one per eigenvalue, already scaled by 1/p.
+/// Returns **raw sums** as `(real, imag)` pairs, one per eigenvalue — NOT
+/// scaled by `1/p`; the caller applies the scaling (the dispatcher does).
+/// (An earlier revision of this doc claimed the opposite; the function has
+/// always returned raw sums.)
 ///
 /// # Arguments
 /// * `eigenvalues` — sorted eigenvalues (length p)

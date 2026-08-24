@@ -130,10 +130,9 @@ pub fn compute_all_stieltjes_blocked_autovec(
 /// Parallel version: each λᵢ is computed independently by a Rayon thread,
 /// delegating to the same single-point kernel [`stieltjes_sum_blocked_autovec`].
 /// No duplicated inner-loop body.
-pub fn compute_all_stieltjes_blocked_autovec_parallel(
+pub(crate) fn compute_all_stieltjes_blocked_autovec_parallel(
     eigenvalues: &[f64],
     eta: f64,
-    _block_size: Option<usize>,
     cutoff: Option<f64>,
 ) -> (Vec<f64>, Vec<f64>) {
     let p = eigenvalues.len();
@@ -257,7 +256,7 @@ mod tests {
         let (seq_r, seq_i) =
             compute_all_stieltjes_blocked_autovec(&evals, eta, Some(64), Some(10.0));
         let (par_r, par_i) =
-            compute_all_stieltjes_blocked_autovec_parallel(&evals, eta, Some(64), Some(10.0));
+            compute_all_stieltjes_blocked_autovec_parallel(&evals, eta, Some(10.0));
 
         for i in 0..p {
             assert!(
