@@ -325,15 +325,8 @@ fn fft_convolution(eigenvalues: &[f64], eta: f64, opts: &Fft5Options) -> FftGrid
         *slot = Complex64::new(density[i], x / denom);
     }
     super::fftplan::fft_inplace(&mut packed, FftDirection::Forward);
-
-    let mut dens_freq = vec![Complex64::new(0.0, 0.0); m];
-    let mut ko = vec![Complex64::new(0.0, 0.0); m];
-    for k in 0..m {
-        let ck = packed[k];
-        let cnk = packed[(m - k) % m];
-        dens_freq[k] = 0.5 * (ck + cnk.conj());
-        ko[k] = -0.5 * Complex64::new(0.0, 1.0) * (ck - cnk.conj());
-    }
+    // Density spectrum + odd-kernel spectrum from the single packed FFT.
+    let (dens_freq, ko) = super::fftplan::unpack_packed_real_pair(&packed);
 
     // --- Analytic even-kernel spectrum (no kernel FFT) ---
     // The DFT of the sampled Lorentzian equals the periodic Poisson-kernel
@@ -347,28 +340,22 @@ fn fft_convolution(eigenvalues: &[f64], eta: f64, opts: &Fft5Options) -> FftGrid
     // far below the ~1e-4 target accuracy.
     let r = (-2.0 * std::f64::consts::PI * eta / (m as f64 * dx)).exp();
     let ke0 = std::f64::consts::PI / dx;
-    let mut ke = vec![0.0_f64; m];
+    let mut ke = vec![Complex64::new(0.0, 0.0); m];
     let mut pow = 1.0;
     for ke_k in ke.iter_mut().take(half + 1) {
-        *ke_k = ke0 * pow;
+        *ke_k = Complex64::new(ke0 * pow, 0.0);
         pow *= r;
     }
     pow = r;
     for k in (half + 1..m).rev() {
-        ke[k] = ke0 * pow;
+        ke[k] = Complex64::new(ke0 * pow, 0.0);
         pow *= r;
     }
 
     // --- Frequency-domain products, packed for one IFFT ---
     // packed_out = im_hat + i·re_hat, where im_hat = D·K_even (→ Im[m_g]) and
     // re_hat = D·R_odd (→ Re[m_g]). One inverse FFT recovers both.
-    let mut packed_out = vec![Complex64::new(0.0, 0.0); m];
-    for k in 0..m {
-        let d = dens_freq[k];
-        let im_hat = d * ke[k];
-        let re_hat = d * ko[k];
-        packed_out[k] = Complex64::new(im_hat.re - re_hat.im, im_hat.im + re_hat.re);
-    }
+    let mut packed_out = super::fftplan::pack_dual_product(&dens_freq, &ke, &ko);
 
     // --- Single inverse FFT ---
     super::fftplan::fft_inplace(&mut packed_out, FftDirection::Inverse);

@@ -183,22 +183,10 @@ fn far_part(
     super::fftplan::fft_inplace(&mut packed_kernel, FftDirection::Forward);
 
     // --- Unpack the two kernel spectra from the packed transform ---
-    // If C = FFT(a + i·b), then:
-    //   A[k] = (C[k] + conj(C[(m-k)%m])) / 2
-    //   B[k] = -i/2 · (C[k] - conj(C[(m-k)%m]))
-    let mut packed_out = vec![Complex64::new(0.0, 0.0); m];
-    for k in 0..m {
-        let ck = packed_kernel[k];
-        let cnk = packed_kernel[(m - k) % m];
-        let ke = 0.5 * (ck + cnk.conj()); // even kernel spectrum (imag part)
-        let ko = -0.5 * Complex64::new(0.0, 1.0) * (ck - cnk.conj()); // odd (real)
-        let d = dens_freq[k];
-        let im_hat = d * ke; // → far imaginary
-        let re_hat = d * ko; // → far real
-        // Pack Im_hat + i·Re_hat so one IFFT recovers both.
-        packed_out[k] = Complex64::new(im_hat.re - re_hat.im, im_hat.im + re_hat.re);
-    }
+    let (ke, ko) = super::fftplan::unpack_packed_real_pair(&packed_kernel);
 
+    // Pack Im_hat + i·Re_hat so one IFFT recovers both convolutions.
+    let mut packed_out = super::fftplan::pack_dual_product(&dens_freq, &ke, &ko);
     super::fftplan::fft_inplace(&mut packed_out, FftDirection::Inverse);
 
     let inv_m = 1.0 / m_f64;
