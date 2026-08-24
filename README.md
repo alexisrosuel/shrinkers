@@ -71,12 +71,24 @@ The **core** of the crate is a single call that cleans the sample eigenvalues
 under a spiked covariance model, recovering the population spectrum:
 
 ```python
+import numpy as np
 from shrinkers import deconvolve_spiked
 
-res = deconvolve_spiked(evals, c=0.25)
-print(res["k"])                 # number of detected spikes
-print(res["spikes"])            # debiased population spikes ℓ_i (descending)
-print(res["bulk"]["density"])   # deconvolved bulk population density
+# --- example input: a sample spectrum drawn from a spiked covariance ---
+# Population: Marchenko-Pastur bulk (sigma^2 = 1, c = 0.25) plus three
+# spikes at 12, 7 and 4. The sample eigenvalues come from n = p/c
+# Gaussian observations of that diagonal covariance.
+rng = np.random.default_rng(0)
+p, c = 1000, 0.25
+pop = np.concatenate([[12.0, 7.0, 4.0], np.ones(p - 3)])
+y = rng.standard_normal((p, round(p / c))) * np.sqrt(pop)[:, None]
+evals = np.linalg.eigvalsh((y @ y.T) / y.shape[1])   # ascending sample spectrum
+
+res = deconvolve_spiked(evals, c=c)
+print(res["k"])                 # -> 3 detected spikes
+print(res["spikes"])            # -> [11.96 7.1 3.93] debiased (true: 12, 7, 4)
+print(res["bulk"]["lambda_grid"][:4],   # grid + deconvolved bulk density
+      res["bulk"]["density"][:4])       # profile on a 200-point grid
 ```
 
 It orchestrates the full pipeline:
@@ -139,13 +151,22 @@ correct approach is a **two-stage hybrid**:
    assumption holds.
 
 ```python
+import numpy as np
 from shrinkers import deconvolve_spiked
 
-res = deconvolve_spiked(evals, c=0.25, n_points=300, eta=0.05)
-print(res["k"])                 # number of detected spikes
-print(res["spikes"])            # debiased population spikes ℓ_i (descending)
-print(res["spike_sample"])      # sample eigenvalues classified as spikes
-print(res["bulk"]["density"])   # deconvolved bulk density
+# Same spiked-model input as above (bulk sigma^2 = 1, spikes at 12/7/4).
+rng = np.random.default_rng(0)
+p, c = 1000, 0.25
+pop = np.concatenate([[12.0, 7.0, 4.0], np.ones(p - 3)])
+y = rng.standard_normal((p, round(p / c))) * np.sqrt(pop)[:, None]
+evals = np.linalg.eigvalsh((y @ y.T) / y.shape[1])
+
+res = deconvolve_spiked(evals, c=c, n_points=300, eta=0.05)
+print(res["k"])                 # -> 3
+print(res["spikes"])            # -> [11.96 7.1 3.93] (true: 12, 7, 4)
+print(res["spike_sample"][-3:]) # sample values classified as spikes
+                                # -> [12.24 7.39 4.27]
+print(res["bulk"]["density"].shape)     # -> (300,), density profile
 ```
 
 ## Python usage
@@ -158,9 +179,10 @@ evals = np.array([0.5, 1.0, 2.0, 3.0, 5.0, 10.0], dtype=np.float64)
 
 # Clean the sample eigenvalues (spiked + bulk deconvolution)
 res = deconvolve_spiked(evals, c=0.3)
-print(res["k"])                 # number of detected spikes
-print(res["spikes"])            # debiased population spikes ℓ_i
-print(res["bulk"]["density"])   # deconvolved bulk density
+print(res["k"])                 # -> 1 detected spike
+print(res["spikes"])            # -> [8.779] debiased population spike
+                                #    (sample value was 10; BBP pulls it down)
+print(res["bulk"]["density"].shape)     # -> (200,) deconvolved bulk density
 ```
 
 See `docs/python_api.md` for the full API reference.
