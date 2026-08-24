@@ -33,9 +33,10 @@
 //!   `(Vec<f64>, Vec<f64>)` (dense streams for SIMD); everything else
 //!   returns AoS `Vec<(f64, f64)>`. The dispatcher bridges both.
 //! - Parallelism: some kernels expose `*_parallel` twins (the O(p²)
-//!   family), others take a `parallel: bool` (tree methods). Rayon below
-//!   `PAR_TILED_MIN_P` falls back to per-row kernels where scheduling
-//!   overhead dominates.
+//!   family), others take a `parallel: bool` (tree methods). The exact
+//!   family has two floors: rayon requests below `RAYON_MIN_P` run
+//!   sequential (scheduling would dominate), and tiled-parallel only kicks
+//!   in at `PAR_TILED_MIN_P`.
 //! - Two deliberate η conventions coexist ([`default_eta`] is the single
 //!   library constant): **η = 0.1/√p** wherever the crate picks a default
 //!   itself, **η = 1/√p** inside every recorded benchmark harness
@@ -254,6 +255,13 @@ fn scale_aos(pairs: Vec<(f64, f64)>, inv_p: f64) -> Vec<(f64, f64)> {
 /// 0.22 ms at p=1000; the ordering flips between p=1000 and p=5000).
 const PAR_TILED_MIN_P: usize = 2000;
 
+/// Below this size a rayon REQUEST on the exact family runs sequential
+/// anyway: the thread-pool join costs a flat ~20 µs while the sequential
+/// computation is sub-µs to tens of µs there. Measured crossover (M1 Max,
+/// end-to-end through the Python boundary): sequential beats per-row-rayon
+/// up to p≈512 and loses from p≈768 — 512 is the conservative floor.
+const RAYON_MIN_P: usize = 512;
+
 /// Cheap O(p) sortedness check so the tree-code methods can skip their
 /// defensive O(p log p) sort when the caller passes pre-sorted eigenvalues
 /// (which the whole pipeline does).
@@ -272,7 +280,8 @@ pub(crate) fn is_sorted_ascending(v: &[f64]) -> bool {
 ///   output chunks with `par_chunks_mut` (no false sharing, no reduction).
 ///   Note this also gives `BlockedTiled` + Rayon a genuinely parallel path —
 ///   it previously ran sequentially.
-/// - Parallel, small p: per-row autovec (scheduling overhead dominates).
+/// - Parallel, tiny p (< `RAYON_MIN_P`): runs SEQUENTIAL — scheduling
+///   overhead would dominate the entire computation.
 ///
 /// With a far-field cutoff enabled, every path here delegates to the
 /// *windowed* implementations (see the branch below).
@@ -296,12 +305,17 @@ fn dispatch_exact_blocked(
         };
     }
 
-    match (parallel, p >= PAR_TILED_MIN_P) {
-        (true, true) => {
+    match (parallel, p >= PAR_TILED_MIN_P, p < RAYON_MIN_P) {
+        // Parallel request below RAYON_MIN_P runs sequential: identical
+        // result, strictly faster (see the constant's doc).
+        (true, _, true) => cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None),
+        (true, true, _) => {
             cacheblock::compute_all_stieltjes_blocked_tiled_parallel(eigenvalues, eta, None, None)
         }
-        (true, false) => cacheblock::compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None),
-        (false, _) => cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None),
+        (true, false, _) => {
+            cacheblock::compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None)
+        }
+        (false, _, _) => cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None),
     }
 }
 

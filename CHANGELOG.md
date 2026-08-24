@@ -362,6 +362,15 @@ no global grid; ChebCode remains the approximate-frontier optimum.
   tuner became `PARALLEL_TILED_BS`).
 
 ### Fixed
+- **Tiny-p Rayon requests no longer pay the thread-pool floor on the exact
+  family.** Requesting `parallelism="rayon"` below p≈512 routed to a
+  per-row Rayon fallback whose flat join overhead (~20 µs) exceeded the
+  entire sequential computation — an end-to-end regression against plain
+  vectorized NumPy at p ≤ 128. A parallel request now runs the sequential
+  kernel below `RAYON_MIN_P = 512` (identical results, strictly faster);
+  measured through the Python boundary: p=4 drops 18.1 µs -> 0.71 µs,
+  p=64 46.6 µs -> 2.5 µs, keeping shrinkers 6–10× ahead of NumPy at every
+  size instead of losing up to p≈128.
 - **`cutoff=None` raised ValueError on documented calls.** The
   `InferredF64` extractor accepted only floats and the string
   `"inferred"`, yet both `deconvolve_spiked` and `stieltjes_transform`
