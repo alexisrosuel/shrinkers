@@ -29,7 +29,7 @@ impl Iterator for Lcg {
     }
 }
 
-/// MP-like spectrum (c=0.5 bulk + two spikes) — same recipe as pareto_data.
+/// MP-like spectrum (c=0.5 bulk + two spikes) — same recipe as measure_pareto_frontier.
 fn spectrum(p: usize) -> Vec<f64> {
     let c: f64 = 0.5;
     let lo = (1.0 - c.sqrt()).powi(2);

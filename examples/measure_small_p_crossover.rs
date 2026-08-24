@@ -1,6 +1,6 @@
 //! Locate the O(p^2) vs ChebCode crossover for small problem sizes.
 //!
-//! The main Pareto sweep (`pareto_data.rs`) starts at p=1000; below that the
+//! The main Pareto sweep (`measure_pareto_frontier.rs`) starts at p=1000; below that the
 //! per-call times drop into the microsecond range where single-shot timing is
 //! mostly scheduler noise. This example measures log-spaced sizes from p=1 to
 //! p=1000 with batched repetition (each timed batch lasts a few milliseconds,
@@ -10,7 +10,7 @@
 //! but the point here is runtime: where does building+querying the tree stop
 //! paying for itself compared to the plain quadratic sum?
 //!
-//! Usage: cargo run --release --example small_p_crossover > docs/pareto/small_p.json
+//! Usage: cargo run --release --example measure_small_p_crossover > docs/pareto/small_p.json
 use shrinkers::config::{CutoffConfig, Parallelism, StieltjesMethod};
 use shrinkers::stieltjes;
 use std::time::Instant;
@@ -27,7 +27,7 @@ impl Iterator for Lcg {
     }
 }
 
-/// Same spectrum shape as `pareto_data.rs` (MP c=0.5 bulk + two spikes) but
+/// Same spectrum shape as `measure_pareto_frontier.rs` (MP c=0.5 bulk + two spikes) but
 /// total-count safe down to p=1, where the spike bookkeeping would underflow.
 fn spectrum(p: usize) -> Vec<f64> {
     let c: f64 = 0.5;

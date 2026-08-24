@@ -110,7 +110,8 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 > windowed kernels: identical included terms, O(p·k) instead of O(p²).
 > Presets are data-driven: `Strategy::Speed` / `Strategy::Accuracy` resolve
 > through a measured Pareto table (`src/config/pareto_autogen.rs`,
-> regenerate via `examples/pareto_data.rs` + `scripts/build_pareto_table.py`)
+> regenerate via `examples/measure_pareto_frontier.rs` +
+> `scripts/build_pareto_table.py`)
 > with independent columns for Sequential/Rayon; the user's parallelism
 > choice is respected. NUFFT-based evaluation was investigated and rejected —
 > uniform grids cannot suppress the Cauchy kernel's algebraic wrap-around
@@ -214,7 +215,8 @@ combined grid: `docs/pareto/runtime_vs_p_grid.png`.
 
 The frontier sweep starts at p=1000; below that, per-call times fall in the
 microsecond range where single-shot timing is noise. A dedicated sweep
-(`examples/small_p_crossover.rs`, log-spaced p ∈ [1, 1000], each point =
+(`examples/measure_small_p_crossover.rs`, log-spaced p ∈ [1, 1000], each
+point =
 median of nine ≥5 ms batches of repeated calls) pins the crossover.
 Sequential runtimes (the Python default), µs/call:
 
@@ -268,7 +270,7 @@ RIE deconvolution evaluates the same spectrum for many γ (one η per γ).
 parallelizing ACROSS the η axis and evaluating etas pairwise through a
 two-lane traversal — measured **6.5–6.6×** faster than calling
 `compute_all_stieltjes_chebcode` per η at the DEFAULT preset (~8.5–11× at
-FAST; `examples/bench_batch.rs`). For root-finding on γ,
+FAST; `examples/measure_batch_gamma_sweep.rs`). For root-finding on γ,
 `stieltjes_transform_with_deriv` returns S and its analytic derivative
 dS/dx in a single exact pass.
 
@@ -309,7 +311,7 @@ On top of that, `ChebCodeBatch` adds three amortizations:
   uses min(η₀, η₁), i.e. both lanes stay conservative; Rayon parallelizes
   across eta pairs with the tree shared read-only. Measured **6.5–6.6×**
   vs naive per-η calls at the DEFAULT preset, and ~8.5–11× at the FAST
-  preset (`examples/bench_batch.rs`);
+  preset (`examples/measure_batch_gamma_sweep.rs`);
 - **arbitrary query grids** (`evaluate_points(points, eta, parallel)`): same
   one-tree service for deconvolution grids — this is the path that replaced
   the accidental quadratic fallback in `deconvolve_spiked`;

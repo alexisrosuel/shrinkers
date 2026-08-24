@@ -5,7 +5,7 @@
 //! public API so the SAME script measures the "before" (git stash) and
 //! "after" (working tree) states.
 //!
-//! Usage: cargo run --release --example pareto_data -- after|before
+//! Usage: cargo run --release --example measure_pareto_frontier -- after|before
 use shrinkers::config::{CutoffConfig, Parallelism, StieltjesMethod};
 use shrinkers::stieltjes;
 use std::time::Instant;

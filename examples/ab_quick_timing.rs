@@ -1,6 +1,6 @@
 //! Quick single-method benchmark for A/B iteration.
 //!
-//! Usage: cargo run --release --example bench_one -- <method> [extra args]
+//! Usage: cargo run --release --example ab_quick_timing -- <method> [extra args]
 //!   methods: cheb <theta> <n> <leaf> | treecode | tiled | autovec
 //!
 //! Prints JSON rows compatible with scripts/build_pareto_table.py inputs.
@@ -162,7 +162,7 @@ fn main() {
                     );
                 }),
                 "tiled" => bench(|| {
-                    // Raw kernels: bench_one scales by inv_p itself.
+                    // Raw kernels: this tool scales by inv_p itself.
                     let (reals, imags) = if matches!(par, Parallelism::Rayon) {
                         stieltjes::compute_all_stieltjes_blocked_tiled_parallel(
                             &evs, eta, None, None,

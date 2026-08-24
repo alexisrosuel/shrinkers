@@ -5,7 +5,7 @@
 //! backgrounding a compound command makes `$!` the shell's PID, not this
 //! binary's (see the profiling playbook in CHANGELOG).
 //!
-//! Usage: cargo run --release --example profile_hot
+//! Usage: cargo run --release --example profile_hot_loop
 use shrinkers::stieltjes::{ChebPreset, chebcode_tree_for_bench};
 
 struct Lcg(u64);

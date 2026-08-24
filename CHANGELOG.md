@@ -390,7 +390,8 @@ no global grid; ChebCode remains the approximate-frontier optimum.
 
 ### Notes
 - **Pareto table regenerated against the final kernel set** (fresh full
-  sweep through `examples/pareto_data` + `scripts/build_pareto_table.py`).
+  sweep through `examples/measure_pareto_frontier` +
+  `scripts/build_pareto_table.py`).
   Headline change: `ChebCodeFast` now owns every speed-intent bin up to
   p ≤ 20000 sequentially; accuracy-intent flips stay inside the exact
   family on runtime tie-breaks. Single-session sweep — bins decided by

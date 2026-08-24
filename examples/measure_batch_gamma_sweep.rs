@@ -4,7 +4,7 @@
 //! (one per γ). Naive: one full `compute_all_stieltjes` call per η.
 //! Batch: one `ChebCodeBatch::build`, then `evaluate_many`.
 //!
-//! Usage: cargo run --release --example bench_batch -- [p] [n_eta]
+//! Usage: cargo run --release --example measure_batch_gamma_sweep -- [p] [n_eta]
 
 use shrinkers::stieltjes::ChebCodeBatch;
 use std::time::Instant;
