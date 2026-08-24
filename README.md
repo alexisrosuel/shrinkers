@@ -92,19 +92,17 @@ under a spiked covariance model, recovering the population spectrum:
 import numpy as np
 from shrinkers import deconvolve_spiked
 
-# --- example input: a sample spectrum drawn from a spiked covariance ---
-# Population: Marchenko-Pastur bulk (sigma^2 = 1, c = 0.25) plus three
-# spikes at 12, 7 and 4. The sample eigenvalues come from n = p/c
-# Gaussian observations of that diagonal covariance.
-rng = np.random.default_rng(0)
+# Sample spectrum of a spiked covariance: Marchenko-Pastur bulk
+# (sigma^2 = 1, c = 0.25) plus three spikes at 12, 7 and 4, observed
+# through n = p/c Gaussian samples.
 p, c = 1000, 0.25
 pop = np.concatenate([[12.0, 7.0, 4.0], np.ones(p - 3)])
-y = rng.standard_normal((p, round(p / c))) * np.sqrt(pop)[:, None]
-evals = np.linalg.eigvalsh((y @ y.T) / y.shape[1])   # ascending sample spectrum
+y = np.random.standard_normal((p, round(p / c))) * np.sqrt(pop)[:, None]
+evals = np.linalg.eigvalsh(y @ y.T / y.shape[1])     # ascending
 
 res = deconvolve_spiked(evals, c=c)
-print(res["k"])                 # -> 3 detected spikes
-print(res["spikes"])            # -> [11.96 7.1 3.93] debiased (true: 12, 7, 4)
+print(res["k"])        # -> 3 spikes detected
+print(res["spikes"])   # -> close to [12, 7, 4] (BBP-debiased)
 print(res["bulk"]["lambda_grid"][:4],   # grid + deconvolved bulk density
       res["bulk"]["density"][:4])       # profile on a 200-point grid
 ```
