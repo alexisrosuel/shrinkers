@@ -39,17 +39,18 @@ vectorized NumPy version:
 
 | p | Naive Python | NumPy | shrinkers exact ¹ | shrinkers treecode ² |
 |---|---|---|---|---|
-| 1 024 | 0.53 s | 2.8 ms | **0.30 ms** · 9× | **0.24 ms** · 12× |
-| 4 096 | 8.6 s | 101 ms | **1.4 ms** · 75× | **0.54 ms** · 187× |
-| 50 000 | *(~2 h extrapolated)* | 13.9 s | **0.13 s** · 109× | **2.9 ms** · ≈4700× |
+| 1 024 | 0.32 s | 2.3 ms | **0.33 ms** · 7× | **0.22 ms** · 11× |
+| 4 096 | 5.2 s | 94 ms | **1.2 ms** · 81× | **0.48 ms** · 195× |
+| 50 000 | *(~2 h extrapolated)* | 14.6 s | **0.17 s** · 86× | **3.6 ms** · ≈4000× |
 
 ¹ machine precision — the zero-error anchor.  ² `chebcode_fast` preset,
 rel. error ~1e-8: giving up four digits of accuracy buys two more orders of
 magnitude in speed, and the higher-precision `chebcode` preset (~5e-10)
 costs nearly the same (see [docs/internals.md](docs/internals.md)).
 At microsecond scales both
-shrinkers curves flatten onto their fixed Python-call overhead (the pure
-kernel-level crossover study lives in [docs/internals.md](docs/internals.md)).
+shrinkers curves flatten onto their fixed Python-call overhead — a Rayon
+request on tiny inputs runs sequential automatically rather than paying the
+thread-pool floor (details in [docs/internals.md](docs/internals.md)).
 Every number is reproducible: `scripts/make_readme_figures.py`
 regenerates both figures end-to-end, and `docs/img/readme_figures.json`
 holds the raw measurements.

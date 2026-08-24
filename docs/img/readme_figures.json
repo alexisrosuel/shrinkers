@@ -5,124 +5,124 @@
     "numpy_version": "2.5.1",
     "eta_convention": "eta = 1/sqrt(p)",
     "timing": "median of 3 (naive: 1 rep above p=2048)",
-    "date_utc": "2026-08-24 14:50 UTC"
+    "date_utc": "2026-08-24 14:59 UTC"
   },
   "runtime": {
     "rows": [
       {
         "p": 1,
-        "python_naive": 2.4579931050539017e-06,
-        "numpy": 8.08399636298418e-06,
-        "shrinkers_exact_rayon": 1.0410149116069078e-06,
-        "shrinkers_chebcode_rayon": 1.3329845387488604e-06
+        "python_naive": 2.2920139599591494e-06,
+        "numpy": 5.959009286016226e-06,
+        "shrinkers_exact_rayon": 7.080088835209608e-07,
+        "shrinkers_chebcode_rayon": 1.0420044418424368e-06
       },
       {
         "p": 2,
-        "python_naive": 3.8330035749822855e-06,
-        "numpy": 8.458999218419194e-06,
-        "shrinkers_exact_rayon": 2.3625005269423127e-05,
-        "shrinkers_chebcode_rayon": 1.4169781934469938e-06
+        "python_naive": 2.7919886633753777e-06,
+        "numpy": 6.374990334734321e-06,
+        "shrinkers_exact_rayon": 6.67001586407423e-07,
+        "shrinkers_chebcode_rayon": 1.0840012691915035e-06
       },
       {
         "p": 4,
-        "python_naive": 1.095901825465262e-05,
-        "numpy": 8.750008419156075e-06,
-        "shrinkers_exact_rayon": 2.5582994567230344e-05,
-        "shrinkers_chebcode_rayon": 1.500011421740055e-06
+        "python_naive": 7.5410061981529e-06,
+        "numpy": 6.417016265913844e-06,
+        "shrinkers_exact_rayon": 7.080088835209608e-07,
+        "shrinkers_chebcode_rayon": 1.0830117389559746e-06
       },
       {
         "p": 8,
-        "python_naive": 3.6124984035268426e-05,
-        "numpy": 9.040988516062498e-06,
-        "shrinkers_exact_rayon": 2.779200440272689e-05,
-        "shrinkers_chebcode_rayon": 1.500011421740055e-06
+        "python_naive": 2.2624997654929757e-05,
+        "numpy": 6.457994459196925e-06,
+        "shrinkers_exact_rayon": 6.67001586407423e-07,
+        "shrinkers_chebcode_rayon": 1.0840012691915035e-06
       },
       {
         "p": 16,
-        "python_naive": 0.00013150001177564263,
-        "numpy": 9.791983757168055e-06,
-        "shrinkers_exact_rayon": 2.212502295151353e-05,
-        "shrinkers_chebcode_rayon": 1.7920101527124643e-06
+        "python_naive": 8.170798537321389e-05,
+        "numpy": 6.95799826644361e-06,
+        "shrinkers_exact_rayon": 7.909839041531086e-07,
+        "shrinkers_chebcode_rayon": 1.2909877113997936e-06
       },
       {
         "p": 32,
-        "python_naive": 0.0005010419990867376,
-        "numpy": 1.1791998986154795e-05,
-        "shrinkers_exact_rayon": 4.570800228975713e-05,
-        "shrinkers_chebcode_rayon": 2.874992787837982e-06
+        "python_naive": 0.00031025000498630106,
+        "numpy": 8.750008419156075e-06,
+        "shrinkers_exact_rayon": 1.0840012691915035e-06,
+        "shrinkers_chebcode_rayon": 2.2909953258931637e-06
       },
       {
         "p": 64,
-        "python_naive": 0.001958499982720241,
-        "numpy": 1.8375023500993848e-05,
-        "shrinkers_exact_rayon": 4.112499300390482e-05,
-        "shrinkers_chebcode_rayon": 6.499991286545992e-06
+        "python_naive": 0.0012116249999962747,
+        "numpy": 1.4542019926011562e-05,
+        "shrinkers_exact_rayon": 2.3329921532422304e-06,
+        "shrinkers_chebcode_rayon": 5.125009920448065e-06
       },
       {
         "p": 128,
-        "python_naive": 0.007930207997560501,
-        "numpy": 4.949999856762588e-05,
-        "shrinkers_exact_rayon": 4.624997382052243e-05,
-        "shrinkers_chebcode_rayon": 1.5833007637411356e-05
+        "python_naive": 0.005164500005776063,
+        "numpy": 3.845899482257664e-05,
+        "shrinkers_exact_rayon": 5.999987479299307e-06,
+        "shrinkers_chebcode_rayon": 1.2458011042326689e-05
       },
       {
         "p": 256,
-        "python_naive": 0.03240545801236294,
-        "numpy": 0.00017504201969131827,
-        "shrinkers_exact_rayon": 6.191700231283903e-05,
-        "shrinkers_chebcode_rayon": 4.06669860240072e-05
+        "python_naive": 0.019878166989656165,
+        "numpy": 0.0001535420014988631,
+        "shrinkers_exact_rayon": 2.0459003280848265e-05,
+        "shrinkers_chebcode_rayon": 3.2499985536560416e-05
       },
       {
         "p": 512,
-        "python_naive": 0.13136729199322872,
-        "numpy": 0.0007295830000657588,
-        "shrinkers_exact_rayon": 0.00017616699915379286,
-        "shrinkers_chebcode_rayon": 0.0001130840100813657
+        "python_naive": 0.080932999990182,
+        "numpy": 0.0008088330214377493,
+        "shrinkers_exact_rayon": 0.0003054160042665899,
+        "shrinkers_chebcode_rayon": 8.929200703278184e-05
       },
       {
         "p": 1024,
-        "python_naive": 0.5334515409776941,
-        "numpy": 0.002769333019386977,
-        "shrinkers_exact_rayon": 0.00030179202440194786,
-        "shrinkers_chebcode_rayon": 0.00023829101701267064
+        "python_naive": 0.3240087090234738,
+        "numpy": 0.002325084002222866,
+        "shrinkers_exact_rayon": 0.00032795799779705703,
+        "shrinkers_chebcode_rayon": 0.00021591701079159975
       },
       {
         "p": 2048,
-        "python_naive": 2.183613291999791,
-        "numpy": 0.02676054197945632,
-        "shrinkers_exact_rayon": 0.0004306670161895454,
-        "shrinkers_chebcode_rayon": 0.00036337500205263495
+        "python_naive": 1.3058223749976605,
+        "numpy": 0.02458529098657891,
+        "shrinkers_exact_rayon": 0.00036345800617709756,
+        "shrinkers_chebcode_rayon": 0.0002701670164242387
       },
       {
         "p": 4096,
-        "python_naive": 8.555831333011156,
-        "numpy": 0.10065083301742561,
-        "shrinkers_exact_rayon": 0.001353792002191767,
-        "shrinkers_chebcode_rayon": 0.0005395409825723618
+        "python_naive": 5.243744750012411,
+        "numpy": 0.09351262499694712,
+        "shrinkers_exact_rayon": 0.0011521669803187251,
+        "shrinkers_chebcode_rayon": 0.00047845899825915694
       },
       {
         "p": 8192,
-        "numpy": 0.42259591599577107,
-        "shrinkers_exact_rayon": 0.005035500013036653,
-        "shrinkers_chebcode_rayon": 0.0008370830037165433
+        "numpy": 0.39260208400082774,
+        "shrinkers_exact_rayon": 0.0043471249809954315,
+        "shrinkers_chebcode_rayon": 0.0008480419928673655
       },
       {
         "p": 16384,
-        "numpy": 0.5575991249934305,
-        "shrinkers_exact_rayon": 0.01818037501652725,
-        "shrinkers_chebcode_rayon": 0.0017452499887440354
+        "numpy": 0.5059974169998895,
+        "shrinkers_exact_rayon": 0.01627637498313561,
+        "shrinkers_chebcode_rayon": 0.0014653330144938082
       },
       {
         "p": 32768,
-        "numpy": 6.76749062500312,
-        "shrinkers_exact_rayon": 0.07329958400805481,
-        "shrinkers_chebcode_rayon": 0.0026914589980151504
+        "numpy": 6.211577500012936,
+        "shrinkers_exact_rayon": 0.06711499998345971,
+        "shrinkers_chebcode_rayon": 0.0025354159879498184
       },
       {
         "p": 50000,
-        "numpy": 13.91182187499362,
-        "shrinkers_exact_rayon": 0.1276343750068918,
-        "shrinkers_chebcode_rayon": 0.002928625006461516
+        "numpy": 14.548034374980489,
+        "shrinkers_exact_rayon": 0.1689020000048913,
+        "shrinkers_chebcode_rayon": 0.003595624992158264
       }
     ]
   },
