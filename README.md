@@ -5,10 +5,10 @@
 
 **Fast RMT (Random Matrix Theory) Population Eigenvalue Estimation Kernel**
 
-SIMD-accelerated Rust implementation of **spiked + bulk eigenvalue cleaning**
-via free-probability deconvolution: detect spikes (BEMA), debias them (inverse
+A fast Rust implementation of **spiked + bulk eigenvalue cleaning** via
+free-probability deconvolution: detect spikes (BEMA), debias them (inverse
 BBP), and deconvolve the bulk (El Karoui). Features O(p log p)
-O(p log p) Chebyshev-treecode Stieltjes transforms, auto-vectorized loops,
+Chebyshev-treecode Stieltjes transforms, auto-vectorized loops,
 cache blocking, multi-threaded kernels (**~6× on an 8-core machine**, one keyword away),
 and PyO3 bindings.
 
