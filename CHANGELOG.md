@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **Documented the η choice** (`docs/eta_choice.md`) with a reproducible
+  sweep (`examples/measure_eta_sweep.rs`, data under `docs/pareto/`):
+  f/√p form anchored to Ledoit–Wolf consistency scaling; 0.1/√p confirmed
+  as the knee between bulk accuracy and boundary-layer width; spike
+  pipeline and runtimes measured η-insensitive.
 - **Breaking (Python API): `parallelism="seq"/"rayon"` replaced by a plain
   `parallel` switch** on `deconvolve_spiked`, `stieltjes_transform` and
   `shrink_eigenvalues`: `False` (default) single-threaded, `True`

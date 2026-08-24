@@ -87,7 +87,9 @@ use rayon::prelude::*;
 ///
 /// Note the separate benchmark convention: recorded harnesses measure at
 /// η = 1/√p instead (see the Conventions list above for why the split is
-/// kept rather than unified).
+/// kept rather than unified). The full justification — theory anchors,
+/// measured bias/stability/runtime trade-offs — lives in
+/// [`docs/eta_choice.md`](../docs/eta_choice.md).
 pub(crate) fn default_eta(p: usize) -> f64 {
     const SCALE: f64 = 0.1;
     SCALE / (p as f64).sqrt()

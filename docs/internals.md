@@ -360,7 +360,7 @@ Full `rie_shrinkage` pipeline (includes spike detection + shrinkage overhead):
 > p=1000.** The FFT grid padding (`1000·η` with `η = 0.1/√p`) forces large
 > grids at small p, so the O(p log p) FFT methods only win at very large p.
 > For the pure imaginary part (spectral density reconstruction),
-> `BlockedWindowed` is far faster still (40 µs).
+> `BlockedWindowed` is far faster still (40 µs). Full analysis: see [eta_choice.md](eta_choice.md).
 
 ### Python-level (via PyO3, `deconvolve_spiked`, n_points=200)
 
