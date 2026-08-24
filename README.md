@@ -6,8 +6,10 @@
 **Fast RMT (Random Matrix Theory) Population Eigenvalue Estimation Kernel**
 
 A fast Rust implementation of **spiked + bulk eigenvalue cleaning** via
-free-probability deconvolution: detect spikes (BEMA), debias them (inverse
-BBP), and deconvolve the bulk (El Karoui). Features O(p log p)
+free-probability deconvolution: detect spikes (BEMA — Bulk Eigenvalue
+Matching Analysis), debias them with the inverse BBP map (the
+Baik–Ben Arous–Péché phase transition), and deconvolve the bulk (El
+Karoui). Features O(p log p)
 Chebyshev-treecode Stieltjes transforms, auto-vectorized loops,
 cache blocking, multi-threaded kernels (**~6× on an 8-core machine**, one keyword away),
 and PyO3 bindings.
