@@ -253,7 +253,6 @@ pub fn spectral_deconvolution(
 mod tests {
     use super::*;
     use crate::config::{Parallelism, StieltjesMethod};
-    use crate::math::C64;
     use approx::assert_relative_eq;
 
     // ── Golden master: deterministic eigenvalues, exact expected output ──
@@ -659,25 +658,26 @@ mod tests {
         let p = evals.len() as f64;
 
         for &lambda_i in &evals {
-            // Compute g_B(z) = (1/p) Σ 1/(λⱼ - z) directly
-            let mut sum = C64::new(0.0, 0.0);
+            // Compute g_B(z) = (1/p) Σ 1/(λⱼ - z) directly with plain
+            // (re, im) arithmetic — independent of any complex helper.
+            let (mut sum_re, mut sum_im) = (0.0_f64, 0.0_f64);
             for &lambda_j in &evals {
-                // 1/(λⱼ - z) = 1/((λⱼ - λ_i) - iη)
+                // 1/(λⱼ - z) = 1/((λⱼ - λ_i) - iη) = diff/denom + i·η/denom
                 let diff = lambda_j - lambda_i;
                 let denom = diff * diff + eta * eta;
                 let inv_denom = 1.0 / denom;
-                // 1/((λⱼ-λ_i) - iη) = diff/denom + i·η/denom
-                sum = sum.add(C64::new(diff * inv_denom, eta * inv_denom));
+                sum_re += diff * inv_denom;
+                sum_im += eta * inv_denom;
             }
-            let gb_direct = sum.scale(1.0 / p);
+            let (gb_direct_re, gb_direct_im) = (sum_re / p, sum_im / p);
 
             // Get g_A from our function, convert to g_B
             let (ga_re, ga_im) = empirical_stieltjes_at_point(lambda_i, eta, &evals);
             let gb_re = -ga_re;
             let gb_im = -ga_im;
 
-            assert_relative_eq!(gb_re, gb_direct.re(), epsilon = 1e-14);
-            assert_relative_eq!(gb_im, gb_direct.im(), epsilon = 1e-14);
+            assert_relative_eq!(gb_re, gb_direct_re, epsilon = 1e-14);
+            assert_relative_eq!(gb_im, gb_direct_im, epsilon = 1e-14);
         }
     }
 

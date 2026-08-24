@@ -20,6 +20,9 @@
 /// # Returns
 ///
 /// A vector of squared angular overlaps, same length as `lambda_rie`.
+/// Note: `spiked::bbp_angle_overlap` evaluates the same formula from the
+/// normalized spike ℓ (ℓ = λ̃/σ² + 1 form). Edge behaviour differs by
+/// design (clamp policy); see the note there before changing either.
 pub fn compute_angular_overlaps(lambda_rie: &[f64], c: f64, sigma2: f64) -> Vec<f64> {
     let p = lambda_rie.len();
     let mut alpha2 = vec![0.0; p];

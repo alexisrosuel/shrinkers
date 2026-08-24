@@ -27,7 +27,6 @@ pub mod spiked;
 pub mod stieltjes;
 
 // Private modules used internally
-mod math;
 
 // Crate-level API documentation lives in rmt.rs
 mod rmt;

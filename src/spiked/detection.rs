@@ -13,6 +13,8 @@
 //!    with the $F_1$ Tracy–Widom law and thresholds at a quantile of the
 //!    bulk edge distribution.
 
+use super::estimation::bbp_threshold;
+
 /// Result of spike detection.
 #[derive(Debug, Clone)]
 pub struct SpikeDetection {
@@ -25,13 +27,6 @@ pub struct SpikeDetection {
     /// Indices (into the caller-provided eigenvalue array, which must be
     /// sorted **ascending**) of the detected spikes, in ascending order.
     pub spike_indices: Vec<usize>,
-}
-
-/// Marchenko–Pastur upper edge for a noise variance $\sigma^2$ and
-/// concentration ratio $\gamma = p/n$.
-#[inline(always)]
-pub fn mp_upper_edge(sigma2: f64, gamma: f64) -> f64 {
-    sigma2 * (1.0 + gamma.sqrt()).powi(2)
 }
 
 /// Marchenko–Pastur median factor $m(\gamma)$.
@@ -115,7 +110,7 @@ pub fn detect_spikes_bema(eigenvalues: &[f64], gamma: f64, margin: f64) -> Spike
 
     // Step 1: estimate σ² from the MP-median-corrected sample median.
     let sigma2 = estimate_bulk_noise(eigenvalues, gamma);
-    let edge = mp_upper_edge(sigma2, gamma);
+    let edge = bbp_threshold(gamma, sigma2);
     let threshold = edge * margin.max(1.0);
 
     // The early-break scan below relies on ascending order.
@@ -257,7 +252,7 @@ pub fn detect_spikes_tracy_widom(
     }
 
     let sigma2 = sigma2.unwrap_or_else(|| estimate_bulk_noise(eigenvalues, gamma));
-    let edge = mp_upper_edge(sigma2, gamma);
+    let edge = bbp_threshold(gamma, sigma2);
 
     // The early-break scan below relies on ascending order.
     debug_assert!(
@@ -297,12 +292,6 @@ pub fn detect_spikes_tracy_widom(
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-
-    #[test]
-    fn test_mp_upper_edge() {
-        // σ²=1, γ=0.25 → (1+0.5)² = 2.25
-        assert_relative_eq!(mp_upper_edge(1.0, 0.25), 2.25, epsilon = 1e-12);
-    }
 
     #[test]
     fn test_detect_spikes_bema_known() {

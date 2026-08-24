@@ -21,6 +21,12 @@
 /// ($\ell_i \le 1 + \sqrt\gamma$), the overlap is 0 (the eigenvector carries
 /// no signal).
 #[inline(always)]
+/// Note: `eigenvector_overlaps::compute_angular_overlaps` evaluates the
+/// same BBP alignment formula from the RIE eigenvalue + noise variance
+/// (λ̃ + σ² form). The two wrappers intentionally differ at the edge:
+/// this one maps sub-threshold spikes to exactly 0 overlap, that one
+/// clamps to 1−1e-15 and guards degenerate ratios. Do not "unify" them
+/// without re-checking both test suites.
 pub fn bbp_angle_overlap(ell: f64, gamma: f64) -> f64 {
     // In units of σ²=1, the BBP threshold is 1 + √γ.
     if ell <= 1.0 + gamma.sqrt() {

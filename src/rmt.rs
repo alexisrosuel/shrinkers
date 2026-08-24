@@ -12,7 +12,6 @@
 //! | [`eigenvector_overlaps`](crate::eigenvector_overlaps) | Theoretical eigenvector angular overlap (α²) |
 //! | [`spiked`](crate::spiked) | Spiked covariance model: spike eigenvalue/eigenvector estimation |
 //! | [`pipeline`](crate::pipeline) | Full covariance cleaning pipeline |
-//! | [`math`](crate::math) | Manual complex number arithmetic |
 //! | [`config`](crate::config) | Configuration (`RmtConfig`, strategies, enums) |
 //! | [`python`](crate::python) | PyO3 bindings (feature-gated) |
 //!

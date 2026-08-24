@@ -27,6 +27,12 @@ use crate::stieltjes::compute_all_stieltjes;
 
 /// BBP threshold: the smallest population spike that produces a detectable
 /// sample spike. Below this, the spike is absorbed into the bulk.
+///
+/// This is numerically the Marchenko–Pastur upper edge λ₊ = σ²(1+√γ)² —
+/// one formula that used to exist twice in this crate under two names with
+/// swapped argument orders (`bbp_threshold(gamma, sigma2)` here,
+/// `mp_upper_edge(sigma2, gamma)` in detection). `bbp_threshold` is the
+/// single survivor; spike detection calls it for its bulk edge.
 #[inline(always)]
 pub fn bbp_threshold(gamma: f64, sigma2: f64) -> f64 {
     sigma2 * (1.0 + gamma.sqrt()).powi(2)
