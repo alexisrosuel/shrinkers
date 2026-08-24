@@ -72,22 +72,18 @@ def fig_cleaning() -> dict:
 
     ax = axes[0]
     idx = np.arange(1, p + 1)
-    # Focus the axis on the bulk; spikes beyond the cap are rendered as a
-    # clipped marker with their value annotated, so three tall points at
-    # ranks 1-3 don't squash the bulk into an unreadable band.
-    y_top = float(res["bulk_edge"]) * 4.0
-    ax.plot(idx, truth_desc, "-", color="black", lw=1.5, label="true population")
+    k = len(spikes)
+    # Bulk as a line starting AFTER the spike ranks (no vertical jump in the
+    # trace); the spikes themselves are isolated scatter markers.
+    ax.plot(idx[k:], truth_desc[k:], "-", color="black", lw=1.5,
+            label="true population")
+    ax.plot(idx[:k], truth_desc[:k], "D", color="black", ms=5)
     ax.plot(idx, sample_desc, ".", color="#9aa5b1", ms=3.5,
             label=f"sample (p={p}, c={C})")
     ax.plot(idx, cleaned_desc, ".", color="#d62728", ms=3.5,
             label="cleaned by shrinkers")
     ax.set_yscale("log")
-    ax.set_ylim(bottom=0.2, top=y_top)
-    for r in range(len(spikes)):
-        if truth_desc[r] > y_top:
-            ax.plot(r + 1, y_top * 0.93, marker="^", color="black", ms=5)
-            ax.annotate(f"{truth_desc[r]:.1f}", (r + 1, y_top * 0.60),
-                        ha="center", fontsize=7)
+    ax.set_ylim(bottom=0.2)
     ax.axhline(res["bulk_edge"], color="#2b6cb0", lw=0.8, ls="--",
                label=f"estimated bulk edge ({res['bulk_edge']:.2f})")
     ax.set_xlabel("rank (descending order)")
