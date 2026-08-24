@@ -57,9 +57,9 @@ def main():
                 lw=1.8 if ls == "-" else 1.0, alpha=1.0 if ls == "-" else 0.55,
                 label=LABEL[key[0]] + par_label)
 
-    # Crossover region measured across two independent sessions:
-    # fast/default flip between p=300 and p=400, xtreme between 500 and 600.
-    for x0, x1, txt in [(300, 400, "bascule ≈350"), (500, 600, "bascule ≈550")]:
+    # Crossover region measured after the symmetric-kernel speedup of the
+    # exact family: fast/default flip between p=400 and p=600, xtreme ~1000.
+    for x0, x1, txt in [(400, 600, "bascule ≈500"), (750, 1000, "bascule ≈1000")]:
         ax.axvspan(x0, x1, color="orange", alpha=0.15, lw=0)
         ax.annotate(txt, xy=((x0 * x1) ** 0.5, 3.0), fontsize=8,
                     ha="center", color="#a05a00")

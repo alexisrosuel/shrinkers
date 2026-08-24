@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **Exact all-points kernel rewritten as a symmetric-pair sweep**
+  (`symmetric_all_points` in `stieltjes/cacheblock.rs`). The sequential
+  no-cutoff `BlockedTiled` path previously swept the FULL p×p square,
+  computing both orientations of every pair. Because the query set is the
+  source set, the pair term satisfies: real part antisymmetric
+  (`out_r[i] += d·u`, `out_r[j] -= d·u`), imaginary part symmetric
+  (`out_i[i] += η·u`, `out_i[j] += η·u`), reciprocal shared. The new kernel
+  visits each unordered pair once in a register-resident 4×4 schedule
+  (16 independent divisions per tile; column side accumulated in registers
+  and flushed with one read-modify-write per column). Output identical up to
+  FP summation order (~1e-15 rel). Measured back-to-back on M1 Max:
+  +33% at p=300 (46.7→35.0 µs), ~+31% sustained for p=2000..50000
+  (seq 50k: 1.244 s → 0.938 s); parity below p≈50 where call overhead
+  dominates. Consequence: the O(p²)→treecode crossover moved OUT from ≈350
+  to ≈500 (`chebcode`/`chebcode_fast`) and ≈1000 (`xtreme`).
+  Documented dead ends en route: a naive row-wise triangle loop was SLOWER
+  than the full-square kernel (scattered per-pair output updates destroy
+  the original 4×4 ILP); doubling to two source quads per pass spills
+  registers and loses ~15%; factoring η out of the imaginary accumulators
+  saves a multiply per pair but measured neutral-to-slower.
 - **ChebCode hot loops vectorized with a Newton-refined reciprocal**
   (`stieltjes::simd::F64x2`): AArch64 NEON has no FP64 vector divide, so the
   per-term `1/(d²+η²)` now runs as a 4-step FRECPE/FRECPS refinement on
@@ -26,10 +46,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `docs/pareto/small_p.json`, chart `docs/pareto/crossover_small_p.png`).
   The frontier sweep starts at p=1000; this companion sweep covers
   p ∈ [1, 1000] log-spaced with noise-resistant batched timing (each point =
-  median of nine ≥5 ms batches). Findings on MP spectra, η=1/√p, sequential:
-  the exact O(p²) tiled kernel wins up to p≈350 (2× faster than any preset
-  at p=100); `chebcode`/`chebcode_fast` take over from p≈400 (−12% at 400,
-  −55% at 1000); `chebcode_xtreme` from p≈600. Below a preset's leaf cap the
+  median of nine ≥5 ms batches). Findings on MP spectra, η=1/√p, sequential
+  (after the symmetric-pair exact-kernel rewrite below): the exact O(p²)
+  kernel wins up to p≈500 (2.6× faster than any preset at p=100);
+  `chebcode`/`chebcode_fast` take over from p≈600; `chebcode_xtreme` only
+  from p≈1000. Below a preset's leaf cap the
   tree is a single exact leaf — each curve visibly steps when p crosses it.
   Under p=2000 the exact+Rayon route is the per-row fallback
   (`PAR_TILED_MIN_P`) with ~20 µs fixed scheduling overhead, so the

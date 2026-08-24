@@ -246,18 +246,25 @@ Sequential runtimes (the Python default), µs/call:
 
 | p | exact tiled | chebcode_fast | chebcode | xtreme |
 |---|---|---|---|---|
-| 30 | **0.54** | 1.53 | 1.61 | 3.00 |
-| 100 | **4.98** | 10.82 | 11.55 | 14.70 |
-| 200 | **19.27** | 28.75 | 31.13 | 42.17 |
-| 300 | **46.67** | 49.33 | 53.13 | 70.82 |
-| 400 | 80.81 | **71.81** | **76.71** | 105.49 |
-| 600 | 180.72 | **119.38** | **128.20** | 177.29 |
-| 1000 | 499.08 | **222.65** | **241.53** | 343.13 |
+| 30 | **0.56** | 1.51 | 1.61 | 3.00 |
+| 100 | **4.17** | 10.93 | 11.59 | 14.80 |
+| 200 | **15.72** | 29.18 | 31.49 | 42.49 |
+| 300 | **34.98** | 49.49 | 53.70 | 71.33 |
+| 400 | **61.72** | 72.19 | 77.21 | 105.72 |
+| 600 | 138.14 | **120.58** | **130.17** | 179.53 |
+| 1000 | 380.32 | **224.94** | **243.00** | 349.62 |
 
-- **Crossover ≈ p≈350** for `chebcode`/`chebcode_fast` (at p=300 exact still
-  wins by ~5%, at p=400 it already loses by ~12%), and ≈ p≈550 for
-  `chebcode_xtreme`. Below the crossover O(p²) is brutally cheap — at p=100
-  the exact kernel is 2× faster than anything else; use it there.
+- The exact kernel itself is symmetric-pair optimized: because the query set
+  IS the source set, each unordered pair is visited ONCE (antisymmetric real
+  part, symmetric imaginary part, shared reciprocal) in a register-resident
+  4×4 schedule — ~1.3× faster than the full-square sweep from p≈150 all the
+  way to p=50 000 (back-to-back A/B: 1.24 s → 0.94 s seq at 50k).
+- **Crossover ≈ p≈500** for `chebcode`/`chebcode_fast` (exact still wins by
+  15% at p=400; virtual tie at 500) and ≈ p≈1000 for `chebcode_xtreme`.
+  Below the crossover O(p²) is brutally cheap — at p=100 the exact kernel is
+  2.5× faster than anything else; use it there. Note the direction of the
+  move: speeding up O(p²) pushed the treecode's territory OUTWARD from the
+  earlier ≈350 measurement.
 - The panel structure is visible in the raw data: preset runtimes step up as
   p crosses the leaf cap (`xtreme` jumps between p=12 and p=20 with its
   leaf_cap of 16, `fast`/default between p=30 and p=50 with 32) — below the
