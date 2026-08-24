@@ -195,6 +195,39 @@ the FFT variants are now dominated everywhere (same runtime class as
 `chebcode_fast` but 4000× the error), and only at p ≤ 2000 under Rayon
 does the exact `blocked_tiled` come within ~20 % of the fastest point.
 
+### Against the PyData baseline (p=50 000)
+
+What the same computation costs in Python on this machine (same spectrum,
+same η; timings single-run):
+
+| Approach | Time | rel error |
+|---|---|---|
+| Pure-Python double loop (extrapolated) | ~1500 s | fp64 |
+| NumPy per-row comprehension `[sum(1/(xi−λ−iη))]` | ~8.3 s | fp64 |
+| NumPy chunked broadcast, complex128 | 8.2 s | reference |
+| NumPy real-split kernel (savvy layout) | **4.8 s** | ~1e-15 |
+| SciPy grid + centered-kernel rfft, M=2¹⁸ | 30 ms | ~5e-4 |
+| SciPy grid + centered-kernel rfft, M=2²⁰ | 161 ms | ~1.3e-4 |
+| **Rust `chebcode_fast`** | **2.75 ms** | **~1e-8** |
+| Rust `chebcode` default | 3.24 ms | ~5e-10 |
+| Rust `chebcode_xtreme` | 5.26 ms | ~6e-13 |
+
+Readings:
+
+- versus the best pure-NumPy O(p²) formulation (~4.8 s — real-split,
+  chunked, no complex128 temporaries), the treecode is **~1750× faster**
+  parallel and ~330× mono-thread; versus naive-but-typical NumPy, ~3000×.
+- the algorithmically-savvy PyData route (bin onto a uniform grid + rfft
+  convolution, i.e. the same idea as the crate's `fft` family) does reach
+  tens of milliseconds but PLATEAUS around 1e-4 relative error because
+  sources collapse onto grid cells near the diagonal. Refining M cannot go
+  below that floor — recovering high-order accuracy near moving query
+  points is exactly what the Chebyshev panels buy. At matched 1e-4-class
+  accuracy `chebcode_fast` is still ~11× faster and 50 000× more accurate;
+  there is NO M that reaches its 1e-8 band.
+- Numba was unavailable offline; a JIT'd scalar kernel would land in the
+  exact-family runtime class (still O(p²)).
+
 ChebCode owns the speed-at-accuracy frontier on this spectrum family and,
 after the re-tune, also the near-machine-precision band that previously
 required the exact family (24× faster at ~1e-12); the exact family keeps
