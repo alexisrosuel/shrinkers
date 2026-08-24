@@ -22,16 +22,19 @@
 //! $$\rho_{\Sigma}\bigl(\Re(w)\bigr) = \frac{1}{\pi}\,\Im\bigl[m_{\Sigma}(w)\bigr]$$
 
 pub mod adaptive;
+/// Hybrid spike+bulk composition (renamed from `spiked` so the root
+/// namespace stops shadowing the `crate::spiked` toolkit module with a
+/// different meaning).
+pub mod hybrid;
 pub mod population;
 pub mod precision;
 pub mod shrinkage;
-pub mod spiked;
 
 pub use adaptive::*;
+pub use hybrid::*;
 pub use population::*;
 pub use precision::*;
 pub use shrinkage::*;
-pub use spiked::*;
 
 use crate::config::RmtConfig;
 

@@ -81,7 +81,7 @@ pub fn direct_precision_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Ar
     let c = resolved_config.c;
     let eta = resolved_config
         .eta
-        .unwrap_or_else(|| 0.1 / (p as f64).sqrt());
+        .unwrap_or_else(|| crate::stieltjes::default_eta(p));
 
     // Compute all Stieltjes transforms (reuses the fast kernel).
     let stieltjes_results = stieltjes::compute_all_stieltjes(

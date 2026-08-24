@@ -349,7 +349,14 @@ pub struct RmtConfig {
     // === Core parameters ===
     /// Concentration ratio p / n
     pub c: f64,
-    /// Regularization parameter (default: 0.1 / sqrt(p))
+    /// Regularization parameter; `None` = the crate default η = 0.1/√p
+    /// ([`crate::stieltjes::default_eta`]).
+    ///
+    /// Channel note: the pointwise paths (`rie_shrinkage`,
+    /// `direct_precision_shrinkage`, `estimate_population_eigenvalues`)
+    /// read THIS field, while the grid/deconvolution drivers
+    /// (`spectral_deconvolution`, `deconvolve_spiked`, `deconvolve_adaptive`)
+    /// take an explicit `eta: Option<f64>` argument and ignore it.
     pub eta: Option<f64>,
 
     // === Algorithm selection ===

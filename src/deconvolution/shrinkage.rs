@@ -70,7 +70,7 @@ pub fn rie_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Array1<f64> {
     let c = resolved_config.c;
     let eta = resolved_config
         .eta
-        .unwrap_or_else(|| 0.1 / (p as f64).sqrt());
+        .unwrap_or_else(|| crate::stieltjes::default_eta(p));
     let original_trace: f64 = eigenvalues.iter().copied().sum();
 
     // Compute all Stieltjes transforms

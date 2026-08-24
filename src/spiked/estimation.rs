@@ -80,7 +80,9 @@ pub fn ledoit_wolf_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Vec<f64
 
     let resolved = config.resolve_auto(p);
     let c = resolved.c;
-    let eta = resolved.eta.unwrap_or_else(|| 0.1 / (p as f64).sqrt());
+    let eta = resolved
+        .eta
+        .unwrap_or_else(|| crate::stieltjes::default_eta(p));
 
     let stieltjes = compute_all_stieltjes(
         eigenvalues,
