@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import platform
+import sys
 import time
 from pathlib import Path
 
@@ -162,7 +163,13 @@ def bench(fn, *args, repeats: int = 3):
     return float(np.median(ts))
 
 
-def fig_runtime() -> dict:
+def fig_runtime(reuse: bool = False) -> dict:
+    cached = OUT_DIR / "readme_figures.json"
+    if reuse and cached.exists():
+        # Re-render only: keep the previously measured numbers so README
+        # tables stay in sync with the figure.
+        return {"rows": json.loads(cached.read_text())["runtime"]["rows"]}
+
     # Full 10^0..10^5 range, log-spaced; 50000 caps the sweep.
     sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
              8192, 16384, 32768, 50000]
@@ -193,7 +200,7 @@ def fig_runtime() -> dict:
 
     series = [
         ("python_naive", "#9aa5b1", "o", "Naive Python (double loop)"),
-        ("numpy", "#2b6cb0", "s", "Vectorized NumPy (broadcasting; no scipy/FFT)"),
+        ("numpy", "#2b6cb0", "s", "Vectorized NumPy"),
         ("shrinkers_exact_rayon", "#d62728", "^", "shrinkers — exact, all cores"),
         ("shrinkers_chebcode_rayon", "#e05252", "v", "shrinkers — treecode, all cores"),
     ]
@@ -234,8 +241,9 @@ def fig_runtime() -> dict:
 
 
 if __name__ == "__main__":
-    cleaning = fig_cleaning()
-    runtime = fig_runtime()
+    reuse = "--reuse" in sys.argv
+    cleaning = None if reuse else fig_cleaning()
+    runtime = fig_runtime(reuse)
     meta = {
         "machine": platform.platform(),
         "processor": platform.processor(),
@@ -244,7 +252,13 @@ if __name__ == "__main__":
         "timing": "median of 3 (naive: 1 rep above p=2048)",
         "date_utc": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
     }
-    payload = {"meta": meta, "cleaning": cleaning, "runtime": runtime}
+    payload = {"meta": meta, "runtime": runtime}
+    if cleaning is not None:
+        payload["cleaning"] = cleaning
+    elif reuse and (OUT_DIR / "readme_figures.json").exists():
+        # preserve the stored cleaning section when only re-rendering
+        payload["cleaning"] = json.loads(
+            (OUT_DIR / "readme_figures.json").read_text()).get("cleaning")
     (OUT_DIR / "readme_figures.json").write_text(json.dumps(payload, indent=2))
     print(json.dumps(meta, indent=2))
     print("figures written to", OUT_DIR)

@@ -29,9 +29,8 @@ single call (`estimate_population_eigenvalues`).*
 
 **2 · It is absurdly fast for what it computes.** Same math as your NumPy
 one-liner, orders of magnitude faster — compared below against the two
-baselines people actually write: a textbook pure-Python double loop, and
-vectorized NumPy broadcasting (chunked so the p×p matrix never materializes;
-**no FFT, no scipy**):
+baselines people actually write: a textbook pure-Python double loop, and a
+vectorized NumPy version:
 
 ![Performance](docs/img/performance.png)
 
@@ -40,9 +39,9 @@ vectorized NumPy broadcasting (chunked so the p×p matrix never materializes;
 
 | p | Naive Python | NumPy | shrinkers exact ¹ | shrinkers treecode ² |
 |---|---|---|---|---|
-| 1 024 | 0.42 s | 2.8 ms | **0.23 ms** · 12× | **0.15 ms** · 19× |
-| 4 096 | 6.7 s | 85 ms | **1.3 ms** · 67× | **0.42 ms** · 201× |
-| 50 000 | *(~2 h extrapolated)* | 15.6 s | **0.16 s** · 96× | **5.1 ms** · ≈3000× |
+| 1 024 | 0.53 s | 2.8 ms | **0.30 ms** · 9× | **0.24 ms** · 12× |
+| 4 096 | 8.6 s | 101 ms | **1.4 ms** · 75× | **0.54 ms** · 187× |
+| 50 000 | *(~2 h extrapolated)* | 13.9 s | **0.13 s** · 109× | **2.9 ms** · ≈4700× |
 
 ¹ machine precision — the zero-error anchor.  ² `chebcode_fast` preset,
 rel. error ~1e-8: giving up four digits of accuracy buys two more orders of
