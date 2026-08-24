@@ -291,7 +291,6 @@ pub fn detect_spikes_tracy_widom(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_relative_eq;
 
     #[test]
     fn test_detect_spikes_bema_known() {
