@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **Per-call overhead removed from the small-p exact path**
+  (`SYM_AOS_MAX_P = 64` in `stieltjes/cacheblock.rs`). The symmetric-pair
+  schedule is now written once, generically over a `SymSink` trait that is
+  monomorphized per output layout: below p=64 the dispatcher's sequential
+  no-cutoff path runs it into ONE interleaved buffer scaled in place (the
+  old route cost three allocations — kernel reals/imags plus a zip/scale
+  collect — and two extra output passes; at p≤5 those dominated, ~2.5×
+  end-to-end), above p=64 the dense SoA streams are kept (the interleaved
+  layout loses ~17% there). The monomorphized SoA specialization also
+  measures faster than the previous hand-written kernel at every size:
+  seq p=1000 380→294 µs, seq p=50000 0.938 s → 0.736 s. Crossover
+  unchanged in shape: `chebcode_fast` ties exact at p≈500 and wins from
+  600; `chebcode_xtreme` needs ≈1000.
 - **Exact all-points kernel rewritten as a symmetric-pair sweep**
   (`symmetric_all_points` in `stieltjes/cacheblock.rs`). The sequential
   no-cutoff `BlockedTiled` path previously swept the FULL p×p square,

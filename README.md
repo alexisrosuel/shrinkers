@@ -246,24 +246,31 @@ Sequential runtimes (the Python default), µs/call:
 
 | p | exact tiled | chebcode_fast | chebcode | xtreme |
 |---|---|---|---|---|
-| 30 | **0.56** | 1.51 | 1.61 | 3.00 |
-| 100 | **4.17** | 10.93 | 11.59 | 14.80 |
-| 200 | **15.72** | 29.18 | 31.49 | 42.49 |
-| 300 | **34.98** | 49.49 | 53.70 | 71.33 |
-| 400 | **61.72** | 72.19 | 77.21 | 105.72 |
-| 600 | 138.14 | **120.58** | **130.17** | 179.53 |
-| 1000 | 380.32 | **224.94** | **243.00** | 349.62 |
+| 30 | **0.48** | 1.18 | 1.25 | 2.33 |
+| 100 | **3.24** | 8.53 | 9.02 | 11.50 |
+| 200 | **12.17** | 22.52 | 24.68 | 33.69 |
+| 300 | **27.22** | 38.74 | 41.33 | 57.22 |
+| 400 | **48.10** | 56.84 | 60.99 | 81.65 |
+| 600 | 106.53 | **95.11** | **103.15** | 143.81 |
+| 1000 | 294.38 | **173.72** | **192.67** | 275.91 |
 
 - The exact kernel itself is symmetric-pair optimized: because the query set
   IS the source set, each unordered pair is visited ONCE (antisymmetric real
   part, symmetric imaginary part, shared reciprocal) in a register-resident
-  4×4 schedule — ~1.3× faster than the full-square sweep from p≈150 all the
-  way to p=50 000 (back-to-back A/B: 1.24 s → 0.94 s seq at 50k).
-- **Crossover ≈ p≈500** for `chebcode`/`chebcode_fast` (exact still wins by
-  15% at p=400; virtual tie at 500) and ≈ p≈1000 for `chebcode_xtreme`.
-  Below the crossover O(p²) is brutally cheap — at p=100 the exact kernel is
-  2.5× faster than anything else; use it there. Note the direction of the
-  move: speeding up O(p²) pushed the treecode's territory OUTWARD from the
+  4×4 schedule. Cumulative back-to-back A/B against the original
+  full-square sweep: 1.244 s → 0.938 s (pairing alone) → 0.736 s seq at 50k
+  after the schedule was re-expressed over a layout-generic sink — −41%
+  total, with the largest relative gains exactly in the small-p band.
+- Per-call overhead is layout-switched at `SYM_AOS_MAX_P = 64`: below it the
+  dispatcher runs the sweep into ONE interleaved buffer scaled in place
+  (the old route cost three allocations plus two extra output passes — at
+  p≤5 that was most of the wall time, hence ~2.5× end-to-end); above it the
+  dense SoA streams win back ~17% and are kept.
+- **Crossover ≈ p≈500** for `chebcode_fast` (dead heat at 500, clear from
+  600) / ≈600 for `chebcode`, and ≈ p≈1000 for `chebcode_xtreme`. Below the
+  crossover O(p²) is brutally cheap — at p=100 the exact kernel is ~2.6×
+  faster than anything else; use it there. Note the direction of the move:
+  speeding up O(p²) pushed the treecode's territory OUTWARD from the
   earlier ≈350 measurement.
 - The panel structure is visible in the raw data: preset runtimes step up as
   p crosses the leaf cap (`xtreme` jumps between p=12 and p=20 with its

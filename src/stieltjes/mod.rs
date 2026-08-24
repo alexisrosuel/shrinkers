@@ -405,9 +405,25 @@ pub fn compute_all_stieltjes(
             ),
             inv_p,
         ),
-        StieltjesMethod::Blocked => {
-            let (reals, imags) = dispatch_exact_blocked(eigenvalues, eta, cutoff_ratio, parallel);
-            scale_soa(reals, imags, inv_p)
+        // Both exact-blocked arms share one policy (see
+        // `dispatch_exact_blocked`). Sequential + no cutoff uses the
+        // symmetric-pair kernel; the output layout switches at
+        // `SYM_AOS_MAX_P` — below it, one interleaved allocation beats the
+        // SoA round-trip (mallocs dominate), above it the dense streams win.
+        StieltjesMethod::Blocked | StieltjesMethod::BlockedTiled => {
+            if !parallel && cutoff_ratio.is_none() {
+                if p <= cacheblock::SYM_AOS_MAX_P {
+                    cacheblock::compute_all_stieltjes_symmetric_scaled_aos(eigenvalues, eta, inv_p)
+                } else {
+                    let (reals, imags) =
+                        dispatch_exact_blocked(eigenvalues, eta, cutoff_ratio, parallel);
+                    scale_soa(reals, imags, inv_p)
+                }
+            } else {
+                let (reals, imags) =
+                    dispatch_exact_blocked(eigenvalues, eta, cutoff_ratio, parallel);
+                scale_soa(reals, imags, inv_p)
+            }
         }
         StieltjesMethod::BlockedAutoVec => {
             let (reals, imags) = if parallel {
@@ -425,10 +441,6 @@ pub fn compute_all_stieltjes(
                     cutoff_ratio,
                 )
             };
-            scale_soa(reals, imags, inv_p)
-        }
-        StieltjesMethod::BlockedTiled => {
-            let (reals, imags) = dispatch_exact_blocked(eigenvalues, eta, cutoff_ratio, parallel);
             scale_soa(reals, imags, inv_p)
         }
         StieltjesMethod::BlockedWindowed => {
