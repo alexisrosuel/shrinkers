@@ -340,7 +340,13 @@ pub fn compute_all_stieltjes(
             inv_p,
         ),
         StieltjesMethod::TreeCode => scale_aos(
-            treecode::compute_all_stieltjes_treecode_impl(eigenvalues, eta, 0.5, 6, parallel),
+            treecode::compute_all_stieltjes_treecode_impl(
+                eigenvalues,
+                eta,
+                treecode::DEFAULT_THETA,
+                treecode::DEFAULT_ORDER,
+                parallel,
+            ),
             inv_p,
         ),
         // Presets live in chebcode::ChebPreset — the single source of truth
@@ -398,9 +404,9 @@ pub fn compute_all_stieltjes(
             hodlr::compute_all_stieltjes_hodlr_impl(
                 eigenvalues,
                 eta,
-                256,
-                1e-9,
-                32,
+                hodlr::DEFAULT_LEAF,
+                hodlr::DEFAULT_ACA_TOL,
+                hodlr::DEFAULT_ACA_RANK,
                 parallel,
                 hodlr::HodlrMode::Aca,
             ),

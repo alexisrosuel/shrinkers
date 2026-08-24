@@ -893,10 +893,14 @@ pub fn compute_all_stieltjes_hodlr_impl(
     }
 }
 
-/// Default-settings wrapper: raw sums, sequential.
-pub fn compute_all_stieltjes_hodlr(eigenvalues: &[f64], eta: f64) -> Vec<(f64, f64)> {
-    compute_all_stieltjes_hodlr_impl(eigenvalues, eta, 256, 1e-9, 32, false, HodlrMode::Aca)
-}
+/// Dispatch defaults of the `Hodlr` variant: near-field leaf size, ACA
+/// compression tolerance, ACA rank cap. Named here so the dispatcher
+/// carries no magic numbers.
+pub(crate) const DEFAULT_LEAF: usize = 256;
+/// Dispatch default ACA tolerance.
+pub(crate) const DEFAULT_ACA_TOL: f64 = 1e-9;
+/// Dispatch default ACA rank cap.
+pub(crate) const DEFAULT_ACA_RANK: usize = 32;
 
 #[cfg(test)]
 mod tests {

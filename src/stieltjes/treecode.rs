@@ -212,15 +212,12 @@ fn build_flat(sorted: &[f64], lo: f64, hi: f64, tree: &mut FlatTree, binom: &[f6
 /// Returns **raw sums** (not scaled by `1/p`); the caller applies scaling.
 ///
 /// # Arguments
-/// * `eigenvalues` — eigenvalues (length p; need not be sorted)
-/// * `eta` — regularization parameter
-///
-/// # Returns
-/// Vec of (Re[m_g(z_i)], Im[m_g(z_i)]) for each eigenvalue
-pub fn compute_all_stieltjes_treecode(eigenvalues: &[f64], eta: f64) -> Vec<(f64, f64)> {
-    // Default: order 6, theta 0.5 → ~5e-4 relative error on both parts.
-    compute_all_stieltjes_treecode_impl(eigenvalues, eta, 0.5, 6, false)
-}
+/// Dispatch default opening angle and multipole order of the
+/// `TreeCode` variant (~5e-4 relative error class on both parts). Named
+/// here so the dispatcher carries no magic numbers.
+pub(crate) const DEFAULT_THETA: f64 = 0.5;
+/// Dispatch default multipole order.
+pub(crate) const DEFAULT_ORDER: usize = 6;
 
 /// Treecode/FMM with explicit opening-angle `theta`, multipole `order`, and
 /// optional Rayon parallelism.
@@ -314,7 +311,8 @@ mod tests {
         let eta = 0.15;
 
         // Both treecode and autovec return raw sums (not scaled by 1/p).
-        let tc_results = compute_all_stieltjes_treecode(&evals, eta);
+        let tc_results =
+            compute_all_stieltjes_treecode_impl(&evals, eta, DEFAULT_THETA, DEFAULT_ORDER, false);
         let ref_results: Vec<(f64, f64)> = evals
             .iter()
             .take(100)
