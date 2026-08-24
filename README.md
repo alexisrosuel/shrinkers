@@ -8,8 +8,8 @@
 SIMD-accelerated Rust implementation of **spiked + bulk eigenvalue cleaning**
 via free-probability deconvolution: detect spikes (BEMA), debias them (inverse
 BBP), and deconvolve the bulk (El Karoui). Features O(p log p)
-FFT-accelerated Stieltjes transforms, auto-vectorized loops, cache blocking,
-multi-threaded kernels (**~6× on an 8-core machine**, one keyword away),
+O(p log p) Chebyshev-treecode Stieltjes transforms, auto-vectorized loops,
+cache blocking, multi-threaded kernels (**~6× on an 8-core machine**, one keyword away),
 and PyO3 bindings.
 
 ## Why shrinkers?
@@ -66,8 +66,7 @@ sharing. Measured on the 8-core machine above (fresh sweep,
 | 10 000 | 38.6 ms | 6.4 ms | **×6.0** |
 | 50 000 | 0.94 s | 0.16 s | **×5.9** |
 
-The Chebyshev treecode scales too (×3.3–4.5); only the FFT-grid path is
-single-threaded by design. Note also that the NumPy baseline in figure 2
+The Chebyshev treecode scales too (×3.3–4.5). Note also that the NumPy baseline in figure 2
 is itself single-core — even pinned to one thread, shrinkers still wins
 by roughly an order of magnitude (9.1× at p≈5000).
 
@@ -75,9 +74,9 @@ by roughly an order of magnitude (9.1× at p≈5000).
 
 - `deconvolve_spiked(evals, c)` — the one-call pipeline: BEMA detection →
   inverse-BBP spike debiasing → El Karoui bulk deconvolution;
-- 21 Stieltjes-transform variants spanning the whole speed/accuracy frontier —
+- Stieltjes-transform methods spanning the whole speed/accuracy frontier —
   machine-precision exact kernels, Chebyshev treecodes (~1e-8 … ~6e-13),
-  FFT grids, HODLR — plus data-driven `speed_auto` / `accuracy_auto` picks;
+  HODLR — plus data-driven `speed_auto` / `accuracy_auto` picks;
 - correlation-matrix cleaning with eigenvector-overlap correction, direct
   precision-matrix shrinkage, Tracy–Widom spike detection;
 - Rust API + PyO3 bindings with the GIL released during computation;
@@ -157,7 +156,7 @@ The only other Python package implementing RIE shrinkage is **pyRMT** (PyPI). Ou
 |--------|-------------|-------------|
 | `rie_numpy` (ref) | ✅ ground truth | ✅ ground truth |
 | `shrinkers` (Rust autovec) | **1.2e-14** max diff | **4.4e-14** max diff |
-| `shrinkers` (Rust FFT) | **9.5e-03** (0.15% error) | **3.0e-02** (0.16% error) |
+| `shrinkers` (Rust, approximate kernel) | **9.5e-03** (0.15% error) | **3.0e-02** (0.16% error) |
 | pyRMT (fixed, same η) | 3.3e-01 (2.5% error, η effect) | 6.2e-01 (1.7% error, η effect) |
 | **pyRMT (original buggy)** | **❌ 1.7e+01 (358% error)** | **❌ 1.9e+01 (376% error)** |
 
@@ -179,7 +178,9 @@ Note: pyRMT uses $\eta = 1/\sqrt{p}$ vs our $0.1/\sqrt{p}$. When using the same 
 Key findings:
 - **`shrinkers` is 6–80× faster than `rie_numpy`** and **~100–120× faster than pyRMT (fixed)** at p=100
 - The **buggy pyRMT is O(p³)**: 928 ms at p=100, making it unusable beyond tiny dimensions
-- The **hardware-optimized `Blocked` kernel** beats FFT methods below p≈2000 in pure Rust (see [docs/internals.md](docs/internals.md))
+- Below the measured small-p crossover (~p≤500 single-core), the exact O(p²)
+  kernels are the fastest pick; ChebCode takes over beyond
+  ([docs/internals.md](docs/internals.md))
 
 ## Documentation
 
