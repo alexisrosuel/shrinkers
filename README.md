@@ -35,20 +35,24 @@ scipy**):
 
 ![Performance](docs/img/performance.png)
 
-*Full transform of all p points, η = 1/√p, Apple M1 Max, NumPy 2.5.1.*
+*Full transform of all p points, log-log over the whole 10⁰–10⁵ range,
+η = 1/√p, Apple M1 Max, NumPy 2.5.1.*
 
-| p | Python naïf | NumPy | shrinkers (exact) | gain vs NumPy |
+| p | Naive Python | NumPy | shrinkers exact ¹ | shrinkers treecode ² |
 |---|---|---|---|---|
-| 1 024 | 0.42 s | 2.9 ms | **0.28 ms** | ~10× |
-| 4 096 | 6.7 s | 104 ms | **1.5 ms** | ~70× |
-| 50 000 | *(~2 h extrapolées)* | 14.9 s | **0.15 s** | ~98× |
+| 1 024 | 0.42 s | 2.8 ms | **0.23 ms** · 12× | **0.15 ms** · 19× |
+| 4 096 | 6.7 s | 85 ms | **1.3 ms** · 67× | **0.42 ms** · 201× |
+| 50 000 | *(~2 h extrapolated)* | 15.6 s | **0.16 s** · 96× | **5.1 ms** · ≈3000× |
 
-At p = 50 000 the approximate treecode path (`chebcode_fast`) answers in
-**3.6 ms** — about 4000× faster than NumPy at ~1e-8 relative accuracy — and
-the higher-precision `chebcode` preset (~5e-10) costs about the same (frontier
-table below). Every number
-is reproducible: `scripts/make_readme_figures.py` regenerates both figures and
-`docs/img/readme_figures.json` holds the raw measurements.
+¹ machine precision — the zero-error anchor.  ² `chebcode_fast` preset,
+rel. error ~1e-8: giving up four digits of accuracy buys two more orders of
+magnitude in speed, and the higher-precision `chebcode` preset (~5e-10)
+costs nearly the same (frontier table below). At microsecond scales both
+shrinkers curves flatten onto their fixed Python-call overhead — the
+pure-kernel crossover between exact and treecode is analysed separately
+below. Every number is reproducible: `scripts/make_readme_figures.py`
+regenerates both figures end-to-end, and `docs/img/readme_figures.json`
+holds the raw measurements.
 
 ### What's inside
 

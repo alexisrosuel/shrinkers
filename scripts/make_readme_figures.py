@@ -67,34 +67,34 @@ def fig_cleaning() -> dict:
     idx = np.arange(1, p + 1)
     ax.plot(idx, truth_desc, "-", color="black", lw=1.5, label="population vraie")
     ax.plot(idx, sample_desc, ".", color="#9aa5b1", ms=3.5,
-            label=f"échantillon (p={p}, c={C})")
+            label=f"sample (p={p}, c={C})")
     ax.plot(idx, cleaned_desc, ".", color="#d62728", ms=3.5,
-            label="nettoyé par shrinkers")
+            label="cleaned by shrinkers")
     ax.set_yscale("log")
     ax.axhline(res["bulk_edge"], color="#2b6cb0", lw=0.8, ls="--",
-               label=f"bord de masse estimé ({res['bulk_edge']:.2f})")
-    ax.set_xlabel("rang (tri décroissant)")
-    ax.set_ylabel("valeur propre")
-    ax.set_title(f"{len(spikes)} spikes injectés, bruit σ² = "
-                 f"{res['sigma2']:.2f} (vrai 1.0)")
+               label=f"estimated bulk edge ({res['bulk_edge']:.2f})")
+    ax.set_xlabel("rank (descending order)")
+    ax.set_ylabel("eigenvalue")
+    ax.set_title(f"{len(spikes)} spikes injected, noise σ² = "
+                 f"{res['sigma2']:.2f} (true 1.0)")
     ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
 
     ax = axes[1]
     eps = 1e-12
     err_sample = np.abs(sample_desc - truth_desc) / np.maximum(truth_desc, eps)
     err_clean = np.abs(cleaned_desc - truth_desc) / np.maximum(truth_desc, eps)
-    ax.plot(idx, err_sample, ".", color="#9aa5b1", ms=3.5, label="échantillon brut")
-    ax.plot(idx, err_clean, ".", color="#d62728", ms=3.5, label="nettoyé")
+    ax.plot(idx, err_sample, ".", color="#9aa5b1", ms=3.5, label="raw sample")
+    ax.plot(idx, err_clean, ".", color="#d62728", ms=3.5, label="cleaned")
     ax.set_yscale("log")
-    ax.set_xlabel("rang (tri décroissant)")
-    ax.set_ylabel("|erreur| / valeur vraie")
+    ax.set_xlabel("rank (descending order)")
+    ax.set_ylabel("|error| / true value")
     med_s = float(np.median(err_sample))
     med_c = float(np.median(err_clean))
-    ax.set_title(f"erreur médiane : {med_s:.1%} → {med_c:.1%}")
+    ax.set_title(f"median error: {med_s:.1%} → {med_c:.1%}")
     ax.legend(loc="upper left", fontsize=8)
 
     fig.suptitle(
-        "Nettoyage RMT : le déconvoluteur remonte aux valeurs propres de population",
+        "RMT cleaning: recovering the population eigenvalues",
         fontsize=11,
     )
     fig.tight_layout()
@@ -163,7 +163,9 @@ def bench(fn, *args, repeats: int = 3):
 
 
 def fig_runtime() -> dict:
-    sizes = [256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 50000]
+    # Full 10^0..10^5 range, log-spaced; 50000 caps the sweep.
+    sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096,
+             8192, 16384, 32768, 50000]
     rows = []
     for p in sizes:
         rng = np.random.default_rng(p)
@@ -174,23 +176,26 @@ def fig_runtime() -> dict:
         if p <= 4096:  # pure Python is O(p^2) interpreted — stop while sane
             row["python_naive"] = bench(stieltjes_python_naive, lam, eta,
                                         repeats=1 if p > 2048 else 3)
-        row["numpy"] = bench(stieltjes_numpy_chunked, lam, eta)
+        reps = 9 if p <= 256 else 3
+        row["numpy"] = bench(stieltjes_numpy_chunked, lam, eta, repeats=reps)
         row["shrinkers_exact_rayon"] = bench(
             lambda l=lam, e=eta: rk.stieltjes_transform(
-                l, eta=e, method="blocked_tiled", parallelism="rayon"))
+                l, eta=e, method="blocked_tiled", parallelism="rayon"),
+            repeats=reps)
         row["shrinkers_chebcode_rayon"] = bench(
             lambda l=lam, e=eta: rk.stieltjes_transform(
-                l, eta=e, method="chebcode_fast", parallelism="rayon"))
+                l, eta=e, method="chebcode_fast", parallelism="rayon"),
+            repeats=reps)
         rows.append(row)
         print(row)
 
     fig, ax = plt.subplots(figsize=(7.5, 4.6))
 
     series = [
-        ("python_naive", "#9aa5b1", "o", "Python naïf (double boucle)"),
-        ("numpy", "#2b6cb0", "s", "NumPy vectorisé (broadcasting, sans FFT/scipy)"),
-        ("shrinkers_exact_rayon", "#d62728", "^", "shrinkers — exact, tous cœurs"),
-        ("shrinkers_chebcode_rayon", "#e05252", "v", "shrinkers — treecode, tous cœurs"),
+        ("python_naive", "#9aa5b1", "o", "Naive Python (double loop)"),
+        ("numpy", "#2b6cb0", "s", "Vectorized NumPy (broadcasting; no scipy/FFT)"),
+        ("shrinkers_exact_rayon", "#d62728", "^", "shrinkers — exact, all cores"),
+        ("shrinkers_chebcode_rayon", "#e05252", "v", "shrinkers — treecode, all cores"),
     ]
     for key, color, marker, label in series:
         pts = [(r["p"], r[key]) for r in rows if key in r]
@@ -201,9 +206,10 @@ def fig_runtime() -> dict:
 
     ax.set_xscale("log")
     ax.set_yscale("log")
+    ax.set_xlim(1, 1e5)
     ax.set_xlabel("p (nombre de valeurs propres)")
     ax.set_ylabel("temps de calcul (s)")
-    ax.set_title("Transformée de Stieltjes complète — même arithmétique,\nmoteurs différents",
+    ax.set_title("Full Stieltjes transform — same arithmetic,\ndifferent engines",
                  fontsize=11)
     ax.grid(True, which="both", alpha=0.25)
     ax.legend(fontsize=8, loc="upper left")
@@ -214,7 +220,7 @@ def fig_runtime() -> dict:
         speedup_np = last_full["numpy"] / last_full["shrinkers_exact_rayon"]
         speedup_py = last_full["python_naive"] / last_full["shrinkers_exact_rayon"]
         ax.annotate(
-            f"à p={last_full['p']} :\n{speedup_py:.0f}× vs Python naïf\n{speedup_np:.1f}× vs NumPy",
+            f"at p={last_full['p']}:\n{speedup_py:.0f}× vs naive Python\n{speedup_np:.1f}× vs NumPy",
             xy=(last_full["p"], last_full["shrinkers_exact_rayon"]),
             xytext=(-120, 30), textcoords="offset points",
             fontsize=8.5, color="#333333",
