@@ -126,7 +126,7 @@ pub fn spectral_deconvolution(
         };
     }
 
-    let eta_val = eta.unwrap_or_else(|| 0.1 / (p as f64).sqrt());
+    let eta_val = eta.unwrap_or_else(|| crate::stieltjes::default_eta(p));
 
     // Determine the grid range from eigenvalues with margins
     let min_ev = eigenvalues.iter().copied().fold(f64::INFINITY, f64::min);
@@ -162,14 +162,8 @@ pub fn spectral_deconvolution(
     let resolved = config.resolve_auto(p);
     let method = resolved.stieltjes_method;
     let parallelism = resolved.parallelism;
-    let cutoff_ratio = match resolved.cutoff {
-        crate::config::CutoffConfig::Enabled { ratio } => Some(ratio),
-        crate::config::CutoffConfig::Disabled => None,
-    };
-    let fft_grid_size = match resolved.fft_grid_size {
-        crate::config::FftGridSize::Auto => None,
-        crate::config::FftGridSize::Custom(s) => Some(s),
-    };
+    let cutoff_ratio = resolved.cutoff.ratio();
+    let fft_grid_size = resolved.fft_grid_size.grid_points();
 
     // Step 1: Compute g(z) = sample Stieltjes transform at every grid point
     // in one batched call to the fast Stieltjes library.

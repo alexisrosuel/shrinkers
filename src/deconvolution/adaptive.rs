@@ -76,7 +76,7 @@ pub fn deconvolve_adaptive(
     };
 
     // Finest η (the target resolution).
-    let eta_final = eta.unwrap_or_else(|| 0.1 / (p as f64).sqrt());
+    let eta_final = eta.unwrap_or_else(|| crate::stieltjes::default_eta(p));
 
     // Build the descent schedule: largest first, dividing by `ratio` each step.
     let mut eta_schedule = Vec::with_capacity(levels);

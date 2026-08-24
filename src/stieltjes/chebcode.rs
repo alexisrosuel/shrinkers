@@ -563,6 +563,18 @@ impl ChebPreset {
     pub const fn parts(self) -> (f64, usize, usize) {
         (self.theta, self.n, self.leaf_cap)
     }
+
+    /// The preset attached to a `ChebCode*` dispatch variant, or `None` for
+    /// any other method. Single resolution point for the dispatcher and the
+    /// point-evaluation path (previously duplicated in both).
+    pub const fn from_method(method: crate::config::StieltjesMethod) -> Option<Self> {
+        match method {
+            crate::config::StieltjesMethod::ChebCode => Some(Self::DEFAULT),
+            crate::config::StieltjesMethod::ChebCodeFast => Some(Self::FAST),
+            crate::config::StieltjesMethod::ChebCodeXtreme => Some(Self::XTREME),
+            _ => None,
+        }
+    }
 }
 
 /// Compute all Stieltjes transforms with the Chebyshev treecode at the

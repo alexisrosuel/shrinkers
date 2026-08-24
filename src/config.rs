@@ -237,6 +237,17 @@ pub enum FftGridSize {
     Custom(usize),
 }
 
+impl FftGridSize {
+    /// The explicit grid point count, or `None` for `Auto` (the kernel
+    /// picks) — the `Option<usize>` form the kernels take.
+    pub fn grid_points(self) -> Option<usize> {
+        match self {
+            Self::Auto => None,
+            Self::Custom(n) => Some(n),
+        }
+    }
+}
+
 /// Far-field cutoff configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum CutoffConfig {
@@ -246,6 +257,18 @@ pub enum CutoffConfig {
     /// Skip terms where |λᵢ-λⱼ| > ratio · η.
     /// ratio=10 => ~1% max error per term, ratio=20 => ~0.25%
     Enabled { ratio: f64 },
+}
+
+impl CutoffConfig {
+    /// The cutoff ratio, or `None` when disabled — the `Option<f64>` form
+    /// the kernels take. Single conversion point for every caller that
+    /// unpacks a config into kernel arguments.
+    pub fn ratio(self) -> Option<f64> {
+        match self {
+            Self::Enabled { ratio } => Some(ratio),
+            Self::Disabled => None,
+        }
+    }
 }
 
 /// Intermediate config presets between default and fully manual.

@@ -54,6 +54,16 @@ pub use treecode::*;
 use crate::config::{CutoffConfig, Parallelism, StieltjesMethod};
 use rayon::prelude::*;
 
+/// The crate-wide default regularization: **η = 0.1/√p**.
+///
+/// Single definition point for a constant that was previously hardcoded at
+/// the Python boundary, in [`crate::deconvolution::deconvolve_spiked`] and
+/// in the adaptive driver alike.
+pub(crate) fn default_eta(p: usize) -> f64 {
+    const SCALE: f64 = 0.1;
+    SCALE / (p as f64).sqrt()
+}
+
 /// Compute the Stieltjes sum S(λᵢ) = Σⱼ 1/((λᵢ-λⱼ) - iη)
 /// returning (sum_real, sum_imag) for a single λᵢ using the selected method.
 ///
@@ -170,11 +180,8 @@ pub fn compute_stieltjes_at_points(
         StieltjesMethod::ChebCode
         | StieltjesMethod::ChebCodeFast
         | StieltjesMethod::ChebCodeXtreme => {
-            let preset = match method {
-                StieltjesMethod::ChebCodeFast => chebcode::ChebPreset::FAST,
-                StieltjesMethod::ChebCodeXtreme => chebcode::ChebPreset::XTREME,
-                _ => chebcode::ChebPreset::DEFAULT,
-            };
+            let preset = chebcode::ChebPreset::from_method(method)
+                .expect("matched the ChebCode method family above");
             let (theta, n, leaf_cap) = preset.parts();
             let batch = chebcode::ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap);
             batch.evaluate_points(query_points, eta, parallel)
@@ -296,10 +303,7 @@ pub fn compute_all_stieltjes(
         return Vec::new();
     }
 
-    let cutoff_ratio = match cutoff {
-        CutoffConfig::Enabled { ratio } => Some(ratio),
-        CutoffConfig::Disabled => None,
-    };
+    let cutoff_ratio = cutoff.ratio();
     let inv_p = 1.0 / (p as f64);
     let parallel = matches!(parallelism, Parallelism::Rayon);
     // Data-driven presets resolve via the measured Pareto table.
@@ -344,11 +348,8 @@ pub fn compute_all_stieltjes(
         StieltjesMethod::ChebCode
         | StieltjesMethod::ChebCodeFast
         | StieltjesMethod::ChebCodeXtreme => {
-            let preset = match method {
-                StieltjesMethod::ChebCodeFast => chebcode::ChebPreset::FAST,
-                StieltjesMethod::ChebCodeXtreme => chebcode::ChebPreset::XTREME,
-                _ => chebcode::ChebPreset::DEFAULT,
-            };
+            let preset = chebcode::ChebPreset::from_method(method)
+                .expect("matched the ChebCode method family above");
             scale_aos(
                 chebcode::compute_all_stieltjes_chebcode_preset(eigenvalues, eta, preset, parallel),
                 inv_p,
@@ -500,9 +501,6 @@ pub fn compute_all_stieltjes(
     }
 }
 
-// Re-export the classic `stieltjes_term` for backward compat
-pub use term::stieltjes_term;
-
 /// Compute the full Stieltjes transform in **single precision (f32)**.
 ///
 /// This is the f32 counterpart of [`compute_all_stieltjes`] for the
@@ -526,10 +524,7 @@ pub fn compute_all_stieltjes_f32(
         return Vec::new();
     }
 
-    let cutoff_ratio = match cutoff {
-        CutoffConfig::Enabled { ratio } => Some(ratio),
-        CutoffConfig::Disabled => None,
-    };
+    let cutoff_ratio = cutoff.ratio();
     let inv_p = 1.0 / (p as f32);
 
     match method {
