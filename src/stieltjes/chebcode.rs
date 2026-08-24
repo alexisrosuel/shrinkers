@@ -555,13 +555,31 @@ pub fn compute_all_stieltjes_chebcode_impl(
     let tree = FlatChebTree::build(sorted, n, theta, leaf_cap);
 
     if parallel {
+        // Chunked queries: each task reuses one stack buffer across a block
+        // of consecutive queries (adjacent sorted values traverse nearly
+        // identical paths, so per-task cache warmth is high) and avoids
+        // rayon's per-item scheduling overhead.
+        // 256-query blocks: measured plateau between 64..1024 at p=50k on
+        // M1 Max; large enough to amortize scheduling, small enough for
+        // load balance across heterogeneous P/E cores.
+        let chunk = 256usize;
+        let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
         eigenvalues
-            .par_iter()
-            .map(|&lambda_i| {
+            .par_chunks(chunk)
+            .map(|chunk| {
                 let mut stack = Vec::with_capacity(64);
-                tree.contribution(lambda_i, eta, &mut stack)
+                let mut out = Vec::with_capacity(chunk.len());
+                for &lambda_i in chunk {
+                    out.push(tree.contribution(lambda_i, eta, &mut stack));
+                }
+                out
             })
-            .collect()
+            .collect_into_vec(&mut parts);
+        let mut flat: Vec<(f64, f64)> = Vec::with_capacity(p);
+        for part in parts {
+            flat.extend(part);
+        }
+        flat
     } else {
         let mut stack = Vec::with_capacity(64);
         let mut result = Vec::with_capacity(p);

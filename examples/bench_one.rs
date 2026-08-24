@@ -160,15 +160,15 @@ fn main() {
                     );
                 }),
                 "tiled" => bench(|| {
-                    res = stieltjes::compute_all_stieltjes(
-                        &evs,
-                        eta,
-                        StieltjesMethod::BlockedTiled,
-                        None,
-                        CutoffConfig::Disabled,
-                        32,
-                        par,
-                    );
+                    // Raw kernels: bench_one scales by inv_p itself.
+                    let (reals, imags) = if matches!(par, Parallelism::Rayon) {
+                        stieltjes::compute_all_stieltjes_blocked_tiled_parallel(
+                            &evs, eta, None, None,
+                        )
+                    } else {
+                        stieltjes::compute_all_stieltjes_blocked_tiled(&evs, eta, None, None)
+                    };
+                    res = reals.into_iter().zip(imags).collect();
                 }),
                 other => panic!("unknown method: {other}"),
             };
