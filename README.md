@@ -181,18 +181,6 @@ Key findings:
 - The **buggy pyRMT is O(p³)**: 928 ms at p=100, making it unusable beyond tiny dimensions
 - The **hardware-optimized `Blocked` kernel** beats FFT methods below p≈2000 in pure Rust (see [docs/internals.md](docs/internals.md))
 
-### Why `shrinkers` is the only correct & fast RIE
-
-| Feature | pyRMT | Ledoit-Wolf (official) | **shrinkers** |
-|---------|-------|----------------------|----------------|
-| RIE algorithm | ✅ (but buggy) | ❌ (different method) | **✅ correct** |
-| FFT acceleration | ❌ | ❌ | **✅ O(p log p)** |
-| Eigenvalue-only API | ❌ (needs X) | ❌ (needs X) | **✅ yes** |
-| SIMD auto-vectorization | ❌ | ❌ | **✅ NEON/AVX2** |
-| Multiple strategies | ❌ | ❌ | **✅ 21 method variants** |
-| Zero unsafe code* | N/A | N/A | **✅ (1 audited module)** |
-| Maintenance | Last updated 2017 | Sporadic | **✅ Active** |
-
 ## Documentation
 
 - [`docs/python_api.md`](docs/python_api.md) — full Python API reference;
