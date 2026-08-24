@@ -47,7 +47,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   +33% at p=300 (46.7→35.0 µs), ~+31% sustained for p=2000..50000
   (seq 50k: 1.244 s → 0.938 s); parity below p≈50 where call overhead
   dominates. Consequence: the O(p²)→treecode crossover moved OUT from ≈350
-  to ≈500 (`chebcode`/`chebcode_fast`) and ≈1000 (`xtreme`).
+  to ≈500–600 (`chebcode_fast` ties at ≈500, `chebcode` from ≈600) and
+  ≈1000 (`xtreme`).
   Documented dead ends en route: a naive row-wise triangle loop was SLOWER
   than the full-square kernel (scattered per-pair output updates destroy
   the original 4×4 ILP); doubling to two source quads per pass spills
@@ -67,6 +68,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `v_j = λ_j/(x−t_j)` is computed once and the barycentric update becomes
   `w_j += v_j·(1/s)` — one division per point instead of two per
   (point, node); numerically identical up to ≤1 ulp.
+
+- **`fft5` grid transfer upgraded to higher-order Lagrange stencils** —
+  2/4/6/8-point (`Order::Linear…Heptic`), default **heptic**; the linear
+  path remains as `compute_all_stieltjes_fft5_linear` and every knob
+  (order, forced grid size, padding multipliers) is exposed through
+  `Fft5Options` / `compute_all_stieltjes_fft5_with_options`. Measured on
+  MP-like spectra: the cubic step moved the frontier ~10× in error at
+  equal cost (and ~7× less cost at equal error); going to quintic/heptic
+  reaches the same order-independent wrap-around floor one grid-halving
+  (~40 % runtime) earlier and measured never worse than narrower stencils,
+  so heptic is the free accuracy-insurance default. `Adaptive`, `Dst`,
+  `Fft3`/`Fft2` inherit the default through their fft5 core.
+- **Presets are now data-driven.** A benchmark harness
+  (`examples/pareto_data.rs`, JSON dump in `docs/pareto/`) measures every
+  method × {seq, rayon} × p against the exact O(p²) reference;
+  `scripts/build_pareto_table.py` derives the per-size winners and emits
+  `src/config/pareto_autogen.rs`. New `StieltjesMethod::SpeedAuto` resolves
+  Speed to the fastest method per size/parallelism with error ≤ 1e-2;
+  `AccuracyAuto` now uses the same table (lowest error, ties within 5%
+  broken by runtime) instead of a hard-coded threshold. **Both presets no
+  longer override the user's parallelism choice** — Sequential and Rayon
+  have independent table columns. Regenerate after re-benchmarking with
+  `cargo run --release --example pareto_data -- after > docs/pareto/bench_after.json`
+  then `python3 scripts/build_pareto_table.py docs/pareto/bench_after.json`.
+- **Pareto-frontier plots**: `scripts/plot_pareto.py` renders before/after
+  frontiers (`docs/pareto/pareto_{seq,rayon}.png`) from two JSON dumps.
+- **FFT plan cache**: one `FftPlanner` per thread (`stieltjes::fftplan`)
+  shared by `fft5`/`fft3`/`fft2`/`Ewald`; previously every call constructed a
+  fresh planner and re-planned identical transform lengths. Steady-state
+  `fft5` at p=4000: 0.91 → 0.58 ms (**1.6×**).
+- **`Strategy::Accuracy` is now size-aware** via the new
+  [`StieltjesMethod::AccuracyAuto`] policy: exact O(p²) tiled kernel below
+  p = 4000 (`ACC_EXACT_MAX_P`, machine precision is free there), ChebCode
+  (~1e-10 relative at a small fraction of the cost) above. Previously it
+  pinned `AutoVectorized`, which is brutally slow at large p.
+- **`Strategy::Speed` block_size fixed**: 128 → 16 (the measured optimum;
+  the old value predated the tiling analysis).
+- **Parallel exact path rewritten**: `Blocked`/`BlockedTiled` + Rayon now run
+  the tiled kernel over disjoint output spans (`par_chunks_mut`, no false
+  sharing, no reduction) instead of a per-row single-point scan. Measured
+  ~2.5× faster at p=20000 (8-core Apple Silicon); `BlockedTiled` + Rayon is
+  now genuinely parallel (previously fell back to sequential).
+- **Cutoff dispatch fixed**: with a far-field cutoff enabled, the blocked
+  family (sequential and parallel) now routes to the windowed kernels, which
+  binary-search each contiguous inclusion window instead of branch-skipping
+  an O(p²) sweep. Same included term set, O(p·k) iterations: ~20× faster at
+  p=20000 (parallel), results identical up to FP summation order.
+- Single-point `stieltjes_sum_cutoff` now binary-searches its window too
+  (fixes the same branchy-scan loss for `compute_stieltjes_at_points` and
+  per-point parallel queries).
+- Tree codes (`ChebCode`, `TreeCode`) skip their defensive O(p log p) sort
+  when the input is already sorted (O(p) check) — the pipeline always passes
+  sorted eigenvalues.
+- `StieltjesMethod::Dst` now delegates to the shared fft5 grid (real part) +
+  windowed imaginary part — the same computation with fewer transforms
+  (1 forward + 1 inverse vs 2 forward + 1 inverse).
 
 ### Added
 - **Small-p crossover study** (`examples/small_p_crossover.rs`, data
@@ -94,8 +151,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   level pass (`O(rank·p)` peak memory); Rayon-parallel over subtrees.
   Measured (MP spectra, η=1/√p, defaults leaf=256/tol=1e-9/rank≤32):
   accuracy 5e-10..7e-10 rel L2 at every size — ~10× more accurate than
-  ChebCode's operating point — at 203 ms seq / 89 ms rayon for p=50000
-  (~9×/10× slower than ChebCode). Verdict: dominated on this spectrum family
+  ChebCode's operating point — at 140 ms seq / 64 ms rayon for p=50000
+  (vs ChebCode 14.44 ms / 3.24 ms at the same size). Verdict: dominated
+  on this spectrum family
   (ChebCode wins speed-at-accuracy, BlockedTiled wins exact), but kept as
   the portfolio's kernel-agnostic member: it needs nothing but kernel
   evaluations, so it transfers unchanged to future kernels without FFT or
@@ -105,7 +163,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   rule must test the normalized next-term norm ‖u‖·‖v‖/|pivot| — the raw
   product ignores the pivot scale and stopped ~1e4× before tolerance.
 
-### Added
 - **`HodlrMode::Random` — RandNLA sketching path inside the HODLR driver**
   (Halko–Martinsson–Tropp style double sampling): orthonormalize a
   *stratified* sample of kernel columns (boundary strips + geometric offset
@@ -117,7 +174,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   per parallelism and per accuracy band (`runtime_vs_p_{seq,rayon}.png`,
   `runtime_vs_p_grid.png`).
 
-### Added
 - **ChebCode re-tuning (overnight round, M1 Max).** New dispatch default
   θ=0.5, n=11, leaf=32 dominates the historical (0.3, 9, 16) on BOTH axes
   at every size (p=50k: 5.2e-10 @ 3.5 ms rayon vs 9.2e-10 @ 9.5 ms).
@@ -159,7 +215,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **PGO build.** Blocked offline: rustc emits profraw v10 while the local
   CommandLineTools llvm-profdata reads v8, and the matching
   `llvm-tools-preview` component cannot be downloaded without network.
-  Commands recorded in the README for future re-runs.
+  Retry once a toolchain with a matching llvm-profdata is available.
 - **GPU offload (wgpu/Metal).** Not testable in this environment: adding
   the dependency requires network. fp32 GPU precision would confine it to
   the loose-error band where ChebCode already wins by orders of magnitude,
@@ -197,7 +253,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The stratified path is kept behind `HodlrMode::Random` for future kernels
   without boundary concentration; `HodlrMode::Aca` remains the default.
 
-### Rejected (research track — documented negative result)
 - **Black-box FMM for the Stieltjes transform** (adaptive Chebyshev panels,
   P2M anterpolation, M2M merging, per-leaf well-separated pair DFS, direct
   M2L, barycentric local evaluation). Three variants were built and
@@ -220,79 +275,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stable black-box FMM translation; the treecode evaluation (ChebCode)
   remains the right algorithmic point in this family. The prototype was
   removed; the analysis is preserved here and in the session report.
-- **Parallel exact path rewritten**: `Blocked`/`BlockedTiled` + Rayon now run
-  the tiled kernel over disjoint output spans (`par_chunks_mut`, no false
-  sharing, no reduction) instead of a per-row single-point scan. Measured
-  ~2.5× faster at p=20000 (8-core Apple Silicon); `BlockedTiled` + Rayon is
-  now genuinely parallel (previously fell back to sequential).
-- **Cutoff dispatch fixed**: with a far-field cutoff enabled, the blocked
-  family (sequential and parallel) now routes to the windowed kernels, which
-  binary-search each contiguous inclusion window instead of branch-skipping
-  an O(p²) sweep. Same included term set, O(p·k) iterations: ~20× faster at
-  p=20000 (parallel), results identical up to FP summation order.
-- Single-point `stieltjes_sum_cutoff` now binary-searches its window too
-  (fixes the same branchy-scan loss for `compute_stieltjes_at_points` and
-  per-point parallel queries).
-- Tree codes (`ChebCode`, `TreeCode`) skip their defensive O(p log p) sort
-  when the input is already sorted (O(p) check) — the pipeline always passes
-  sorted eigenvalues.
-- `StieltjesMethod::Dst` now delegates to the shared fft5 grid (real part) +
-  windowed imaginary part — the same computation with fewer transforms
-  (1 forward + 1 inverse vs 2 forward + 1 inverse).
-
-### Removed
-- `stieltjes::term::fast_reciprocal` and the `stieltjes_term_fast*` variants:
-  AArch64 NEON has no vector f64 reciprocal estimate (`vrecpe_f64` is
-  scalar-lane), so the Newton-Raphson chain measured **3× slower** than
-  hardware `fdiv` and was never wired into any kernel. The crate is back to
-  zero `unsafe` (matching the README).
-- `stieltjes::dst` module (the DST-I real-part implementation): dominated by
-  the fft5 odd-kernel path it duplicated; `StieltjesMethod::Dst` remains as
-  an alias for the Adaptive composition (see above).
-- `src/stieltjes/fftgrid.rs`: superseded 3-FFT variant that was not even
-  declared as a module (dead file).
-- `FlatChebTree.lam` field: barycentric weights are build-only data.
-
-### Changed (continued)
-- **`fft5` grid transfer upgraded to higher-order Lagrange stencils** —
-  2/4/6/8-point (`Order::Linear…Heptic`), default **heptic**; the linear
-  path remains as `compute_all_stieltjes_fft5_linear` and every knob
-  (order, forced grid size, padding multipliers) is exposed through
-  `Fft5Options` / `compute_all_stieltjes_fft5_with_options`. Measured on
-  MP-like spectra: the cubic step moved the frontier ~10× in error at
-  equal cost (and ~7× less cost at equal error); going to quintic/heptic
-  reaches the same order-independent wrap-around floor one grid-halving
-  (~40 % runtime) earlier and measured never worse than narrower stencils,
-  so heptic is the free accuracy-insurance default. `Adaptive`, `Dst`,
-  `Fft3`/`Fft2` inherit the default through their fft5 core.
-- **Presets are now data-driven.** A benchmark harness
-  (`examples/pareto_data.rs`, JSON dump in `docs/pareto/`) measures every
-  method × {seq, rayon} × p against the exact O(p²) reference;
-  `scripts/build_pareto_table.py` derives the per-size winners and emits
-  `src/config/pareto_autogen.rs`. New `StieltjesMethod::SpeedAuto` resolves
-  Speed to the fastest method per size/parallelism with error ≤ 1e-2;
-  `AccuracyAuto` now uses the same table (lowest error, ties within 5%
-  broken by runtime) instead of a hard-coded threshold. **Both presets no
-  longer override the user's parallelism choice** — Sequential and Rayon
-  have independent table columns. Regenerate after re-benchmarking with
-  `cargo run --release --example pareto_data -- after > docs/pareto/bench_after.json`
-  then `python3 scripts/build_pareto_table.py docs/pareto/bench_after.json`.
-- **Pareto-frontier plots**: `scripts/plot_pareto.py` renders before/after
-  frontiers (`docs/pareto/pareto_{seq,rayon}.png`) from two JSON dumps.
-- **FFT plan cache**: one `FftPlanner` per thread (`stieltjes::fftplan`)
-  shared by `fft5`/`fft3`/`fft2`/`Ewald`; previously every call constructed a
-  fresh planner and re-planned identical transform lengths. Steady-state
-  `fft5` at p=4000: 0.91 → 0.58 ms (**1.6×**).
-- **`Strategy::Accuracy` is now size-aware** via the new
-  [`StieltjesMethod::AccuracyAuto`] policy: exact O(p²) tiled kernel below
-  p = 4000 (`ACC_EXACT_MAX_P`, machine precision is free there), ChebCode
-  (~1e-10 relative at a small fraction of the cost) above. Previously it
-  pinned `AutoVectorized`, which is brutally slow at large p.
-- **`Strategy::Speed` block_size fixed**: 128 → 16 (the measured optimum;
-  the old value predated the tiling analysis).
-
-### Investigated and rejected: NUFFT evaluation of the Stieltjes transform
-Two formulations were implemented end-to-end and benchmarked before removal:
+- **NUFFT evaluation of the Stieltjes transform.** Two formulations were
+  implemented end-to-end and benchmarked before removal:
 
 1. *Spectral filtering* on Fourier modes of the density using the analytic
    Cauchy spectra (`πe^(−η|ω|)`, `−iπsign(ω)e^(−η|ω|)`): correct per-stage,
@@ -310,7 +294,71 @@ dominant error source of the uniform-grid FFT family (~1e-4…1e-1). High
 accuracy therefore belongs to local approximation (ChebCode/FMM), which has
 no global grid; ChebCode remains the approximate-frontier optimum.
 
+### Removed
+- `stieltjes::term::fast_reciprocal` and the `stieltjes_term_fast*` variants:
+  AArch64 NEON has no vector f64 reciprocal estimate (`vrecpe_f64` is
+  scalar-lane), so the Newton-Raphson chain measured **3× slower** than
+  hardware `fdiv` and was never wired into any kernel. The crate is back to
+  zero `unsafe` (matching the README).
+- `stieltjes::dst` module (the DST-I real-part implementation): dominated by
+  the fft5 odd-kernel path it duplicated; `StieltjesMethod::Dst` remains as
+  an alias for the Adaptive composition (see above).
+- `src/stieltjes/fftgrid.rs`: superseded 3-FFT variant that was not even
+  declared as a module (dead file).
+- `FlatChebTree.lam` field: barycentric weights are build-only data.
+- **Finalization sweep (API surface reduction).** Every item below had
+  zero callers outside its own definition/tests, or was a literal alias:
+  - `deconvolution::deconvolve_density`, `pipeline::estimate_noise_variance`
+    (+ its private `median`), `pipeline::clean_covariance_from_data`,
+    `rmt::reconstruct_covariance_basic`, `spiked::debias_eigenvector`,
+    `deconvolution::rie_shrinkage_naive`, `adaptive::DEFAULT_ETA_LEVELS`
+    (documented a default that the required parameter never applied);
+  - `src/math/` — the `C64` complex type (4 of 7 methods unused; the
+    crate-wide `allow(dead_code)` died with it) and `stieltjes_term_c64`;
+    its one consumer test now verifies against plain `(re, im)` arithmetic;
+  - `stieltjes::fft2` / `fft3` modules — 100 % aliases of fft5 whose own
+    docs said so; the enum variants remain (Python strings + recorded
+    tables key on them) and share one dispatch arm;
+  - five dead term variants (`_fma`, `_cutoff`, `_cutoff_hoisted`,
+    `_symmetric_pair`, `_complex`) and `term::CUTOFF_RATIO`; zero-reference
+    wrappers `compute_all_stieltjes_treecode` / `_hodlr` (dispatch defaults
+    became named consts next to each kernel: `treecode::DEFAULT_THETA/_ORDER`,
+    `hodlr::DEFAULT_LEAF/_ACA_TOL/_ACA_RANK`);
+  - config knobs that did nothing: `Strategy` (+ `with_strategy`),
+    `Precision` + `RmtConfig::precision` + `with_precision` (the real f32
+    path is Python's `precision="f32"` side channel), `FftGridSize` +
+    `fft_grid_size` + `with_fft_grid` (`Custom` was never constructible),
+    `RmtConfig::label`, `StieltjesMethod::{description, all}`,
+    `Parallelism::name`;
+  - campaign probes: benches `chebyshev_fmm`/`local_expansion` (~530 lines
+    of prototype FMM living inside bench files), examples
+    `profile_cheb`/`fft_bench`/`check_poly` (its Horner-instability proof
+    moved into the chebcode module docs), scripts
+    `rie_core`/`proto_adaptive`/`proto_split_padding`/
+    `check_analytic_kernel`/`measure_real_cutoff`. Cargo.toml carries five
+    [[bench]] targets, all real.
+- `spiked::detection::mp_upper_edge(sigma2, gamma)`: identical body to
+  `estimation::bbp_threshold(gamma, sigma2)` with swapped arguments.
+  One formula lives once now, under `bbp_threshold`.
+- The ignored `block_size` parameters of `compute_all_stieltjes_blocked`,
+  `_blocked_parallel`, `_blocked_windowed_parallel` and
+  `_blocked_autovec_parallel`: four functions accepted a knob that did
+  nothing while the dispatcher forwarded user values into them. The
+  sequential windowed kernel keeps its (it uses it). Sibling signatures no
+  longer swap argument positions either.
+- Visibility aligned with real use: `stieltjes_sum_for_one`,
+  `stieltjes_sum_windowed`, `auto_tiled_block_size` are private;
+  dispatcher-only kernels are `pub(crate)` (the fake parallel block-size
+  tuner became `PARALLEL_TILED_BS`).
+
 ### Fixed
+- **`cutoff=None` raised ValueError on documented calls.** The
+  `InferredF64` extractor accepted only floats and the string
+  `"inferred"`, yet both `deconvolve_spiked` and `stieltjes_transform`
+  document `None` as the disabled spelling. `None` is now a synonym of
+  `"inferred"`, and `detect_spikes_tracy_widom`'s `sigma2` joins the same
+  grammar (it previously typed as bare `Option<f64>`, so `"inferred"`
+  TypeError'd). Regression tests in `tests/test_python_api.py`.
 - **`deconvolve_spiked` with a ChebCode method was quadratic.**
   `compute_stieltjes_at_points` had no ChebCode arm, so grid evaluations
   fell through to the O(p²) scalar fallback PER QUERY POINT. The tree is
@@ -320,6 +368,24 @@ no global grid; ChebCode remains the approximate-frontier optimum.
   (`tiled_span_*`/`tiled_one_block_*`) shared by the sequential and parallel
   kernels — the refactor is measured at parity with (or slightly ahead of)
   the original hand-unrolled monolith (159.8 vs 160.0 ms at p=20000).
+
+### Notes
+- **The Pareto table predates the latest kernel work.**
+  `src/config/pareto_autogen.rs` was generated from the overnight
+  benchmark round; the symmetric-pair exact rewrite, the `SYM_AOS_MAX_P`
+  layout switch and the ChebCode hw_sq/branchless acceptance landed
+  afterwards. The Speed/Accuracy picks remain sane (the accuracy ordering
+  did not change) but are no longer measured-optimal — regenerate with
+  `examples/pareto_data` + `scripts/build_pareto_table.py` before trusting
+  `speed_auto`/`accuracy_auto` in production.
+- **Cross-harness η conventions differ, by history not by intent:** the
+  criterion benches and the library default use η = 0.1/√p, while
+  `bench_one` / `pareto_data` / `small_p_crossover` record with η = 1/√p
+  (declared in their JSON meta). Numbers from the two families must not be
+  read side-by-side as if comparable.
+- **The installed wheel is stale relative to this source tree** (it lacks
+  the sentinel fix, the newer method strings and `stieltjes_transform_
+  with_deriv`). Run `pixi run build` before any release smoke test.
 
 ## [0.3.0] — shrinkers
 
