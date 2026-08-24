@@ -59,6 +59,9 @@ struct FlatChebTree {
     hi: Vec<f64>,
     lo_idx: Vec<usize>,
     hi_idx: Vec<usize>,
+    /// Squared half-width per panel: `(0.5·(hi−lo))²`, precomputed so the
+    /// per-visit acceptance test is one load + one multiply.
+    hw_sq: Vec<f64>,
     /// Flattened Chebyshev nodes: `nodes[node*n + j]`.
     nodes: Vec<f64>,
     /// Flattened source weights: `w[node*n + j]`.
@@ -174,6 +177,7 @@ fn build_cheb(
 
     tree.lo.push(lo);
     tree.hi.push(hi);
+    tree.hw_sq.push((0.5 * (hi - lo)).powi(2));
     tree.lo_idx.push(lo_idx);
     tree.hi_idx.push(hi_idx);
     for _ in 0..tree.n {
@@ -282,6 +286,7 @@ impl FlatChebTree {
             hi: Vec::with_capacity(2 * sorted.len()),
             lo_idx: Vec::with_capacity(2 * sorted.len()),
             hi_idx: Vec::with_capacity(2 * sorted.len()),
+            hw_sq: Vec::with_capacity(2 * sorted.len()),
             nodes: Vec::with_capacity(2 * sorted.len() * n),
             w: Vec::with_capacity(2 * sorted.len() * n),
             left: Vec::with_capacity(2 * sorted.len()),
@@ -354,31 +359,31 @@ impl FlatChebTree {
                 continue;
             }
 
-            // Distance from z to the interval [lo,hi].
+            // Distance from z to the interval [lo,hi] — branchless clamp.
             let lo = self.lo[ni];
             let hi = self.hi[ni];
-            let cl = if lambda_i < lo {
-                lo - lambda_i
-            } else if lambda_i > hi {
-                lambda_i - hi
-            } else {
-                0.0
-            };
-            let d_sq = cl * cl + eta * eta;
-            let half_w = 0.5 * (hi - lo);
+            let cl = (lo - lambda_i).max(lambda_i - hi).max(0.0);
+            let d_sq = cl.mul_add(cl, eta * eta);
 
-            if half_w * half_w < self.theta_sq * d_sq {
+            if self.hw_sq[ni] < self.theta_sq * d_sq {
                 // Well-separated: Chebyshev far-field
                 //     F(z) = Σ_j w_j / (z - t_j),
                 // evaluated term-by-term (n reciprocal magnitudes).
                 //
-                // Why not explicit polynomial coefficients P/Q evaluated by
-                // a single Horner division? Forming monomial coefficients of
-                // degree-n polynomials whose roots cluster near ±1 amplifies
-                // rounding error catastrophically (measured relative errors
-                // ~10²–10³), while the per-term dot product below evaluates
-                // every denominator exactly like the near-field leaf loop —
-                // same conditioning, unconditional stability.
+                // NOTE (documented negative): processing these panels in
+                // PAIRS with an interleaved loop measured ~10% SLOWER —
+                // the n-loop iterations are already independent, so the
+                // out-of-order core already overlaps their reciprocal
+                // chains; pairing only doubles live registers and loads.
+                //
+                // Why per-term evaluation rather than polynomial
+                // coefficients P/Q via a single Horner division? Monomial
+                // coefficients of degree-n polynomials whose roots cluster
+                // near ±1 amplify rounding catastrophically (measured
+                // relative errors ~10²–10³), while this dot product
+                // evaluates every denominator exactly like the leaf
+                // near-field loop — same conditioning, unconditional
+                // stability.
                 let nbase = ni * n;
                 // Vectorized across the panel's nodes (pairs of lanes): the
                 // refined reciprocal keeps the loop on pipelined mul/add —
@@ -423,6 +428,7 @@ impl FlatChebTree {
                 }
             }
         }
+
         (re, im)
     }
 

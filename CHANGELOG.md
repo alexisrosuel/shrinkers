@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **ChebCode query-path anatomy and first cache-locality pass**
+  (`examples/profile_hot.rs` sampling harness + wall-clock ablations at
+  p=50k DEFAULT sequential). Cost split of the 14.7 ms evaluation:
+  far-field panel sums ≈63%, tree traversal + acceptance tests ≈35%,
+  exact leaf sums <1% (they are NOT worth optimizing further). Adopted:
+  per-panel squared half-width precomputed at build time
+  (`FlatChebTree::hw_sq`) so the acceptance test is one load plus one
+  multiply, and a branchless distance clamp `(lo−z).max(z−hi).max(0)`.
+  Build 1.41→1.16 ms (−18%), query −2–3%; chebcode seq p=50k
+  14.59→14.44 ms. Documented negative: processing accepted far-field
+  panels in interleaved PAIRS measured ~10% slower — the n-loop
+  iterations are already independent, so the out-of-order core overlaps
+  their reciprocal chains without help, and pairing only doubles live
+  registers and loads.
 - **Per-call overhead removed from the small-p exact path**
   (`SYM_AOS_MAX_P = 64` in `stieltjes/cacheblock.rs`). The symmetric-pair
   schedule is now written once, generically over a `SymSink` trait that is
