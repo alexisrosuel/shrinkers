@@ -54,21 +54,6 @@ name = "cache_tiling"
 harness = false
 
 [[bench]]
-name = "large_p_approx"
-harness = false
-
-[[bench]]
-name = "cache_branch"
-harness = false
-
-[[bench]]
 name = "tiled_opt"
 harness = false
 
-[[bench]]
-name = "local_expansion"
-harness = false
-
-[[bench]]
-name = "chebyshev_fmm"
-harness = false
