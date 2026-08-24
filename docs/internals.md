@@ -165,10 +165,14 @@ round; the ChebCode default is now θ=0.5, n=11, leaf=32):
 Among methods with usable accuracy (rel err ≤ 1e-6), `chebcode_fast`
 holds the runtime minimum at every size under Rayon, and only at
 p ≤ 2000 under Rayon does the exact `blocked_tiled` come within ~20 %
-of the fastest point. Sequentially the picture is more nuanced: the
-FFT grid (`fft5`) can edge out `chebcode_fast` in raw speed at large p,
-but it carries ~4 orders of magnitude more error (~4e-5 vs ~1e-8), so
-the treecode stays the right pick wherever accuracy matters.
+of the fastest point. Sequentially `chebcode_fast` also holds the
+minimum: an earlier single-session sweep had suggested `fft5` might
+edge it out at large p, but an interleaved re-measure (15 reps,
+alternating order) reversed that — 15.1 ms vs 22.5 ms at p=50 000 —
+so every speed-intent bin now resolves to `ChebCodeFast`. The FFT
+grid additionally carries ~4 orders of magnitude more error
+(~4e-5 vs ~1e-8), which is why it is no longer dispatched by the
+presets.
 
 ### Against the PyData baseline (p=50 000)
 

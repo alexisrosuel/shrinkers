@@ -56,8 +56,11 @@ const BINS: &[Bin] = &[
         acc_par: StieltjesMethod::Blocked,
     },
     Bin {
+        // 2026-08-24 interleaved re-measure (15 reps, median): chebcode_fast
+        // 15.1 ms vs fft5 22.5 ms at p=50k sequential — the earlier single-
+        // session sweep's Fft5 pick did not reproduce and was noise.
         p_max: 50000,
-        speed_seq: StieltjesMethod::Fft5,
+        speed_seq: StieltjesMethod::ChebCodeFast,
         speed_par: StieltjesMethod::ChebCodeFast,
         acc_seq: StieltjesMethod::BlockedTiled,
         acc_par: StieltjesMethod::BlockedTiled,
