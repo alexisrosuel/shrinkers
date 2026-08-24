@@ -9,6 +9,7 @@ It exposes these functions:
 | `clean_correlation_matrix` | Clean a full correlation matrix (RIE + eigenvector overlaps) |
 | `direct_precision_shrinkage` | Direct precision-matrix eigenvalue shrinkage |
 | `stieltjes_transform` | Raw empirical Stieltjes transform |
+| `stieltjes_transform_with_deriv` | S and its analytic derivative dS/dx in one pass |
 | `detect_spikes_bema` | BEMA spike detection (K, bulk edge, σ²) |
 | `detect_spikes_tracy_widom` | Tracy–Widom edge spike detection |
 | `inverse_bbp` | Inverse BBP / DGJ spike debiasing (scalar or array) |
@@ -77,12 +78,16 @@ spiked covariance model. It orchestrates the full pipeline:
   bulk deconvolution: any of `"naive"`, `"autovec"`, `"blocked"`,
   `"blocked_autovec"`, `"blocked_tiled"`, `"blocked_windowed"`,
   `"blocked_hybrid"`, `"adaptive"`, `"fft5"`, `"fft3"`, `"fft2"`, `"fmm"`
-  (alias `"treecode"`), `"chebcode"` (alias `"chebyshev"`), `"ewald"`,
-  `"dst"`, or `"auto"`.
+  (alias `"treecode"`), `"chebcode"` (alias `"chebyshev"`),
+  `"chebcode_fast"` (alias `"chebf"`; ~1e-8, fastest of the family),
+  `"chebcode_xtreme"` (alias `"chebx"`; ~6e-13), `"hodlr"`, `"ewald"`,
+  `"dst"`, `"speed_auto"` (alias `"speed"`), `"accuracy_auto"`
+  (alias `"accuracy"`), or `"auto"`.
 - `parallelism` — keyword-only, `str`, default `"seq"`; `"rayon"` enables
   multi-threaded kernels.
-- `cutoff` — keyword-only, `float | None | "inferred"`, default disabled.
-  Far-field cutoff ratio (10 ≈ 1% max per-term error).
+- `cutoff` — keyword-only, `float | None | "inferred"`, default disabled
+  (`None` and `"inferred"` are synonyms). Far-field cutoff ratio
+  (10 ≈ 1% max per-term error).
 
 **Returns**
 
@@ -222,6 +227,21 @@ from shrinkers import stieltjes_transform
 res = stieltjes_transform(evals, method="blocked_tiled")
 m_real, m_imag = res["real"], res["imag"]
 ```
+
+### `stieltjes_transform_with_deriv(eigenvalues, eta="inferred")`
+
+Compute $S$ at every sample eigenvalue together with its analytic
+derivative $S'(\lambda_i) = -\frac{1}{p}\sum_j \frac{1}{(\lambda_i - \lambda_j - i\eta)^2}$,
+in one exact O(p²) pass. Useful for root-finding on γ or η.
+
+**Parameters**
+
+- `eigenvalues` — `np.ndarray[float64]`, shape `(p,)`, finite, non-empty.
+- `eta` — `float | "inferred"`, default `0.1 / sqrt(p)`.
+
+**Returns**
+
+- `dict` with `"real"`, `"imag"`, `"deriv_real"`, `"deriv_imag"` arrays.
 
 ## Spiked-model toolkit
 

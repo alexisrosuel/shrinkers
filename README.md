@@ -121,14 +121,14 @@ See `docs/python_api.md` for the full API reference.
 | `BlockedTiled` | O(p²) | 2D cache tiling (output-block-outer) | Machine precision |
 | `BlockedWindowed` | O(p·k) | Binary-search far-field window | Imag only (short-range) |
 | `Adaptive` | O(p log p) | FFT real + windowed imag | Balanced error |
-| `Fft5` | O(p log p) | FFT convolution (5 FFTs) | ~0.15% grid error |
-| `Fft3` | O(p log p) | Fused FFT grid (3 FFTs) | ~0.15% grid error |
-| `Fft2` | O(p log p) | Packed 2-FFT grid | ~0.15% grid error |
+| `Fft5` | O(p log p) | Dual-convolution FFT grid | ~4e-5 rel |
+| `Fft3` | O(p log p) | Same dual-convolution kernel | ~4e-5 rel |
+| `Fft2` | O(p log p) | Same dual-convolution kernel | ~4e-5 rel |
 | `TreeCode` | O(p log p) | 1D balanced tree (FMM) | User-controllable |
-| `ChebCode` | O(p log p) | Chebyshev-interpolation tree | ~1e-10 rel |
-| `Hodlr` | O(r² p log p) | Hierarchical low-rank (ACA / RandNLA modes) | tol-driven (5e-10 default) |
+| `ChebCode` | O(p log p) | Chebyshev-interpolation tree | ~5e-10 rel |
+| `Hodlr` | O(r² p log p) | Hierarchical low-rank (ACA / RandNLA modes) | tol-driven (ACA tol 1e-9 → ~7e-10 measured) |
 | `Ewald` | O(p·k + M log M) | Near/far splitting + coarse FFT | User-controllable |
-| `Dst` | O(p log p) | Alias for the `Adaptive` composition (shared FFT grid) | ~0.15% grid error |
+| `Dst` | O(p log p) | Alias for the `Adaptive` composition (shared FFT grid) | ~4e-5 rel |
 | `Auto` | — | Auto-selects fastest by p | — |
 
 > **Notes.** `Dst` delegates to the same FFT grid as `Adaptive`/`Fft5`
@@ -183,17 +183,19 @@ round; the ChebCode default is now θ=0.5, n=11, leaf=32):
 | p=50 000 | error | seq | rayon |
 |---|---|---|---|
 | `ChebCodeFast` (θ.5 n9 L32) | ~1e-8 | 12.9 ms | **2.75 ms** |
-| `ChebCode` (θ.5 n11 L32) | ~5e-10 | 14.6 ms | **3.24 ms** |
+| `ChebCode` (θ.5 n11 L32) | ~5e-10 | 14.44 ms | **3.24 ms** |
 | `ChebCodeXtreme` (θ.25 n11 L16) | ~6e-13 | 24.7 ms | **5.26 ms** |
 | `Hodlr` (ACA, tol 1e-9) | ~7e-10 | 140 ms | 64 ms |
 | `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 1.9 s | 0.86 s |
-| `BlockedTiled` (exact) | 0 | ~950 ms | ~120 ms |
+| `BlockedTiled` (exact) | 0 | 736 ms | ~125 ms |
 
-The ChebCode family holds the runtime minimum at EVERY size in both
-parallelism modes among methods with usable accuracy (rel err ≤ 1e-6):
-the FFT variants are now dominated everywhere (same runtime class as
-`chebcode_fast` but 4000× the error), and only at p ≤ 2000 under Rayon
-does the exact `blocked_tiled` come within ~20 % of the fastest point.
+Among methods with usable accuracy (rel err ≤ 1e-6), `chebcode_fast`
+holds the runtime minimum at every size under Rayon, and only at
+p ≤ 2000 under Rayon does the exact `blocked_tiled` come within ~20 %
+of the fastest point. Sequentially the picture is more nuanced: the
+FFT grid (`fft5`) can edge out `chebcode_fast` in raw speed at large p,
+but it carries ~4 orders of magnitude more error (~4e-5 vs ~1e-8), so
+the treecode stays the right pick wherever accuracy matters.
 
 ### Against the PyData baseline (p=50 000)
 
@@ -292,7 +294,7 @@ RIE deconvolution evaluates the same spectrum for many γ (one η per γ).
 `stieltjes::ChebCodeBatch::build(...)` constructs the Chebyshev tree once;
 `evaluate_many(&etas)` runs the sweep with the tree shared read-only,
 parallelizing ACROSS the η axis and evaluating etas pairwise through a
-two-lane traversal — measured **6.7–7.5×** faster than calling
+two-lane traversal — measured **6.5–6.6×** faster than calling
 `compute_all_stieltjes_chebcode` per η at the DEFAULT preset (~8.5–11× at
 FAST; `examples/bench_batch.rs`). For root-finding on γ,
 `stieltjes_transform_with_deriv` returns S and its analytic derivative
@@ -333,7 +335,7 @@ On top of that, `ChebCodeBatch` adds three amortizations:
   two-lane traversal — one η per F64x2 lane, every source/node splatted
   across lanes so each accumulator lane always means "its eta". Acceptance
   uses min(η₀, η₁), i.e. both lanes stay conservative; Rayon parallelizes
-  across eta pairs with the tree shared read-only. Measured **6.7–7.5×**
+  across eta pairs with the tree shared read-only. Measured **6.5–6.6×**
   vs naive per-η calls at the DEFAULT preset, and ~8.5–11× at the FAST
   preset (`examples/bench_batch.rs`);
 - **arbitrary query grids** (`evaluate_points(points, eta, parallel)`): same
@@ -448,7 +450,7 @@ Key findings:
 | FFT acceleration | ❌ | ❌ | **✅ O(p log p)** |
 | Eigenvalue-only API | ❌ (needs X) | ❌ (needs X) | **✅ yes** |
 | SIMD auto-vectorization | ❌ | ❌ | **✅ NEON/AVX2** |
-| Multiple strategies | ❌ | ❌ | **✅ 13 methods** |
+| Multiple strategies | ❌ | ❌ | **✅ 21 method variants** |
 | Zero unsafe code* | N/A | N/A | **✅ (1 audited module)** |
 | Maintenance | Last updated 2017 | Sporadic | **✅ Active** |
 
@@ -523,10 +525,10 @@ pixi run measure        # python scripts/measure_current.py
 ### Rust benchmarks
 
 ```bash
-cargo bench --bench comparison
-cargo bench --bench peropt
-cargo bench --bench cache_tiling
-cargo bench --bench large_p_approx
+cargo bench --bench comparison   # dispatch-level method matrix (p=500/1000)
+cargo bench --bench peropt       # full configuration sweep
+cargo bench --bench cache_tiling # block-size landscape
+cargo bench --bench tiled_opt    # raw tiled-kernel micro-benchmarks
 ```
 
 ## License

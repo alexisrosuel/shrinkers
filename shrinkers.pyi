@@ -26,9 +26,18 @@ Method = Literal[
     "treecode",
     "chebcode",
     "chebyshev",
+    "chebcode_fast",
+    "chebf",
+    "chebcode_xtreme",
+    "chebx",
+    "hodlr",
     "ewald",
     "dst",
     "auto",
+    "speed_auto",
+    "speed",
+    "accuracy_auto",
+    "accuracy",
 ]
 Parallelism = Literal["seq", "sequential", "rayon", "parallel", "auto"]
 Eta = Union[float, Literal["inferred"]]
@@ -131,6 +140,19 @@ def stieltjes_transform(
     cutoff: Cutoff = ...,
     parallelism: Parallelism = ...,
 ) -> StieltjesTransformResult: ...
+
+
+class StieltjesWithDerivResult(TypedDict):
+    """S and its analytic derivative dS/dx at every sample eigenvalue."""
+    real: np.ndarray
+    imag: np.ndarray
+    deriv_real: np.ndarray
+    deriv_imag: np.ndarray
+
+
+def stieltjes_transform_with_deriv(
+    eigenvalues: np.ndarray, eta: Eta = ...
+) -> StieltjesWithDerivResult: ...
 
 
 def detect_spikes_bema(
