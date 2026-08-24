@@ -36,6 +36,13 @@
 //!   family), others take a `parallel: bool` (tree methods). Rayon below
 //!   `PAR_TILED_MIN_P` falls back to per-row kernels where scheduling
 //!   overhead dominates.
+//! - Two deliberate η conventions coexist ([`default_eta`] is the single
+//!   library constant): **η = 0.1/√p** wherever the crate picks a default
+//!   itself, **η = 1/√p** inside every recorded benchmark harness
+//!   (`pareto_data`, `bench_one`, `small_p_crossover`; declared in their
+//!   JSON meta). Larger η smooths more, so approximate-method errors
+//!   recorded at 1/√p are OPTIMISTIC relative to default-η calls — never
+//!   read the two families side-by-side.
 
 mod adaptive;
 mod autovec;
@@ -76,6 +83,10 @@ use rayon::prelude::*;
 /// Single definition point for a constant that was previously hardcoded at
 /// the Python boundary, in [`crate::deconvolution::deconvolve_spiked`] and
 /// in the adaptive driver alike.
+///
+/// Note the separate benchmark convention: recorded harnesses measure at
+/// η = 1/√p instead (see the Conventions list above for why the split is
+/// kept rather than unified).
 pub(crate) fn default_eta(p: usize) -> f64 {
     const SCALE: f64 = 0.1;
     SCALE / (p as f64).sqrt()

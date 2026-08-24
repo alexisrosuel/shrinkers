@@ -380,22 +380,22 @@ no global grid; ChebCode remains the approximate-frontier optimum.
   the original hand-unrolled monolith (159.8 vs 160.0 ms at p=20000).
 
 ### Notes
-- **The Pareto table predates the latest kernel work.**
-  `src/config/pareto_autogen.rs` was generated from the overnight
-  benchmark round; the symmetric-pair exact rewrite, the `SYM_AOS_MAX_P`
-  layout switch and the ChebCode hw_sq/branchless acceptance landed
-  afterwards. The Speed/Accuracy picks remain sane (the accuracy ordering
-  did not change) but are no longer measured-optimal — regenerate with
-  `examples/pareto_data` + `scripts/build_pareto_table.py` before trusting
-  `speed_auto`/`accuracy_auto` in production.
-- **Cross-harness η conventions differ, by history not by intent:** the
-  criterion benches and the library default use η = 0.1/√p, while
-  `bench_one` / `pareto_data` / `small_p_crossover` record with η = 1/√p
-  (declared in their JSON meta). Numbers from the two families must not be
-  read side-by-side as if comparable.
-- **The installed wheel is stale relative to this source tree** (it lacks
-  the sentinel fix, the newer method strings and `stieltjes_transform_
-  with_deriv`). Run `pixi run build` before any release smoke test.
+- **Pareto table regenerated against the final kernel set** (fresh full
+  sweep through `examples/pareto_data` + `scripts/build_pareto_table.py`).
+  Headline change: `ChebCodeFast` now owns every speed-intent bin up to
+  p ≤ 20000 sequentially; accuracy-intent flips stay inside the exact
+  family on runtime tie-breaks. Single-session sweep — bins decided by
+  runtime ties carry normal run-to-run noise.
+- **Two η conventions coexist by design, both documented** in the
+  stieltjes module Conventions list: the library default is η = 0.1/√p
+  (`stieltjes::default_eta`), while every recorded harness measures at
+  η = 1/√p (declared in their JSON meta). Unifying them would silently
+  invalidate every recorded number, so they are kept and cross-referenced;
+  remember that larger η means more smoothing, so approximate-method
+  errors recorded at 1/√p are optimistic relative to default-η calls.
+- **Rebuild the wheel before any release smoke test**
+  (`pixi run build`, or maturin directly with `CONDA_PREFIX` set) — a
+  stale installed module is indistinguishable from a code regression.
 
 ## [0.3.0] — shrinkers
 

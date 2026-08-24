@@ -124,6 +124,8 @@ fn main() {
     let mut first = true;
     for &p in P_SIZES {
         let evs = spectrum(p);
+        // Benchmark convention (NOT the library default 0.1/sqrt(p)) — see
+        // the Conventions list in src/stieltjes/mod.rs before changing.
         let eta = 1.0 / (p as f64).sqrt();
 
         // Exact reference (sequential tiled kernel).
