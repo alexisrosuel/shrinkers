@@ -1,5 +1,16 @@
 # Task: Optimize the `deconvolve_spiked` bulk deconvolution (Stieltjes transform bottleneck)
 
+> **⚠️ Historical campaign log — preserved as a record, not as current
+> documentation.** This document describes the crate at the START of the
+> optimization campaign (repo path `/Users/alexisrosuel/shrinkers`, wheel
+> v0.1.0, one public entry point). Everything it proposed has since been
+> implemented and superseded: current numbers live in `README.md`
+> (Performance) and `CHANGELOG.md`, the method roster is far larger than
+> the seven listed here, the "zero unsafe code" invariant was replaced by
+> the audited-`simd.rs` policy (see README), and `deconvolve_spiked` now
+> takes method/parallelism/cutoff kwargs. Read this only for the
+> reasoning that led to the current design.
+
 ## Context
 
 Repo: `/Users/alexisrosuel/shrinkers` (Rust crate `shrinkers`, PyO3 bindings).
