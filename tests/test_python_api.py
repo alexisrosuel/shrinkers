@@ -342,3 +342,37 @@ def test_gil_released_during_compute():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+# ──────────────────────────────────────────────
+#  None / "inferred" sentinels
+# ──────────────────────────────────────────────
+
+class TestInferredSentinels:
+    """Every kwarg documented as 'float or None/"inferred"' must accept all
+    three spellings (regression: None used to raise ValueError on the
+    InferredF64 extractor, and "inferred" used to TypeError on plain
+    Option<f64> parameters)."""
+
+    def test_stieltjes_transform_cutoff_none(self):
+        evals = sample_spectrum(80)
+        a = rk.stieltjes_transform(evals, cutoff=None)
+        b = rk.stieltjes_transform(evals, cutoff="inferred")
+        c = rk.stieltjes_transform(evals, cutoff=10.0)
+        # None and "inferred" are synonyms: identical disabled-cutoff call.
+        np.testing.assert_array_equal(a["real"], b["real"])
+        np.testing.assert_array_equal(a["imag"], b["imag"])
+        # Enabled cutoff stays finite and same-shaped.
+        assert set(c) == {"real", "imag"}
+        assert np.all(np.isfinite(c["real"]))
+
+    def test_deconvolve_spiked_cutoff_none(self):
+        res = rk.deconvolve_spiked(spiked_spectrum(), c=0.25, n_points=50,
+                                   cutoff=None)
+        assert res["k"] >= 0
+
+    def test_tracy_widom_sigma2_sentinels_agree(self):
+        evals = spiked_spectrum(200, spikes=(6.0,), seed=3)
+        a = rk.detect_spikes_tracy_widom(evals, c=0.25, sigma2=None)
+        b = rk.detect_spikes_tracy_widom(evals, c=0.25, sigma2="inferred")
+        assert a["k"] == b["k"]
+        assert a["sigma2"] == pytest.approx(b["sigma2"])

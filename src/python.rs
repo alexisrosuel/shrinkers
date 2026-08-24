@@ -115,13 +115,19 @@ impl<'a, 'py> FromPyObject<'a, 'py> for InferredF64 {
         if let Ok(v) = ob.extract::<f64>() {
             return Ok(InferredF64::Value(v));
         }
+        // None is accepted as a synonym of "inferred": every kwarg of this
+        // type documents "float or None/'inferred'", and None is what
+        // callers naturally pass to mean "no explicit value".
+        if ob.is_none() {
+            return Ok(InferredF64::Inferred);
+        }
         if let Ok(s) = ob.extract::<String>() {
             if s == "inferred" {
                 return Ok(InferredF64::Inferred);
             }
         }
         Err(PyValueError::new_err(
-            "expected a float or the string 'inferred'",
+            "expected a float, None, or the string 'inferred'",
         ))
     }
 }
@@ -622,8 +628,8 @@ fn detect_spikes_bema_py<'py>(
 /// Args:
 ///   eigenvalues: sample eigenvalues (p,), finite, non-negative; any order.
 ///   c: concentration ratio p/n, in (0, 1].
-///   sigma2: noise variance; float or None/"inferred" to estimate from the
-///     data (MP-median-corrected median).
+///   sigma2: noise variance; float, or None/"inferred" to estimate it from
+///     the data (MP-median-corrected median).
 ///   significance: upper-tail probability for the Tracy–Widom quantile
 ///     (default 0.05).
 ///
@@ -632,18 +638,19 @@ fn detect_spikes_bema_py<'py>(
 #[pyfunction]
 #[pyo3(
     name = "detect_spikes_tracy_widom",
-    signature = (eigenvalues, c, sigma2 = None, significance = 0.05)
+    signature = (eigenvalues, c, sigma2 = InferredF64::Inferred, significance = 0.05)
 )]
 fn detect_spikes_tracy_widom_py<'py>(
     py: Python<'py>,
     eigenvalues: PyReadonlyArray1<'py, f64>,
     c: f64,
-    sigma2: Option<f64>,
+    sigma2: InferredF64,
     significance: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
     let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
     sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
     require_concentration(c)?;
+    let sigma2 = sigma2.value();
     if !(significance.is_finite() && significance > 0.0 && significance < 1.0) {
         return Err(PyValueError::new_err(format!(
             "significance must be in (0, 1), got {significance}"
