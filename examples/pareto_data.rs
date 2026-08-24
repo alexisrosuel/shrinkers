@@ -98,7 +98,6 @@ fn main() {
             CutoffConfig::Disabled,
         ),
         ("fft5", StieltjesMethod::Fft5, CutoffConfig::Disabled),
-        ("fft2", StieltjesMethod::Fft2, CutoffConfig::Disabled),
         (
             "chebcode",
             StieltjesMethod::ChebCode,

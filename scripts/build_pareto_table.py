@@ -92,13 +92,14 @@ def main():
     ]
     for p in sizes:
         b = bins[p]
-        lines.append(
-            f"    Bin {{ p_max: {p}, "
-            f"speed_seq: StieltjesMethod::{rust_variant(b['seq']['speed']['method'])}, "
-            f"speed_par: StieltjesMethod::{rust_variant(b['rayon']['speed']['method'])}, "
-            f"acc_seq: StieltjesMethod::{rust_variant(b['seq']['accuracy']['method'])}, "
-            f"acc_par: StieltjesMethod::{rust_variant(b['rayon']['accuracy']['method'])} }},"
-        )
+        # Emitted pre-expanded so the output is already rustfmt-stable.
+        lines.append("    Bin {")
+        lines.append(f"        p_max: {p},")
+        lines.append(f"        speed_seq: StieltjesMethod::{rust_variant(b['seq']['speed']['method'])},")
+        lines.append(f"        speed_par: StieltjesMethod::{rust_variant(b['rayon']['speed']['method'])},")
+        lines.append(f"        acc_seq: StieltjesMethod::{rust_variant(b['seq']['accuracy']['method'])},")
+        lines.append(f"        acc_par: StieltjesMethod::{rust_variant(b['rayon']['accuracy']['method'])},")
+        lines.append("    },")
     lines += [
         "];",
         "",
@@ -115,7 +116,6 @@ def main():
         "        (false, true) => bin.acc_par,",
         "    }",
         "}",
-        "",
     ]
     out.write_text("\n".join(lines) + "\n")
     print(f"wrote {out}")
