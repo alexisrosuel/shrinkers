@@ -49,7 +49,8 @@ def simulate_spiked(p: int, spikes: list[float], seed: int):
     n = round(p / C)
     y = rng.standard_normal((p, n)) * np.sqrt(pop)[:, None]
     sample = np.linalg.eigvalsh((y @ y.T) / n)[::-1]
-    return pop[::-1].copy(), sample  # descending
+    truth_desc = np.sort(pop)[::-1].copy()  # largest eigenvalue first
+    return truth_desc, sample
 
 
 def fig_cleaning() -> dict:
@@ -61,17 +62,32 @@ def fig_cleaning() -> dict:
     cleaned_desc = np.sort(
         np.concatenate([res["spikes"], res["bulk_population"]])
     )[::-1]
+    # Sanity: every series must be genuinely descending so rank i aligns
+    # across panels (a previous revision plotted the truth ascending).
+    assert truth_desc[0] > truth_desc[1] > truth_desc[2], truth_desc[:4]
+    assert sample_desc[0] > sample_desc[1], sample_desc[:3]
+    assert cleaned_desc[0] > cleaned_desc[1], cleaned_desc[:3]
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
 
     ax = axes[0]
     idx = np.arange(1, p + 1)
-    ax.plot(idx, truth_desc, "-", color="black", lw=1.5, label="population vraie")
+    # Focus the axis on the bulk; spikes beyond the cap are rendered as a
+    # clipped marker with their value annotated, so three tall points at
+    # ranks 1-3 don't squash the bulk into an unreadable band.
+    y_top = float(res["bulk_edge"]) * 4.0
+    ax.plot(idx, truth_desc, "-", color="black", lw=1.5, label="true population")
     ax.plot(idx, sample_desc, ".", color="#9aa5b1", ms=3.5,
             label=f"sample (p={p}, c={C})")
     ax.plot(idx, cleaned_desc, ".", color="#d62728", ms=3.5,
             label="cleaned by shrinkers")
     ax.set_yscale("log")
+    ax.set_ylim(bottom=0.2, top=y_top)
+    for r in range(len(spikes)):
+        if truth_desc[r] > y_top:
+            ax.plot(r + 1, y_top * 0.93, marker="^", color="black", ms=5)
+            ax.annotate(f"{truth_desc[r]:.1f}", (r + 1, y_top * 0.60),
+                        ha="center", fontsize=7)
     ax.axhline(res["bulk_edge"], color="#2b6cb0", lw=0.8, ls="--",
                label=f"estimated bulk edge ({res['bulk_edge']:.2f})")
     ax.set_xlabel("rank (descending order)")
@@ -214,8 +230,8 @@ def fig_runtime(reuse: bool = False) -> dict:
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlim(1, 1e5)
-    ax.set_xlabel("p (nombre de valeurs propres)")
-    ax.set_ylabel("temps de calcul (s)")
+    ax.set_xlabel("p (number of eigenvalues)")
+    ax.set_ylabel("runtime (s)")
     ax.set_title("Full Stieltjes transform — same arithmetic,\ndifferent engines",
                  fontsize=11)
     ax.grid(True, which="both", alpha=0.25)
@@ -242,7 +258,9 @@ def fig_runtime(reuse: bool = False) -> dict:
 
 if __name__ == "__main__":
     reuse = "--reuse" in sys.argv
-    cleaning = None if reuse else fig_cleaning()
+    # Figure 1's simulation is seeded and cheap -> always re-render it, so
+    # styling changes reach the PNG without re-measuring speed.
+    cleaning = fig_cleaning()
     runtime = fig_runtime(reuse)
     meta = {
         "machine": platform.platform(),
@@ -252,13 +270,7 @@ if __name__ == "__main__":
         "timing": "median of 3 (naive: 1 rep above p=2048)",
         "date_utc": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
     }
-    payload = {"meta": meta, "runtime": runtime}
-    if cleaning is not None:
-        payload["cleaning"] = cleaning
-    elif reuse and (OUT_DIR / "readme_figures.json").exists():
-        # preserve the stored cleaning section when only re-rendering
-        payload["cleaning"] = json.loads(
-            (OUT_DIR / "readme_figures.json").read_text()).get("cleaning")
+    payload = {"meta": meta, "runtime": runtime, "cleaning": cleaning}
     (OUT_DIR / "readme_figures.json").write_text(json.dumps(payload, indent=2))
     print(json.dumps(meta, indent=2))
     print("figures written to", OUT_DIR)

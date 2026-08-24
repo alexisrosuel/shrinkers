@@ -5,7 +5,7 @@
     "numpy_version": "2.5.1",
     "eta_convention": "eta = 1/sqrt(p)",
     "timing": "median of 3 (naive: 1 rep above p=2048)",
-    "date_utc": "2026-08-24 14:59 UTC"
+    "date_utc": "2026-08-24 22:37 UTC"
   },
   "runtime": {
     "rows": [
@@ -137,8 +137,8 @@
     "k_detected": 3,
     "sigma2_est": 1.0023494592610331,
     "bulk_edge_est": 2.2552862833373246,
-    "median_rel_err_sample": 0.404051369288408,
-    "median_rel_err_cleaned": 0.043417075528356885,
+    "median_rel_err_sample": 0.4005743720938139,
+    "median_rel_err_cleaned": 0.043264023466090595,
     "spike_estimates": [
       12.007568843158056,
       7.065935898650943,
