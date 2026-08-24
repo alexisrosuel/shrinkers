@@ -22,6 +22,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (point, node); numerically identical up to ≤1 ulp.
 
 ### Added
+- **Small-p crossover study** (`examples/small_p_crossover.rs`, data
+  `docs/pareto/small_p.json`, chart `docs/pareto/crossover_small_p.png`).
+  The frontier sweep starts at p=1000; this companion sweep covers
+  p ∈ [1, 1000] log-spaced with noise-resistant batched timing (each point =
+  median of nine ≥5 ms batches). Findings on MP spectra, η=1/√p, sequential:
+  the exact O(p²) tiled kernel wins up to p≈350 (2× faster than any preset
+  at p=100); `chebcode`/`chebcode_fast` take over from p≈400 (−12% at 400,
+  −55% at 1000); `chebcode_xtreme` from p≈600. Below a preset's leaf cap the
+  tree is a single exact leaf — each curve visibly steps when p crosses it.
+  Under p=2000 the exact+Rayon route is the per-row fallback
+  (`PAR_TILED_MIN_P`) with ~20 µs fixed scheduling overhead, so the
+  sequential comparison is the honest algorithmic crossover.
 - **`StieltjesMethod::Hodlr` — hierarchical low-rank (HODLR) summation**, a
   fundamentally different paradigm from the analytic compressions already in
   the crate: the kernel matrix `K_ij = 1/(λᵢ−λⱼ−iη)` is applied to the

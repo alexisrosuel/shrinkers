@@ -236,6 +236,42 @@ agnosticism. Full curves:
 `docs/pareto/runtime_vs_p_{seq,rayon}.png`; accuracy-banded cuts and the
 combined grid: `docs/pareto/runtime_vs_p_grid.png`.
 
+### Where the O(p²) → treecode crossover sits (small p)
+
+The frontier sweep starts at p=1000; below that, per-call times fall in the
+microsecond range where single-shot timing is noise. A dedicated sweep
+(`examples/small_p_crossover.rs`, log-spaced p ∈ [1, 1000], each point =
+median of nine ≥5 ms batches of repeated calls) pins the crossover.
+Sequential runtimes (the Python default), µs/call:
+
+| p | exact tiled | chebcode_fast | chebcode | xtreme |
+|---|---|---|---|---|
+| 30 | **0.54** | 1.53 | 1.61 | 3.00 |
+| 100 | **4.98** | 10.82 | 11.55 | 14.70 |
+| 200 | **19.27** | 28.75 | 31.13 | 42.17 |
+| 300 | **46.67** | 49.33 | 53.13 | 70.82 |
+| 400 | 80.81 | **71.81** | **76.71** | 105.49 |
+| 600 | 180.72 | **119.38** | **128.20** | 177.29 |
+| 1000 | 499.08 | **222.65** | **241.53** | 343.13 |
+
+- **Crossover ≈ p≈350** for `chebcode`/`chebcode_fast` (at p=300 exact still
+  wins by ~5%, at p=400 it already loses by ~12%), and ≈ p≈550 for
+  `chebcode_xtreme`. Below the crossover O(p²) is brutally cheap — at p=100
+  the exact kernel is 2× faster than anything else; use it there.
+- The panel structure is visible in the raw data: preset runtimes step up as
+  p crosses the leaf cap (`xtreme` jumps between p=12 and p=20 with its
+  leaf_cap of 16, `fast`/default between p=30 and p=50 with 32) — below the
+  leaf cap the tree is one exact leaf and carries zero approximation.
+- Rayon is not useful down here: under p=2000 the exact family routes to a
+  per-row fallback (`PAR_TILED_MIN_P = 2000`) whose fixed parallel overhead
+  (~20 µs flat) exceeds the whole sequential computation until p≈150. Both
+  families pay it; the treecode pays less, so *in rayon mode* chebcode wins
+  from p≈2 upward — but that says more about scheduling than about
+  algorithms. Sequential comparison is the honest one.
+
+Chart: `docs/pareto/crossover_small_p.png`; raw data:
+`docs/pareto/small_p.json`.
+
 ### γ-sweeps: build once, evaluate many
 
 RIE deconvolution evaluates the same spectrum for many γ (one η per γ).
