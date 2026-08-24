@@ -9,6 +9,7 @@ SIMD-accelerated Rust implementation of **spiked + bulk eigenvalue cleaning**
 via free-probability deconvolution: detect spikes (BEMA), debias them (inverse
 BBP), and deconvolve the bulk (El Karoui). Features O(p log p)
 FFT-accelerated Stieltjes transforms, auto-vectorized loops, cache blocking,
+multi-threaded kernels (**~6× on an 8-core machine**, one keyword away),
 and PyO3 bindings.
 
 ## Why shrinkers?
@@ -54,6 +55,22 @@ below. Every number is reproducible: `scripts/make_readme_figures.py`
 regenerates both figures end-to-end, and `docs/img/readme_figures.json`
 holds the raw measurements.
 
+**3 · It uses every core you give it.** The exact kernel is data-parallel
+across cache blocks — flip one argument (`parallelism="rayon"`) and the
+same call spreads over your cores with no reduction step and no false
+sharing. Measured on the 8-core machine above (fresh sweep,
+`docs/pareto/bench_after.json`):
+
+| p | exact, 1 thread | exact, all cores | gain |
+|---|---|---|---|
+| 10 000 | 38.6 ms | 6.4 ms | **×6.0** |
+| 50 000 | 0.94 s | 0.16 s | **×5.9** |
+
+The Chebyshev treecode scales too (×3.3–4.5); only the FFT-grid path is
+single-threaded by design. Note also that the NumPy baseline in figure 2
+is itself single-core — even pinned to one thread, shrinkers still wins
+by roughly an order of magnitude (9.1× at p≈5000).
+
 ### What's inside
 
 - `deconvolve_spiked(evals, c)` — the one-call pipeline: BEMA detection →
@@ -63,7 +80,9 @@ holds the raw measurements.
   FFT grids, HODLR — plus data-driven `speed_auto` / `accuracy_auto` picks;
 - correlation-matrix cleaning with eigenvector-overlap correction, direct
   precision-matrix shrinkage, Tracy–Widom spike detection;
-- Rust API + PyO3 bindings, GIL released during computation.
+- Rust API + PyO3 bindings, GIL released during computation;
+  multi-threaded exact & treecode kernels (Rayon, opt-in via
+  `parallelism="rayon"`).
 
 ## Primary entry point: spiked + bulk deconvolution
 
