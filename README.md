@@ -192,6 +192,16 @@ extra digit of accuracy plus kernel-agnosticism. Full curves:
 `docs/pareto/runtime_vs_p_{seq,rayon}.png`; accuracy-banded cuts and the
 combined grid: `docs/pareto/runtime_vs_p_grid.png`.
 
+### γ-sweeps: build once, evaluate many
+
+RIE deconvolution evaluates the same spectrum for many γ (one η per γ).
+`stieltjes::ChebCodeBatch::build(...)` constructs the Chebyshev tree once;
+`evaluate_many(&etas)` then runs the sweep with the tree shared read-only,
+parallelizing ACROSS the η axis — measured **6.5–6.6×** faster than calling
+`compute_all_stieltjes_chebcode` per η (`examples/bench_batch.rs`). For
+root-finding on γ, `stieltjes_transform_with_deriv` returns S and its
+analytic derivative dS/dx in a single exact pass.
+
 ### Pure Rust (Criterion, Apple M-series, p=1000, c=0.5)
 
 Full `rie_shrinkage` pipeline (includes spike detection + shrinkage overhead):

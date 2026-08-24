@@ -57,7 +57,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   per parallelism and per accuracy band (`runtime_vs_p_{seq,rayon}.png`,
   `runtime_vs_p_grid.png`).
 
+### Added
+- **`ChebCodeBatch` — amortized multi-η driver for γ-sweeps.** The Chebyshev
+  tree depends on the spectrum and the interpolation geometry only, not on
+  η, so one build serves a whole deconvolution sweep;
+  `evaluate_many` parallelizes across the η axis with the tree shared
+  read-only. Measured (MP spectra): 16 η at p=20000 → 165 ms naive vs
+  25 ms batched (**6.5×**), 32 η at p=50000 → 829 ms vs 126 ms (**6.6×**).
+- **Analytic derivative `stieltjes_transform_with_deriv`** (Rust
+  `compute_all_stieltjes_with_deriv` + Python binding): one exact pass
+  returns S and S′ with `S′ᵣₑ = −Σ (d²−η²)/den²`,
+  `S′ᵢₘ = −Σ 2dη/den²` — ready for Newton-style root finding on γ.
+- `examples/bench_batch.rs` — sweep-workflow benchmark.
+
 ### Rejected (research track — documented negative result)
+- **Quantile-quadrature far field (mass-only continuum replacement).**
+  Idea: exact near window ±W plus composite Gauss–Legendre over equal-mass
+  panels (or geometric annuli centered on each query, weights from exact
+  empirical counts) for the smooth far field. Refuted numerically: any
+  scheme that replaces discrete sources by their continuous mass carries an
+  Euler–Maclaurin-type relative error ~(panel_width/distance)² per panel.
+  The singularity follows the query point, so global panels cannot refine
+  toward it; annuli can, but the first rings always have width ≈ distance,
+  producing an irreducible ~1e-2 floor across p = 5k..50k, insensitive to
+  W, q and ring count. Reaching 1e-10 requires high-order local expansions —
+  i.e. exactly what ChebCode already does; its order-n interpolation beats
+  the (h/d)² wall by construction.
+- **Taylor-per-panel amortization on top of that far field** inherits the
+  same wall analytically (the Taylor expansion reproduces only the smooth
+  part; the lattice discrepancy in the mid-field remains), so it was not
+  implemented.
 - **Pure-uniform RandNLA sketching for near-field Cauchy blocks.** The
   kernel's interaction mass concentrates on a handful of boundary columns;
   uniform column samples miss it entirely (rank-8 block error ~1e-2 where
