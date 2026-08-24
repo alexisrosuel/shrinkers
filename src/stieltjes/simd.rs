@@ -79,6 +79,54 @@ impl F64x2 {
         }
     }
 
+    /// Lanes `[a, b]`.
+    #[inline(always)]
+    pub(crate) fn from_array(v: [f64; 2]) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: pure register shuffle from a stack array; feature set
+            // fixed at compile time (see module docs).
+            Self(unsafe { std::arch::aarch64::vld1q_f64(v.as_ptr()) })
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            Self(v)
+        }
+    }
+
+    /// Value of lane `i` (must be 0 or 1).
+    #[inline(always)]
+    pub(crate) fn lane(self, i: usize) -> f64 {
+        let a = [self.lane0(), self.lane1()];
+        a[i]
+    }
+
+    #[inline(always)]
+    fn lane0(self) -> f64 {
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: register-to-register extract; feature fixed at compile time.
+            unsafe { std::arch::aarch64::vgetq_lane_f64(self.0, 0) }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            self.0[0]
+        }
+    }
+
+    #[inline(always)]
+    fn lane1(self) -> f64 {
+        #[cfg(target_arch = "aarch64")]
+        {
+            // SAFETY: register-to-register extract; feature fixed at compile time.
+            unsafe { std::arch::aarch64::vgetq_lane_f64(self.0, 1) }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            self.0[1]
+        }
+    }
+
     /// Lane-wise `self − rhs`.
     #[inline(always)]
     pub(crate) fn sub(self, rhs: Self) -> Self {

@@ -86,6 +86,8 @@ pub fn stieltjes_sum_for_one(
         | StieltjesMethod::Fft2
         | StieltjesMethod::TreeCode
         | StieltjesMethod::ChebCode
+        | StieltjesMethod::ChebCodeFast
+        | StieltjesMethod::ChebCodeXtreme
         | StieltjesMethod::Ewald
         | StieltjesMethod::Dst
         | StieltjesMethod::AccuracyAuto
@@ -321,8 +323,19 @@ pub fn compute_all_stieltjes(
             treecode::compute_all_stieltjes_treecode_impl(eigenvalues, eta, 0.5, 6, parallel),
             inv_p,
         ),
+        // Default preset (theta=0.5, n=11, leaf=32): measured to dominate the
+        // historical (0.3, 9, 16) on BOTH runtime and error at every size —
+        // see the overnight re-tuning note in the CHANGELOG.
         StieltjesMethod::ChebCode => scale_aos(
-            chebcode::compute_all_stieltjes_chebcode_impl(eigenvalues, eta, 0.3, 9, 16, parallel),
+            chebcode::compute_all_stieltjes_chebcode_impl(eigenvalues, eta, 0.5, 11, 32, parallel),
+            inv_p,
+        ),
+        StieltjesMethod::ChebCodeFast => scale_aos(
+            chebcode::compute_all_stieltjes_chebcode_impl(eigenvalues, eta, 0.5, 9, 32, parallel),
+            inv_p,
+        ),
+        StieltjesMethod::ChebCodeXtreme => scale_aos(
+            chebcode::compute_all_stieltjes_chebcode_impl(eigenvalues, eta, 0.25, 11, 16, parallel),
             inv_p,
         ),
         StieltjesMethod::Ewald => scale_aos(

@@ -104,6 +104,16 @@ fn main() {
             StieltjesMethod::ChebCode,
             CutoffConfig::Disabled,
         ),
+        (
+            "chebcode_fast",
+            StieltjesMethod::ChebCodeFast,
+            CutoffConfig::Disabled,
+        ),
+        (
+            "chebcode_xtreme",
+            StieltjesMethod::ChebCodeXtreme,
+            CutoffConfig::Disabled,
+        ),
         ("hodlr", StieltjesMethod::Hodlr, CutoffConfig::Disabled),
     ];
 

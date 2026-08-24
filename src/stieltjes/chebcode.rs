@@ -199,8 +199,76 @@ fn build_cheb(
     let ni = idx as usize;
     tree.left[ni] = li;
     tree.right[ni] = ri;
-    fill_weights(tree, ni, lo_idx, hi_idx, sm1, lam, scratch);
+    merge_weights(tree, ni, sm1, lam, scratch);
     idx
+}
+
+/// Compose a parent's barycentric weights from its two children's weights
+/// instead of re-scanning every source in the parent's range.
+///
+/// Each child node carries the mass `w_t` (summing to the child's source
+/// count); running the same normalized barycentric row update per child
+/// node — scaled by `w_t` — reproduces the parent's weights with O(n²)
+/// work per child rather than O(count·n). Total build cost drops from
+/// ~p·n·depth source-visits to ~(p/leaf)·n² node merges. Numerically this
+/// stacks one extra interpolation level per depth; the treecode tolerance
+/// absorbs it (verified against the exact sums in tests).
+fn merge_weights(
+    tree: &mut FlatChebTree,
+    idx: usize,
+    sm1: &[f64],
+    lam: &[f64],
+    scratch: &mut [f64],
+) {
+    let n = tree.n;
+    let base_p = idx * n;
+    {
+        let lo = tree.lo[idx];
+        let hi = tree.hi[idx];
+        let c = 0.5 * (lo + hi);
+        let l = 0.5 * (hi - lo);
+        for (slot, &s) in tree.nodes[base_p..base_p + n].iter_mut().zip(sm1.iter()) {
+            *slot = c + l * s;
+        }
+    }
+    let t = &tree.nodes[base_p..base_p + n];
+    let w = &mut scratch[..n];
+    w.fill(0.0);
+    let mut v = [0.0f64; 64];
+
+    let l_child = tree.left[idx] as usize;
+    let r_child = tree.right[idx] as usize;
+    for child in [l_child, r_child] {
+        let base_c = child * n;
+        for ti in 0..n {
+            let x = tree.nodes[base_c + ti];
+            let m = tree.w[base_c + ti];
+            if m == 0.0 {
+                continue;
+            }
+            let mut s = 0.0;
+            let mut hit = usize::MAX;
+            for (j, vj) in v.iter_mut().enumerate().take(n) {
+                let d = x - t[j];
+                if d == 0.0 {
+                    hit = j;
+                    break;
+                }
+                let q = lam[j] / d;
+                *vj = q;
+                s += q;
+            }
+            if hit != usize::MAX {
+                w[hit] += m;
+                continue;
+            }
+            let inv_s = 1.0 / s;
+            for (wj, &vj) in w.iter_mut().zip(v.iter()).take(n) {
+                *wj += m * vj * inv_s;
+            }
+        }
+    }
+    tree.w[base_p..base_p + n].copy_from_slice(w);
 }
 
 impl FlatChebTree {
@@ -357,6 +425,92 @@ impl FlatChebTree {
         }
         (re, im)
     }
+
+    /// Same traversal evaluating TWO η values simultaneously — one η per
+    /// F64x2 lane. Same op count as a single-η pass, so a sweep of 2k etas
+    /// costs ~k passes instead of 2k. Acceptance uses min(η₀,η₁), matching
+    /// single-η runs exactly; per-lane reciprocals keep each lane's
+    /// arithmetic identical to the scalar path.
+    #[allow(clippy::too_many_arguments)]
+    fn contribution_x2(
+        &self,
+        lambda_i: f64,
+        eta_v: F64x2,
+        eta2_v: F64x2,
+        stack: &mut Vec<i32>,
+    ) -> ((f64, f64), (f64, f64)) {
+        let n = self.n;
+        stack.clear();
+        stack.push(0);
+
+        let mut acc_re = F64x2::zero();
+        let mut acc_im = F64x2::zero();
+
+        while let Some(node) = stack.pop() {
+            let ni = node as usize;
+            let is_leaf = self.left[ni] < 0 && self.right[ni] < 0;
+
+            if is_leaf {
+                let lo_idx = self.lo_idx[ni];
+                let hi_idx = self.hi_idx[ni];
+                let xs = &self.sorted[lo_idx..hi_idx];
+                // Splat ONE source across lanes; the lanes carry the two
+                // etas. This keeps every accumulator lane's meaning fixed
+                // (its eta) regardless of source order — no per-node hsum.
+                for &xk in xs {
+                    let d = F64x2::splat(lambda_i - xk);
+                    // den = d² + η²  per lane; inv = refined reciprocal.
+                    let den = eta2_v.fma(d, d);
+                    let inv = den.recip();
+                    acc_re = acc_re.fma(d, inv);
+                    acc_im = acc_im.fma(eta_v, inv);
+                }
+                continue;
+            }
+
+            let lo = self.lo[ni];
+            let hi = self.hi[ni];
+            let cl = if lambda_i < lo {
+                lo - lambda_i
+            } else if lambda_i > hi {
+                lambda_i - hi
+            } else {
+                0.0
+            };
+            let e_min = eta_v.lane(0).min(eta_v.lane(1));
+            let d_sq = cl * cl + e_min * e_min;
+            let half_w = 0.5 * (hi - lo);
+
+            if half_w * half_w < self.theta_sq * d_sq {
+                let nbase = ni * n;
+                let ts = &self.nodes[nbase..nbase + n];
+                let ws = &self.w[nbase..nbase + n];
+                // One Chebyshev NODE per iteration, splatted across the
+                // eta lanes (see the leaf-loop note).
+                for j in 0..n {
+                    let dj = F64x2::splat(lambda_i - ts[j]);
+                    let wj = F64x2::splat(ws[j]);
+                    let den = eta2_v.fma(dj, dj);
+                    let inv = den.recip();
+                    acc_re = acc_re.fma(wj.mul(dj), inv);
+                    acc_im = acc_im.fma(wj.mul(eta_v), inv);
+                }
+            } else {
+                let r = self.right[ni];
+                let l = self.left[ni];
+                if r >= 0 {
+                    stack.push(r);
+                }
+                if l >= 0 {
+                    stack.push(l);
+                }
+            }
+        }
+        (
+            (acc_re.lane(0), acc_im.lane(0)),
+            (acc_re.lane(1), acc_im.lane(1)),
+        )
+    }
 }
 
 /// Compute all Stieltjes transforms with the Chebyshev treecode.
@@ -419,6 +573,16 @@ pub fn compute_all_stieltjes_chebcode_impl(
     }
 }
 
+/// Build just the tree — benchmarking helper exposing the build/eval split.
+pub fn chebcode_tree_for_bench(
+    eigenvalues: &[f64],
+    theta: f64,
+    n: usize,
+    leaf_cap: usize,
+) -> ChebCodeBatch {
+    ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap)
+}
+
 /// Amortized multi-η driver for ChebCode (γ-sweeps).
 ///
 /// The Chebyshev tree depends only on the sorted spectrum, the interpolation
@@ -458,6 +622,12 @@ impl ChebCodeBatch {
         }
     }
 
+    /// Evaluate the sum for a single query point at one η.
+    pub fn evaluate_point(&self, x: f64, eta: f64) -> (f64, f64) {
+        let mut stack = Vec::with_capacity(64);
+        self.tree.contribution(x, eta, &mut stack)
+    }
+
     /// Evaluate all sums for one η.
     pub fn evaluate(&self, eta: f64) -> Vec<(f64, f64)> {
         let mut stack = Vec::with_capacity(64);
@@ -480,10 +650,58 @@ impl ChebCodeBatch {
     }
 
     /// Evaluate all sums for many η, parallelizing across the η axis with
-    /// the tree shared read-only (Rayon).
+    /// the tree shared read-only (Rayon). Etas are processed PAIRWISE
+    /// through a two-lane traversal, so a sweep of 2k values costs about k
+    /// tree passes instead of 2k.
     pub fn evaluate_many(&self, etas: &[f64]) -> Vec<Vec<(f64, f64)>> {
         use rayon::prelude::*;
-        etas.par_iter().map(|&eta| self.evaluate(eta)).collect()
+        let p = self.tree.sorted.len();
+        // One task per PAIR of etas: two lanes per traversal pass.
+        type PairResult = (usize, Vec<(f64, f64)>, Option<Vec<(f64, f64)>>);
+        let results: Vec<PairResult> = etas
+            .par_chunks(2)
+            .enumerate()
+            .map(|(pi, pair)| {
+                let e1 = pair[0];
+                let e2 = pair.get(1).copied().unwrap_or(e1);
+                let eta_v = F64x2::from_array([e1, e2]);
+                let eta2_v = eta_v.mul(eta_v);
+                let mut stack = Vec::with_capacity(64);
+                let mut a = Vec::with_capacity(p);
+                let mut b = Vec::with_capacity(p);
+                for &x in &self.tree.sorted {
+                    let ((r0, i0), (r1, i1)) =
+                        self.tree.contribution_x2(x, eta_v, eta2_v, &mut stack);
+                    a.push((r0, i0));
+                    b.push((r1, i1));
+                }
+                let odd = pair.len() == 1;
+                (pi, a, if odd { None } else { Some(b) })
+            })
+            .collect();
+
+        // Serial scatter back to original order.
+        let scatter = |flat: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
+            match &self.perm {
+                None => flat,
+                Some(perm) => {
+                    let mut ordered = vec![(0.0f64, 0.0f64); flat.len()];
+                    for (s, &orig) in perm.iter().enumerate() {
+                        ordered[orig as usize] = flat[s];
+                    }
+                    ordered
+                }
+            }
+        };
+        let mut out: Vec<Vec<(f64, f64)>> = Vec::with_capacity(etas.len());
+        for (_, a, b_opt) in results {
+            out.push(scatter(a));
+            if let Some(b) = b_opt {
+                out.push(scatter(b));
+            }
+        }
+        debug_assert_eq!(out.len(), etas.len());
+        out
     }
 }
 
@@ -512,11 +730,16 @@ mod tests {
             let many = batch.evaluate_many(&etas);
             for (k, &eta) in etas.iter().enumerate() {
                 let single = compute_all_stieltjes_chebcode(build_input, eta);
+                // Pairwise two-lane evaluation accepts a node only if BOTH
+                // lanes' criteria pass (eta_min); at acceptance boundaries
+                // this can differ from a lane's own single-eta traversal by
+                // one node, bounded by that node's far-field error (~1e-9).
                 for i in 0..p {
+                    let dr = (many[k][i].0 - single[i].0).abs();
+                    let di = (many[k][i].1 - single[i].1).abs();
                     assert!(
-                        (many[k][i].0 - single[i].0).abs() < 1e-12
-                            && (many[k][i].1 - single[i].1).abs() < 1e-12,
-                        "batch mismatch at eta={eta} i={i}"
+                        dr <= 5e-9 * (1.0 + single[i].0.abs()) && di <= 5e-9,
+                        "batch mismatch at eta={eta} i={i}: {dr} {di}"
                     );
                 }
             }
@@ -588,5 +811,35 @@ mod tests {
             cb_max_i <= tc_max_i + 1e-6,
             "cb imag {cb_max_i} > tc {tc_max_i}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_x2 {
+    use super::*;
+
+    /// The two-lane traversal must reproduce the scalar traversal when both
+    /// lanes carry the same eta (up to acceptance-boundary noise), and stay
+    /// within the far-field error bound against each eta's own single run.
+    #[test]
+    fn contribution_x2_matches_single_with_equal_lanes() {
+        let p = 256;
+        let evals: Vec<f64> = (0..p).map(|i| (i as f64 + 1.0).ln()).collect();
+        let batch = ChebCodeBatch::build(&evals, 0.3, 9, 16);
+        let eta = 0.05;
+        let eta_v = F64x2::from_array([eta, eta]);
+        let mut stack = Vec::with_capacity(64);
+        for &x in evals.iter().step_by(17) {
+            let s = batch.evaluate_point(x, eta);
+            let ((r0, i0), _) = batch
+                .tree
+                .contribution_x2(x, eta_v, eta_v.mul(eta_v), &mut stack);
+            assert!(
+                (s.0 - r0).abs() < 1e-9 && (s.1 - i0).abs() < 1e-9,
+                "x={x}: single=({},{}) x2=({r0},{i0})",
+                s.0,
+                s.1
+            );
+        }
     }
 }

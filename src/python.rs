@@ -189,6 +189,8 @@ fn parse_method(method: &str) -> PyResult<StieltjesMethod> {
         "fft2" => StieltjesMethod::Fft2,
         "fmm" | "treecode" => StieltjesMethod::TreeCode,
         "chebcode" | "chebyshev" => StieltjesMethod::ChebCode,
+        "chebcode_fast" | "chebf" => StieltjesMethod::ChebCodeFast,
+        "chebcode_xtreme" | "chebx" => StieltjesMethod::ChebCodeXtreme,
         "ewald" => StieltjesMethod::Ewald,
         "dst" => StieltjesMethod::Dst,
         "auto" => StieltjesMethod::Auto,

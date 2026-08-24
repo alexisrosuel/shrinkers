@@ -42,6 +42,12 @@ pub enum StieltjesMethod {
     /// O(p log p) Chebyshev-interpolation treecode (faster than the multipole
     /// treecode at every size, especially when parallelized)
     ChebCode,
+    /// Speed-tuned ChebCode preset (theta=0.5, n=9, leaf=32): ~1e-8 error
+    /// class at the lowest measured runtime of the family.
+    ChebCodeFast,
+    /// Precision-tuned ChebCode preset (theta=0.25, n=11, leaf=16):
+    /// ~1e-12/1e-13 class without paying the full exact O(p²).
+    ChebCodeXtreme,
     /// O(p·k + M log M) Ewald near/far splitting: exact near window +
     /// coarse-grid FFT far part (smooth kernel, small grid)
     Ewald,
@@ -80,6 +86,8 @@ impl StieltjesMethod {
             Self::Fft2 => "fft2",
             Self::TreeCode => "fmm",
             Self::ChebCode => "chebcode",
+            Self::ChebCodeFast => "chebcode_fast",
+            Self::ChebCodeXtreme => "chebcode_xtreme",
             Self::Ewald => "ewald",
             Self::Dst => "dst",
             Self::Auto => "auto",
@@ -104,6 +112,8 @@ impl StieltjesMethod {
             Self::Fft2 => "O(p log p) 2-FFT grid (packed real + Hilbert)",
             Self::TreeCode => "O(p log p) 1D tree code (FMM)",
             Self::ChebCode => "O(p log p) Chebyshev-interpolation treecode",
+            Self::ChebCodeFast => "ChebCode speed preset (theta .5, n 9, leaf 32)",
+            Self::ChebCodeXtreme => "ChebCode precision preset (theta .25, n 11, leaf 16)",
             Self::Ewald => "O(p·k+M log M) Ewald near/far splitting",
             Self::Dst => "O(p log p) DST-I real part (odd-extension)",
             Self::Auto => "Auto-select based on problem size",
@@ -129,6 +139,8 @@ impl StieltjesMethod {
             Self::Fft2,
             Self::TreeCode,
             Self::ChebCode,
+            Self::ChebCodeFast,
+            Self::ChebCodeXtreme,
             Self::Ewald,
             Self::Dst,
         ]
