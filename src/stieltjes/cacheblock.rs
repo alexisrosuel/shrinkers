@@ -1111,15 +1111,15 @@ fn symmetric_sweep<S: SymSink>(evs: &[f64], eta: f64, eta_sq: f64, sink: &mut S)
 /// branch-skip sweep; the dispatcher routes cutoff work there. This kernel
 /// remains for direct callers of [`compute_all_stieltjes_blocked_tiled`].
 #[allow(clippy::too_many_arguments)]
-fn tiled_span_cutoff(
-    targets: &[f64],
-    eigenvalues: &[f64],
-    out_r: &mut [f64],
-    out_i: &mut [f64],
+fn tiled_span_cutoff<T: CauchyFloat>(
+    targets: &[T],
+    eigenvalues: &[T],
+    out_r: &mut [T],
+    out_i: &mut [T],
     bs: usize,
-    eta: f64,
-    eta_sq: f64,
-    cut: f64,
+    eta: T,
+    eta_sq: T,
+    cut: T,
 ) {
     let n = out_r.len();
     let mut b = 0;
@@ -1140,20 +1140,75 @@ fn tiled_span_cutoff(
     }
 }
 
+/// Minimal float contract shared by the generic tiled kernels. Both
+/// monomorphizations inline (`#[inline(always)]` throughout) to the same
+/// machine code the former hand-duplicated f64/f32 copies produced, so the
+/// duplication cost ~450 lines for zero codegen benefit.
+trait CauchyFloat:
+    Copy
+    + PartialOrd
+    + std::ops::Neg<Output = Self>
+    + std::ops::Sub<Output = Self>
+    + std::ops::Div<Output = Self>
+{
+    fn mul_add(self, a: Self, b: Self) -> Self;
+
+    fn abs(self) -> Self;
+
+    /// Exactly `1.0 / self` (an IEEE divide, like the literal form it
+    /// replaces — required because a `1.0 / x` literal cannot unify its
+    /// float fallback against an opaque `T`).
+    fn recip(self) -> Self;
+}
+
+impl CauchyFloat for f64 {
+    #[inline(always)]
+    fn mul_add(self, a: Self, b: Self) -> Self {
+        f64::mul_add(self, a, b)
+    }
+
+    #[inline(always)]
+    fn abs(self) -> Self {
+        f64::abs(self)
+    }
+
+    #[inline(always)]
+    fn recip(self) -> Self {
+        f64::recip(self)
+    }
+}
+
+impl CauchyFloat for f32 {
+    #[inline(always)]
+    fn mul_add(self, a: Self, b: Self) -> Self {
+        f32::mul_add(self, a, b)
+    }
+
+    #[inline(always)]
+    fn abs(self) -> Self {
+        f32::abs(self)
+    }
+
+    #[inline(always)]
+    fn recip(self) -> Self {
+        f32::recip(self)
+    }
+}
+
 /// Sweep ALL source eigenvalues against the target block
 /// `[block_start, block_end)`, skipping far-field terms.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn tiled_one_block_cutoff(
-    targets: &[f64],
-    eigenvalues: &[f64],
-    out_r: &mut [f64],
-    out_i: &mut [f64],
+fn tiled_one_block_cutoff<T: CauchyFloat>(
+    targets: &[T],
+    eigenvalues: &[T],
+    out_r: &mut [T],
+    out_i: &mut [T],
     block_start: usize,
     block_end: usize,
-    eta: f64,
-    eta_sq: f64,
-    cut: f64,
+    eta: T,
+    eta_sq: T,
+    cut: T,
 ) {
     let p = eigenvalues.len();
     let mut j = 0;
@@ -1171,101 +1226,101 @@ fn tiled_one_block_cutoff(
             let l3 = targets[i + 3];
 
             let d00 = l0 - lj0;
-            if (if d00 < 0.0 { -d00 } else { d00 }) <= cut {
-                let inv00 = 1.0 / d00.mul_add(d00, eta_sq);
+            if d00.abs() <= cut {
+                let inv00 = d00.mul_add(d00, eta_sq).recip();
                 out_r[i] = d00.mul_add(inv00, out_r[i]);
                 out_i[i] = eta.mul_add(inv00, out_i[i]);
             }
             let d10 = l1 - lj0;
-            if (if d10 < 0.0 { -d10 } else { d10 }) <= cut {
-                let inv10 = 1.0 / d10.mul_add(d10, eta_sq);
+            if d10.abs() <= cut {
+                let inv10 = d10.mul_add(d10, eta_sq).recip();
                 out_r[i + 1] = d10.mul_add(inv10, out_r[i + 1]);
                 out_i[i + 1] = eta.mul_add(inv10, out_i[i + 1]);
             }
             let d20 = l2 - lj0;
-            if (if d20 < 0.0 { -d20 } else { d20 }) <= cut {
-                let inv20 = 1.0 / d20.mul_add(d20, eta_sq);
+            if d20.abs() <= cut {
+                let inv20 = d20.mul_add(d20, eta_sq).recip();
                 out_r[i + 2] = d20.mul_add(inv20, out_r[i + 2]);
                 out_i[i + 2] = eta.mul_add(inv20, out_i[i + 2]);
             }
             let d30 = l3 - lj0;
-            if (if d30 < 0.0 { -d30 } else { d30 }) <= cut {
-                let inv30 = 1.0 / d30.mul_add(d30, eta_sq);
+            if d30.abs() <= cut {
+                let inv30 = d30.mul_add(d30, eta_sq).recip();
                 out_r[i + 3] = d30.mul_add(inv30, out_r[i + 3]);
                 out_i[i + 3] = eta.mul_add(inv30, out_i[i + 3]);
             }
 
             let d01 = l0 - lj1;
-            if (if d01 < 0.0 { -d01 } else { d01 }) <= cut {
-                let inv01 = 1.0 / d01.mul_add(d01, eta_sq);
+            if d01.abs() <= cut {
+                let inv01 = d01.mul_add(d01, eta_sq).recip();
                 out_r[i] = d01.mul_add(inv01, out_r[i]);
                 out_i[i] = eta.mul_add(inv01, out_i[i]);
             }
             let d11 = l1 - lj1;
-            if (if d11 < 0.0 { -d11 } else { d11 }) <= cut {
-                let inv11 = 1.0 / d11.mul_add(d11, eta_sq);
+            if d11.abs() <= cut {
+                let inv11 = d11.mul_add(d11, eta_sq).recip();
                 out_r[i + 1] = d11.mul_add(inv11, out_r[i + 1]);
                 out_i[i + 1] = eta.mul_add(inv11, out_i[i + 1]);
             }
             let d21 = l2 - lj1;
-            if (if d21 < 0.0 { -d21 } else { d21 }) <= cut {
-                let inv21 = 1.0 / d21.mul_add(d21, eta_sq);
+            if d21.abs() <= cut {
+                let inv21 = d21.mul_add(d21, eta_sq).recip();
                 out_r[i + 2] = d21.mul_add(inv21, out_r[i + 2]);
                 out_i[i + 2] = eta.mul_add(inv21, out_i[i + 2]);
             }
             let d31 = l3 - lj1;
-            if (if d31 < 0.0 { -d31 } else { d31 }) <= cut {
-                let inv31 = 1.0 / d31.mul_add(d31, eta_sq);
+            if d31.abs() <= cut {
+                let inv31 = d31.mul_add(d31, eta_sq).recip();
                 out_r[i + 3] = d31.mul_add(inv31, out_r[i + 3]);
                 out_i[i + 3] = eta.mul_add(inv31, out_i[i + 3]);
             }
 
             let d02 = l0 - lj2;
-            if (if d02 < 0.0 { -d02 } else { d02 }) <= cut {
-                let inv02 = 1.0 / d02.mul_add(d02, eta_sq);
+            if d02.abs() <= cut {
+                let inv02 = d02.mul_add(d02, eta_sq).recip();
                 out_r[i] = d02.mul_add(inv02, out_r[i]);
                 out_i[i] = eta.mul_add(inv02, out_i[i]);
             }
             let d12 = l1 - lj2;
-            if (if d12 < 0.0 { -d12 } else { d12 }) <= cut {
-                let inv12 = 1.0 / d12.mul_add(d12, eta_sq);
+            if d12.abs() <= cut {
+                let inv12 = d12.mul_add(d12, eta_sq).recip();
                 out_r[i + 1] = d12.mul_add(inv12, out_r[i + 1]);
                 out_i[i + 1] = eta.mul_add(inv12, out_i[i + 1]);
             }
             let d22 = l2 - lj2;
-            if (if d22 < 0.0 { -d22 } else { d22 }) <= cut {
-                let inv22 = 1.0 / d22.mul_add(d22, eta_sq);
+            if d22.abs() <= cut {
+                let inv22 = d22.mul_add(d22, eta_sq).recip();
                 out_r[i + 2] = d22.mul_add(inv22, out_r[i + 2]);
                 out_i[i + 2] = eta.mul_add(inv22, out_i[i + 2]);
             }
             let d32 = l3 - lj2;
-            if (if d32 < 0.0 { -d32 } else { d32 }) <= cut {
-                let inv32 = 1.0 / d32.mul_add(d32, eta_sq);
+            if d32.abs() <= cut {
+                let inv32 = d32.mul_add(d32, eta_sq).recip();
                 out_r[i + 3] = d32.mul_add(inv32, out_r[i + 3]);
                 out_i[i + 3] = eta.mul_add(inv32, out_i[i + 3]);
             }
 
             let d03 = l0 - lj3;
-            if (if d03 < 0.0 { -d03 } else { d03 }) <= cut {
-                let inv03 = 1.0 / d03.mul_add(d03, eta_sq);
+            if d03.abs() <= cut {
+                let inv03 = d03.mul_add(d03, eta_sq).recip();
                 out_r[i] = d03.mul_add(inv03, out_r[i]);
                 out_i[i] = eta.mul_add(inv03, out_i[i]);
             }
             let d13 = l1 - lj3;
-            if (if d13 < 0.0 { -d13 } else { d13 }) <= cut {
-                let inv13 = 1.0 / d13.mul_add(d13, eta_sq);
+            if d13.abs() <= cut {
+                let inv13 = d13.mul_add(d13, eta_sq).recip();
                 out_r[i + 1] = d13.mul_add(inv13, out_r[i + 1]);
                 out_i[i + 1] = eta.mul_add(inv13, out_i[i + 1]);
             }
             let d23 = l2 - lj3;
-            if (if d23 < 0.0 { -d23 } else { d23 }) <= cut {
-                let inv23 = 1.0 / d23.mul_add(d23, eta_sq);
+            if d23.abs() <= cut {
+                let inv23 = d23.mul_add(d23, eta_sq).recip();
                 out_r[i + 2] = d23.mul_add(inv23, out_r[i + 2]);
                 out_i[i + 2] = eta.mul_add(inv23, out_i[i + 2]);
             }
             let d33 = l3 - lj3;
-            if (if d33 < 0.0 { -d33 } else { d33 }) <= cut {
-                let inv33 = 1.0 / d33.mul_add(d33, eta_sq);
+            if d33.abs() <= cut {
+                let inv33 = d33.mul_add(d33, eta_sq).recip();
                 out_r[i + 3] = d33.mul_add(inv33, out_r[i + 3]);
                 out_i[i + 3] = eta.mul_add(inv33, out_i[i + 3]);
             }
@@ -1278,8 +1333,8 @@ fn tiled_one_block_cutoff(
             let li = targets[i];
             for lj in [lj0, lj1, lj2, lj3] {
                 let d = li - lj;
-                if (if d < 0.0 { -d } else { d }) <= cut {
-                    let inv = 1.0 / d.mul_add(d, eta_sq);
+                if d.abs() <= cut {
+                    let inv = d.mul_add(d, eta_sq).recip();
                     out_r[i] = d.mul_add(inv, out_r[i]);
                     out_i[i] = eta.mul_add(inv, out_i[i]);
                 }
@@ -1294,8 +1349,8 @@ fn tiled_one_block_cutoff(
         let lambda_j = eigenvalues[j];
         for k in block_start..block_end {
             let diff = eigenvalues[k] - lambda_j;
-            if (if diff < 0.0 { -diff } else { diff }) <= cut {
-                let inv_denom = 1.0 / diff.mul_add(diff, eta_sq);
+            if diff.abs() <= cut {
+                let inv_denom = diff.mul_add(diff, eta_sq).recip();
                 out_r[k] = diff.mul_add(inv_denom, out_r[k]);
                 out_i[k] = eta.mul_add(inv_denom, out_i[k]);
             }
@@ -1307,14 +1362,14 @@ fn tiled_one_block_cutoff(
 /// Tiled inner loop with far-field cutoff: process all blocks.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn tiled_inner_loop(
-    eigenvalues: &[f64],
-    reals: &mut [f64],
-    imags: &mut [f64],
+fn tiled_inner_loop<T: CauchyFloat>(
+    eigenvalues: &[T],
+    reals: &mut [T],
+    imags: &mut [T],
     bs: usize,
-    eta: f64,
-    eta_sq: f64,
-    cut: f64,
+    eta: T,
+    eta_sq: T,
+    cut: T,
 ) {
     tiled_span_cutoff(eigenvalues, eigenvalues, reals, imags, bs, eta, eta_sq, cut);
 }
@@ -1330,18 +1385,18 @@ fn tiled_inner_loop(
 /// each thread accumulates into a disjoint, cache-aligned output span with
 /// no reduction and no false sharing.
 #[allow(clippy::too_many_arguments)]
-fn tiled_span_no_cutoff(
+fn tiled_span_no_cutoff<T: CauchyFloat>(
     // Eigenvalue sub-slice this span of outputs corresponds to
     // (`targets.len() == out_r.len()`); passed separately so all indices are
     // provably in-bounds from loop guards alone.
-    targets: &[f64],
+    targets: &[T],
     // All source eigenvalues.
-    eigenvalues: &[f64],
-    out_r: &mut [f64],
-    out_i: &mut [f64],
+    eigenvalues: &[T],
+    out_r: &mut [T],
+    out_i: &mut [T],
     bs: usize,
-    eta: f64,
-    eta_sq: f64,
+    eta: T,
+    eta_sq: T,
 ) {
     // OUTER loop over this span of target blocks — each block stays resident
     // in cache while we sweep all source eigenvalues.
@@ -1358,15 +1413,15 @@ fn tiled_span_no_cutoff(
 /// `[block_start, block_end)`, accumulating in place (exact, branch-free).
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-fn tiled_one_block_no_cutoff(
-    targets: &[f64],
-    eigenvalues: &[f64],
-    out_r: &mut [f64],
-    out_i: &mut [f64],
+fn tiled_one_block_no_cutoff<T: CauchyFloat>(
+    targets: &[T],
+    eigenvalues: &[T],
+    out_r: &mut [T],
+    out_i: &mut [T],
     block_start: usize,
     block_end: usize,
-    eta: f64,
-    eta_sq: f64,
+    eta: T,
+    eta_sq: T,
 ) {
     let p = eigenvalues.len();
     // INNER loop over source eigenvalues (quads to halve write traffic and
@@ -1387,82 +1442,82 @@ fn tiled_one_block_no_cutoff(
             let l3 = targets[i + 3];
 
             let d00 = l0 - lj0;
-            let inv00 = 1.0 / d00.mul_add(d00, eta_sq);
+            let inv00 = d00.mul_add(d00, eta_sq).recip();
             out_r[i] = d00.mul_add(inv00, out_r[i]);
             out_i[i] = eta.mul_add(inv00, out_i[i]);
 
             let d10 = l1 - lj0;
-            let inv10 = 1.0 / d10.mul_add(d10, eta_sq);
+            let inv10 = d10.mul_add(d10, eta_sq).recip();
             out_r[i + 1] = d10.mul_add(inv10, out_r[i + 1]);
             out_i[i + 1] = eta.mul_add(inv10, out_i[i + 1]);
 
             let d20 = l2 - lj0;
-            let inv20 = 1.0 / d20.mul_add(d20, eta_sq);
+            let inv20 = d20.mul_add(d20, eta_sq).recip();
             out_r[i + 2] = d20.mul_add(inv20, out_r[i + 2]);
             out_i[i + 2] = eta.mul_add(inv20, out_i[i + 2]);
 
             let d30 = l3 - lj0;
-            let inv30 = 1.0 / d30.mul_add(d30, eta_sq);
+            let inv30 = d30.mul_add(d30, eta_sq).recip();
             out_r[i + 3] = d30.mul_add(inv30, out_r[i + 3]);
             out_i[i + 3] = eta.mul_add(inv30, out_i[i + 3]);
 
             let d01 = l0 - lj1;
-            let inv01 = 1.0 / d01.mul_add(d01, eta_sq);
+            let inv01 = d01.mul_add(d01, eta_sq).recip();
             out_r[i] = d01.mul_add(inv01, out_r[i]);
             out_i[i] = eta.mul_add(inv01, out_i[i]);
 
             let d11 = l1 - lj1;
-            let inv11 = 1.0 / d11.mul_add(d11, eta_sq);
+            let inv11 = d11.mul_add(d11, eta_sq).recip();
             out_r[i + 1] = d11.mul_add(inv11, out_r[i + 1]);
             out_i[i + 1] = eta.mul_add(inv11, out_i[i + 1]);
 
             let d21 = l2 - lj1;
-            let inv21 = 1.0 / d21.mul_add(d21, eta_sq);
+            let inv21 = d21.mul_add(d21, eta_sq).recip();
             out_r[i + 2] = d21.mul_add(inv21, out_r[i + 2]);
             out_i[i + 2] = eta.mul_add(inv21, out_i[i + 2]);
 
             let d31 = l3 - lj1;
-            let inv31 = 1.0 / d31.mul_add(d31, eta_sq);
+            let inv31 = d31.mul_add(d31, eta_sq).recip();
             out_r[i + 3] = d31.mul_add(inv31, out_r[i + 3]);
             out_i[i + 3] = eta.mul_add(inv31, out_i[i + 3]);
 
             let d02 = l0 - lj2;
-            let inv02 = 1.0 / d02.mul_add(d02, eta_sq);
+            let inv02 = d02.mul_add(d02, eta_sq).recip();
             out_r[i] = d02.mul_add(inv02, out_r[i]);
             out_i[i] = eta.mul_add(inv02, out_i[i]);
 
             let d12 = l1 - lj2;
-            let inv12 = 1.0 / d12.mul_add(d12, eta_sq);
+            let inv12 = d12.mul_add(d12, eta_sq).recip();
             out_r[i + 1] = d12.mul_add(inv12, out_r[i + 1]);
             out_i[i + 1] = eta.mul_add(inv12, out_i[i + 1]);
 
             let d22 = l2 - lj2;
-            let inv22 = 1.0 / d22.mul_add(d22, eta_sq);
+            let inv22 = d22.mul_add(d22, eta_sq).recip();
             out_r[i + 2] = d22.mul_add(inv22, out_r[i + 2]);
             out_i[i + 2] = eta.mul_add(inv22, out_i[i + 2]);
 
             let d32 = l3 - lj2;
-            let inv32 = 1.0 / d32.mul_add(d32, eta_sq);
+            let inv32 = d32.mul_add(d32, eta_sq).recip();
             out_r[i + 3] = d32.mul_add(inv32, out_r[i + 3]);
             out_i[i + 3] = eta.mul_add(inv32, out_i[i + 3]);
 
             let d03 = l0 - lj3;
-            let inv03 = 1.0 / d03.mul_add(d03, eta_sq);
+            let inv03 = d03.mul_add(d03, eta_sq).recip();
             out_r[i] = d03.mul_add(inv03, out_r[i]);
             out_i[i] = eta.mul_add(inv03, out_i[i]);
 
             let d13 = l1 - lj3;
-            let inv13 = 1.0 / d13.mul_add(d13, eta_sq);
+            let inv13 = d13.mul_add(d13, eta_sq).recip();
             out_r[i + 1] = d13.mul_add(inv13, out_r[i + 1]);
             out_i[i + 1] = eta.mul_add(inv13, out_i[i + 1]);
 
             let d23 = l2 - lj3;
-            let inv23 = 1.0 / d23.mul_add(d23, eta_sq);
+            let inv23 = d23.mul_add(d23, eta_sq).recip();
             out_r[i + 2] = d23.mul_add(inv23, out_r[i + 2]);
             out_i[i + 2] = eta.mul_add(inv23, out_i[i + 2]);
 
             let d33 = l3 - lj3;
-            let inv33 = 1.0 / d33.mul_add(d33, eta_sq);
+            let inv33 = d33.mul_add(d33, eta_sq).recip();
             out_r[i + 3] = d33.mul_add(inv33, out_r[i + 3]);
             out_i[i + 3] = eta.mul_add(inv33, out_i[i + 3]);
 
@@ -1474,7 +1529,7 @@ fn tiled_one_block_no_cutoff(
             let li = targets[i];
             for lj in [lj0, lj1, lj2, lj3] {
                 let d = li - lj;
-                let inv = 1.0 / d.mul_add(d, eta_sq);
+                let inv = d.mul_add(d, eta_sq).recip();
                 out_r[i] = d.mul_add(inv, out_r[i]);
                 out_i[i] = eta.mul_add(inv, out_i[i]);
             }
@@ -1488,7 +1543,7 @@ fn tiled_one_block_no_cutoff(
         let lambda_j = eigenvalues[j];
         for k in block_start..block_end {
             let diff = eigenvalues[k] - lambda_j;
-            let inv_denom = 1.0 / diff.mul_add(diff, eta_sq);
+            let inv_denom = diff.mul_add(diff, eta_sq).recip();
             out_r[k] = diff.mul_add(inv_denom, out_r[k]);
             out_i[k] = eta.mul_add(inv_denom, out_i[k]);
         }
@@ -1610,7 +1665,7 @@ pub(crate) fn compute_all_stieltjes_blocked_tiled_f32(
     let mut imags = vec![0.0_f32; p];
 
     if cutoff.is_some() {
-        tiled_inner_loop_f32(
+        tiled_inner_loop(
             eigenvalues,
             &mut reals,
             &mut imags,
@@ -1620,460 +1675,22 @@ pub(crate) fn compute_all_stieltjes_blocked_tiled_f32(
             cut_dist,
         );
     } else {
-        tiled_inner_loop_no_cutoff_f32(eigenvalues, &mut reals, &mut imags, bs, eta, eta_sq);
+        // Full-square accumulation over every ordered pair — the sequential
+        // no-cutoff f64 kernel instead pairs symmetric terms for half the
+        // work; that pairing scatters updates and does not change the result
+        // class, but it is NOT what this entry point historically computed.
+        tiled_span_no_cutoff(
+            eigenvalues,
+            eigenvalues,
+            &mut reals,
+            &mut imags,
+            bs,
+            eta,
+            eta_sq,
+        );
     }
 
     (reals, imags)
-}
-
-/// Float32 tiled inner loop with far-field cutoff.
-#[inline(always)]
-fn tiled_inner_loop_f32(
-    eigenvalues: &[f32],
-    reals: &mut [f32],
-    imags: &mut [f32],
-    bs: usize,
-    eta: f32,
-    eta_sq: f32,
-    cut: f32,
-) {
-    let p = eigenvalues.len();
-    for block_start in (0..p).step_by(bs) {
-        let block_end = (block_start + bs).min(p);
-        let mut j = 0;
-        while j + 4 <= p {
-            let lj0 = eigenvalues[j];
-            let lj1 = eigenvalues[j + 1];
-            let lj2 = eigenvalues[j + 2];
-            let lj3 = eigenvalues[j + 3];
-            let mut i = block_start;
-            while i + 4 <= block_end {
-                let l0 = eigenvalues[i];
-                let l1 = eigenvalues[i + 1];
-                let l2 = eigenvalues[i + 2];
-                let l3 = eigenvalues[i + 3];
-
-                let d00 = l0 - lj0;
-                let a00 = if d00 < 0.0 { -d00 } else { d00 };
-                if a00 <= cut {
-                    let denom00 = d00.mul_add(d00, eta_sq);
-                    let inv00 = 1.0 / denom00;
-                    reals[i] = d00.mul_add(inv00, reals[i]);
-                    imags[i] = eta.mul_add(inv00, imags[i]);
-                }
-                let d10 = l1 - lj0;
-                let a10 = if d10 < 0.0 { -d10 } else { d10 };
-                if a10 <= cut {
-                    let denom10 = d10.mul_add(d10, eta_sq);
-                    let inv10 = 1.0 / denom10;
-                    reals[i + 1] = d10.mul_add(inv10, reals[i + 1]);
-                    imags[i + 1] = eta.mul_add(inv10, imags[i + 1]);
-                }
-                let d20 = l2 - lj0;
-                let a20 = if d20 < 0.0 { -d20 } else { d20 };
-                if a20 <= cut {
-                    let denom20 = d20.mul_add(d20, eta_sq);
-                    let inv20 = 1.0 / denom20;
-                    reals[i + 2] = d20.mul_add(inv20, reals[i + 2]);
-                    imags[i + 2] = eta.mul_add(inv20, imags[i + 2]);
-                }
-                let d30 = l3 - lj0;
-                let a30 = if d30 < 0.0 { -d30 } else { d30 };
-                if a30 <= cut {
-                    let denom30 = d30.mul_add(d30, eta_sq);
-                    let inv30 = 1.0 / denom30;
-                    reals[i + 3] = d30.mul_add(inv30, reals[i + 3]);
-                    imags[i + 3] = eta.mul_add(inv30, imags[i + 3]);
-                }
-
-                let d01 = l0 - lj1;
-                let a01 = if d01 < 0.0 { -d01 } else { d01 };
-                if a01 <= cut {
-                    let denom01 = d01.mul_add(d01, eta_sq);
-                    let inv01 = 1.0 / denom01;
-                    reals[i] = d01.mul_add(inv01, reals[i]);
-                    imags[i] = eta.mul_add(inv01, imags[i]);
-                }
-                let d11 = l1 - lj1;
-                let a11 = if d11 < 0.0 { -d11 } else { d11 };
-                if a11 <= cut {
-                    let denom11 = d11.mul_add(d11, eta_sq);
-                    let inv11 = 1.0 / denom11;
-                    reals[i + 1] = d11.mul_add(inv11, reals[i + 1]);
-                    imags[i + 1] = eta.mul_add(inv11, imags[i + 1]);
-                }
-                let d21 = l2 - lj1;
-                let a21 = if d21 < 0.0 { -d21 } else { d21 };
-                if a21 <= cut {
-                    let denom21 = d21.mul_add(d21, eta_sq);
-                    let inv21 = 1.0 / denom21;
-                    reals[i + 2] = d21.mul_add(inv21, reals[i + 2]);
-                    imags[i + 2] = eta.mul_add(inv21, imags[i + 2]);
-                }
-                let d31 = l3 - lj1;
-                let a31 = if d31 < 0.0 { -d31 } else { d31 };
-                if a31 <= cut {
-                    let denom31 = d31.mul_add(d31, eta_sq);
-                    let inv31 = 1.0 / denom31;
-                    reals[i + 3] = d31.mul_add(inv31, reals[i + 3]);
-                    imags[i + 3] = eta.mul_add(inv31, imags[i + 3]);
-                }
-
-                let d02 = l0 - lj2;
-                let a02 = if d02 < 0.0 { -d02 } else { d02 };
-                if a02 <= cut {
-                    let denom02 = d02.mul_add(d02, eta_sq);
-                    let inv02 = 1.0 / denom02;
-                    reals[i] = d02.mul_add(inv02, reals[i]);
-                    imags[i] = eta.mul_add(inv02, imags[i]);
-                }
-                let d12 = l1 - lj2;
-                let a12 = if d12 < 0.0 { -d12 } else { d12 };
-                if a12 <= cut {
-                    let denom12 = d12.mul_add(d12, eta_sq);
-                    let inv12 = 1.0 / denom12;
-                    reals[i + 1] = d12.mul_add(inv12, reals[i + 1]);
-                    imags[i + 1] = eta.mul_add(inv12, imags[i + 1]);
-                }
-                let d22 = l2 - lj2;
-                let a22 = if d22 < 0.0 { -d22 } else { d22 };
-                if a22 <= cut {
-                    let denom22 = d22.mul_add(d22, eta_sq);
-                    let inv22 = 1.0 / denom22;
-                    reals[i + 2] = d22.mul_add(inv22, reals[i + 2]);
-                    imags[i + 2] = eta.mul_add(inv22, imags[i + 2]);
-                }
-                let d32 = l3 - lj2;
-                let a32 = if d32 < 0.0 { -d32 } else { d32 };
-                if a32 <= cut {
-                    let denom32 = d32.mul_add(d32, eta_sq);
-                    let inv32 = 1.0 / denom32;
-                    reals[i + 3] = d32.mul_add(inv32, reals[i + 3]);
-                    imags[i + 3] = eta.mul_add(inv32, imags[i + 3]);
-                }
-
-                let d03 = l0 - lj3;
-                let a03 = if d03 < 0.0 { -d03 } else { d03 };
-                if a03 <= cut {
-                    let denom03 = d03.mul_add(d03, eta_sq);
-                    let inv03 = 1.0 / denom03;
-                    reals[i] = d03.mul_add(inv03, reals[i]);
-                    imags[i] = eta.mul_add(inv03, imags[i]);
-                }
-                let d13 = l1 - lj3;
-                let a13 = if d13 < 0.0 { -d13 } else { d13 };
-                if a13 <= cut {
-                    let denom13 = d13.mul_add(d13, eta_sq);
-                    let inv13 = 1.0 / denom13;
-                    reals[i + 1] = d13.mul_add(inv13, reals[i + 1]);
-                    imags[i + 1] = eta.mul_add(inv13, imags[i + 1]);
-                }
-                let d23 = l2 - lj3;
-                let a23 = if d23 < 0.0 { -d23 } else { d23 };
-                if a23 <= cut {
-                    let denom23 = d23.mul_add(d23, eta_sq);
-                    let inv23 = 1.0 / denom23;
-                    reals[i + 2] = d23.mul_add(inv23, reals[i + 2]);
-                    imags[i + 2] = eta.mul_add(inv23, imags[i + 2]);
-                }
-                let d33 = l3 - lj3;
-                let a33 = if d33 < 0.0 { -d33 } else { d33 };
-                if a33 <= cut {
-                    let denom33 = d33.mul_add(d33, eta_sq);
-                    let inv33 = 1.0 / denom33;
-                    reals[i + 3] = d33.mul_add(inv33, reals[i + 3]);
-                    imags[i + 3] = eta.mul_add(inv33, imags[i + 3]);
-                }
-
-                i += 4;
-            }
-            while i < block_end {
-                let li = eigenvalues[i];
-                let d0 = li - lj0;
-                if d0.abs() <= cut {
-                    let denom0 = d0.mul_add(d0, eta_sq);
-                    let inv0 = 1.0 / denom0;
-                    reals[i] = d0.mul_add(inv0, reals[i]);
-                    imags[i] = eta.mul_add(inv0, imags[i]);
-                }
-                let d1 = li - lj1;
-                if d1.abs() <= cut {
-                    let denom1 = d1.mul_add(d1, eta_sq);
-                    let inv1 = 1.0 / denom1;
-                    reals[i] = d1.mul_add(inv1, reals[i]);
-                    imags[i] = eta.mul_add(inv1, imags[i]);
-                }
-                let d2 = li - lj2;
-                if d2.abs() <= cut {
-                    let denom2 = d2.mul_add(d2, eta_sq);
-                    let inv2 = 1.0 / denom2;
-                    reals[i] = d2.mul_add(inv2, reals[i]);
-                    imags[i] = eta.mul_add(inv2, imags[i]);
-                }
-                let d3 = li - lj3;
-                if d3.abs() <= cut {
-                    let denom3 = d3.mul_add(d3, eta_sq);
-                    let inv3 = 1.0 / denom3;
-                    reals[i] = d3.mul_add(inv3, reals[i]);
-                    imags[i] = eta.mul_add(inv3, imags[i]);
-                }
-                i += 1;
-            }
-            j += 4;
-        }
-        while j < p {
-            let lambda_j = eigenvalues[j];
-            let mut i = block_start;
-            while i + 4 <= block_end {
-                let l0 = eigenvalues[i];
-                let l1 = eigenvalues[i + 1];
-                let l2 = eigenvalues[i + 2];
-                let l3 = eigenvalues[i + 3];
-
-                let d0 = l0 - lambda_j;
-                if d0.abs() <= cut {
-                    let denom0 = d0.mul_add(d0, eta_sq);
-                    let inv0 = 1.0 / denom0;
-                    reals[i] = d0.mul_add(inv0, reals[i]);
-                    imags[i] = eta.mul_add(inv0, imags[i]);
-                }
-                let d1 = l1 - lambda_j;
-                if d1.abs() <= cut {
-                    let denom1 = d1.mul_add(d1, eta_sq);
-                    let inv1 = 1.0 / denom1;
-                    reals[i + 1] = d1.mul_add(inv1, reals[i + 1]);
-                    imags[i + 1] = eta.mul_add(inv1, imags[i + 1]);
-                }
-                let d2 = l2 - lambda_j;
-                if d2.abs() <= cut {
-                    let denom2 = d2.mul_add(d2, eta_sq);
-                    let inv2 = 1.0 / denom2;
-                    reals[i + 2] = d2.mul_add(inv2, reals[i + 2]);
-                    imags[i + 2] = eta.mul_add(inv2, imags[i + 2]);
-                }
-                let d3 = l3 - lambda_j;
-                if d3.abs() <= cut {
-                    let denom3 = d3.mul_add(d3, eta_sq);
-                    let inv3 = 1.0 / denom3;
-                    reals[i + 3] = d3.mul_add(inv3, reals[i + 3]);
-                    imags[i + 3] = eta.mul_add(inv3, imags[i + 3]);
-                }
-                i += 4;
-            }
-            while i < block_end {
-                let diff = eigenvalues[i] - lambda_j;
-                if diff.abs() <= cut {
-                    let denom = diff.mul_add(diff, eta_sq);
-                    let inv_denom = 1.0 / denom;
-                    reals[i] = diff.mul_add(inv_denom, reals[i]);
-                    imags[i] = eta.mul_add(inv_denom, imags[i]);
-                }
-                i += 1;
-            }
-            j += 1;
-        }
-    }
-}
-
-/// Float32 tiled inner loop without far-field cutoff (exact).
-#[inline(always)]
-fn tiled_inner_loop_no_cutoff_f32(
-    eigenvalues: &[f32],
-    reals: &mut [f32],
-    imags: &mut [f32],
-    bs: usize,
-    eta: f32,
-    eta_sq: f32,
-) {
-    let p = eigenvalues.len();
-    for block_start in (0..p).step_by(bs) {
-        let block_end = (block_start + bs).min(p);
-        let mut j = 0;
-        while j + 4 <= p {
-            let lj0 = eigenvalues[j];
-            let lj1 = eigenvalues[j + 1];
-            let lj2 = eigenvalues[j + 2];
-            let lj3 = eigenvalues[j + 3];
-            let mut i = block_start;
-            while i + 4 <= block_end {
-                let l0 = eigenvalues[i];
-                let l1 = eigenvalues[i + 1];
-                let l2 = eigenvalues[i + 2];
-                let l3 = eigenvalues[i + 3];
-
-                let d00 = l0 - lj0;
-                let denom00 = d00.mul_add(d00, eta_sq);
-                let inv00 = 1.0 / denom00;
-                reals[i] = d00.mul_add(inv00, reals[i]);
-                imags[i] = eta.mul_add(inv00, imags[i]);
-
-                let d10 = l1 - lj0;
-                let denom10 = d10.mul_add(d10, eta_sq);
-                let inv10 = 1.0 / denom10;
-                reals[i + 1] = d10.mul_add(inv10, reals[i + 1]);
-                imags[i + 1] = eta.mul_add(inv10, imags[i + 1]);
-
-                let d20 = l2 - lj0;
-                let denom20 = d20.mul_add(d20, eta_sq);
-                let inv20 = 1.0 / denom20;
-                reals[i + 2] = d20.mul_add(inv20, reals[i + 2]);
-                imags[i + 2] = eta.mul_add(inv20, imags[i + 2]);
-
-                let d30 = l3 - lj0;
-                let denom30 = d30.mul_add(d30, eta_sq);
-                let inv30 = 1.0 / denom30;
-                reals[i + 3] = d30.mul_add(inv30, reals[i + 3]);
-                imags[i + 3] = eta.mul_add(inv30, imags[i + 3]);
-
-                let d01 = l0 - lj1;
-                let denom01 = d01.mul_add(d01, eta_sq);
-                let inv01 = 1.0 / denom01;
-                reals[i] = d01.mul_add(inv01, reals[i]);
-                imags[i] = eta.mul_add(inv01, imags[i]);
-
-                let d11 = l1 - lj1;
-                let denom11 = d11.mul_add(d11, eta_sq);
-                let inv11 = 1.0 / denom11;
-                reals[i + 1] = d11.mul_add(inv11, reals[i + 1]);
-                imags[i + 1] = eta.mul_add(inv11, imags[i + 1]);
-
-                let d21 = l2 - lj1;
-                let denom21 = d21.mul_add(d21, eta_sq);
-                let inv21 = 1.0 / denom21;
-                reals[i + 2] = d21.mul_add(inv21, reals[i + 2]);
-                imags[i + 2] = eta.mul_add(inv21, imags[i + 2]);
-
-                let d31 = l3 - lj1;
-                let denom31 = d31.mul_add(d31, eta_sq);
-                let inv31 = 1.0 / denom31;
-                reals[i + 3] = d31.mul_add(inv31, reals[i + 3]);
-                imags[i + 3] = eta.mul_add(inv31, imags[i + 3]);
-
-                let d02 = l0 - lj2;
-                let denom02 = d02.mul_add(d02, eta_sq);
-                let inv02 = 1.0 / denom02;
-                reals[i] = d02.mul_add(inv02, reals[i]);
-                imags[i] = eta.mul_add(inv02, imags[i]);
-
-                let d12 = l1 - lj2;
-                let denom12 = d12.mul_add(d12, eta_sq);
-                let inv12 = 1.0 / denom12;
-                reals[i + 1] = d12.mul_add(inv12, reals[i + 1]);
-                imags[i + 1] = eta.mul_add(inv12, imags[i + 1]);
-
-                let d22 = l2 - lj2;
-                let denom22 = d22.mul_add(d22, eta_sq);
-                let inv22 = 1.0 / denom22;
-                reals[i + 2] = d22.mul_add(inv22, reals[i + 2]);
-                imags[i + 2] = eta.mul_add(inv22, imags[i + 2]);
-
-                let d32 = l3 - lj2;
-                let denom32 = d32.mul_add(d32, eta_sq);
-                let inv32 = 1.0 / denom32;
-                reals[i + 3] = d32.mul_add(inv32, reals[i + 3]);
-                imags[i + 3] = eta.mul_add(inv32, imags[i + 3]);
-
-                let d03 = l0 - lj3;
-                let denom03 = d03.mul_add(d03, eta_sq);
-                let inv03 = 1.0 / denom03;
-                reals[i] = d03.mul_add(inv03, reals[i]);
-                imags[i] = eta.mul_add(inv03, imags[i]);
-
-                let d13 = l1 - lj3;
-                let denom13 = d13.mul_add(d13, eta_sq);
-                let inv13 = 1.0 / denom13;
-                reals[i + 1] = d13.mul_add(inv13, reals[i + 1]);
-                imags[i + 1] = eta.mul_add(inv13, imags[i + 1]);
-
-                let d23 = l2 - lj3;
-                let denom23 = d23.mul_add(d23, eta_sq);
-                let inv23 = 1.0 / denom23;
-                reals[i + 2] = d23.mul_add(inv23, reals[i + 2]);
-                imags[i + 2] = eta.mul_add(inv23, imags[i + 2]);
-
-                let d33 = l3 - lj3;
-                let denom33 = d33.mul_add(d33, eta_sq);
-                let inv33 = 1.0 / denom33;
-                reals[i + 3] = d33.mul_add(inv33, reals[i + 3]);
-                imags[i + 3] = eta.mul_add(inv33, imags[i + 3]);
-
-                i += 4;
-            }
-            while i < block_end {
-                let li = eigenvalues[i];
-                let d0 = li - lj0;
-                let denom0 = d0.mul_add(d0, eta_sq);
-                let inv0 = 1.0 / denom0;
-                reals[i] = d0.mul_add(inv0, reals[i]);
-                imags[i] = eta.mul_add(inv0, imags[i]);
-
-                let d1 = li - lj1;
-                let denom1 = d1.mul_add(d1, eta_sq);
-                let inv1 = 1.0 / denom1;
-                reals[i] = d1.mul_add(inv1, reals[i]);
-                imags[i] = eta.mul_add(inv1, imags[i]);
-
-                let d2 = li - lj2;
-                let denom2 = d2.mul_add(d2, eta_sq);
-                let inv2 = 1.0 / denom2;
-                reals[i] = d2.mul_add(inv2, reals[i]);
-                imags[i] = eta.mul_add(inv2, imags[i]);
-
-                let d3 = li - lj3;
-                let denom3 = d3.mul_add(d3, eta_sq);
-                let inv3 = 1.0 / denom3;
-                reals[i] = d3.mul_add(inv3, reals[i]);
-                imags[i] = eta.mul_add(inv3, imags[i]);
-                i += 1;
-            }
-            j += 4;
-        }
-        while j < p {
-            let lambda_j = eigenvalues[j];
-            let mut i = block_start;
-            while i + 4 <= block_end {
-                let l0 = eigenvalues[i];
-                let l1 = eigenvalues[i + 1];
-                let l2 = eigenvalues[i + 2];
-                let l3 = eigenvalues[i + 3];
-
-                let d0 = l0 - lambda_j;
-                let denom0 = d0.mul_add(d0, eta_sq);
-                let inv0 = 1.0 / denom0;
-                reals[i] = d0.mul_add(inv0, reals[i]);
-                imags[i] = eta.mul_add(inv0, imags[i]);
-
-                let d1 = l1 - lambda_j;
-                let denom1 = d1.mul_add(d1, eta_sq);
-                let inv1 = 1.0 / denom1;
-                reals[i + 1] = d1.mul_add(inv1, reals[i + 1]);
-                imags[i + 1] = eta.mul_add(inv1, imags[i + 1]);
-
-                let d2 = l2 - lambda_j;
-                let denom2 = d2.mul_add(d2, eta_sq);
-                let inv2 = 1.0 / denom2;
-                reals[i + 2] = d2.mul_add(inv2, reals[i + 2]);
-                imags[i + 2] = eta.mul_add(inv2, imags[i + 2]);
-
-                let d3 = l3 - lambda_j;
-                let denom3 = d3.mul_add(d3, eta_sq);
-                let inv3 = 1.0 / denom3;
-                reals[i + 3] = d3.mul_add(inv3, reals[i + 3]);
-                imags[i + 3] = eta.mul_add(inv3, imags[i + 3]);
-
-                i += 4;
-            }
-            while i < block_end {
-                let diff = eigenvalues[i] - lambda_j;
-                let denom = diff.mul_add(diff, eta_sq);
-                let inv_denom = 1.0 / denom;
-                reals[i] = diff.mul_add(inv_denom, reals[i]);
-                imags[i] = eta.mul_add(inv_denom, imags[i]);
-                i += 1;
-            }
-            j += 1;
-        }
-    }
 }
 
 #[cfg(test)]
