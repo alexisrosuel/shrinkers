@@ -170,11 +170,12 @@ pub fn compute_stieltjes_at_points(
         StieltjesMethod::ChebCode
         | StieltjesMethod::ChebCodeFast
         | StieltjesMethod::ChebCodeXtreme => {
-            let (theta, n, leaf_cap) = match method {
-                StieltjesMethod::ChebCodeFast => (0.5, 9, 32),
-                StieltjesMethod::ChebCodeXtreme => (0.25, 11, 16),
-                _ => (0.5, 11, 32),
+            let preset = match method {
+                StieltjesMethod::ChebCodeFast => chebcode::ChebPreset::FAST,
+                StieltjesMethod::ChebCodeXtreme => chebcode::ChebPreset::XTREME,
+                _ => chebcode::ChebPreset::DEFAULT,
             };
+            let (theta, n, leaf_cap) = preset.parts();
             let batch = chebcode::ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap);
             batch.evaluate_points(query_points, eta, parallel)
         }
@@ -338,21 +339,21 @@ pub fn compute_all_stieltjes(
             treecode::compute_all_stieltjes_treecode_impl(eigenvalues, eta, 0.5, 6, parallel),
             inv_p,
         ),
-        // Default preset (theta=0.5, n=11, leaf=32): measured to dominate the
-        // historical (0.3, 9, 16) on BOTH runtime and error at every size —
-        // see the overnight re-tuning note in the CHANGELOG.
-        StieltjesMethod::ChebCode => scale_aos(
-            chebcode::compute_all_stieltjes_chebcode_impl(eigenvalues, eta, 0.5, 11, 32, parallel),
-            inv_p,
-        ),
-        StieltjesMethod::ChebCodeFast => scale_aos(
-            chebcode::compute_all_stieltjes_chebcode_impl(eigenvalues, eta, 0.5, 9, 32, parallel),
-            inv_p,
-        ),
-        StieltjesMethod::ChebCodeXtreme => scale_aos(
-            chebcode::compute_all_stieltjes_chebcode_impl(eigenvalues, eta, 0.25, 11, 16, parallel),
-            inv_p,
-        ),
+        // Presets live in chebcode::ChebPreset — the single source of truth
+        // shared by dispatch, Python bindings and benchmarks.
+        StieltjesMethod::ChebCode
+        | StieltjesMethod::ChebCodeFast
+        | StieltjesMethod::ChebCodeXtreme => {
+            let preset = match method {
+                StieltjesMethod::ChebCodeFast => chebcode::ChebPreset::FAST,
+                StieltjesMethod::ChebCodeXtreme => chebcode::ChebPreset::XTREME,
+                _ => chebcode::ChebPreset::DEFAULT,
+            };
+            scale_aos(
+                chebcode::compute_all_stieltjes_chebcode_preset(eigenvalues, eta, preset, parallel),
+                inv_p,
+            )
+        }
         StieltjesMethod::Ewald => scale_aos(
             ewald::compute_all_stieltjes_ewald(eigenvalues, eta, None, fft_grid_size),
             inv_p,

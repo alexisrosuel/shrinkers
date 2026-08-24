@@ -72,8 +72,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   −50 % parallel, error unchanged.
 - **Two-lane pairwise multi-η traversal** (`contribution_x2`) — one η per
   F64x2 lane, sources/nodes splatted across lanes so accumulator lanes
-  keep fixed meaning; γ-sweep workflow now measures 8–11× vs naive
-  per-η calls.
+  keep fixed meaning; γ-sweep workflow now measures 6.7–7.5× vs naive
+  per-η calls at the DEFAULT preset (8.5–11× at FAST).
 - **Chunked parallel queries** for ChebCode single calls (256-query
   blocks): 4.9 → 3.95 ms rayon at p=50k.
 - **`ChebCodeBatch` — amortized multi-η driver for γ-sweeps.** The Chebyshev

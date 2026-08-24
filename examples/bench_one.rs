@@ -92,19 +92,21 @@ fn main() {
             let mut res = Vec::new();
             let ms = match what.as_str() {
                 "cheb" => {
-                    // optional: theta n leaf
+                    // optional: theta n leaf — defaults are the measured
+                    // ChebPreset::DEFAULT, not hand-copied numbers.
+                    let preset = shrinkers::stieltjes::ChebPreset::DEFAULT;
                     let theta: f64 = std::env::args()
                         .nth(2)
                         .map(|s| s.parse().unwrap())
-                        .unwrap_or(0.3);
+                        .unwrap_or(preset.theta);
                     let n: usize = std::env::args()
                         .nth(3)
                         .map(|s| s.parse().unwrap())
-                        .unwrap_or(9);
+                        .unwrap_or(preset.n);
                     let leaf: usize = std::env::args()
                         .nth(4)
                         .map(|s| s.parse().unwrap())
-                        .unwrap_or(16);
+                        .unwrap_or(preset.leaf_cap);
                     bench(|| {
                         res = shrinkers::stieltjes::compute_all_stieltjes_chebcode_impl(
                             &evs,

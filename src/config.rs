@@ -6,6 +6,15 @@
 pub(crate) mod pareto_autogen;
 
 /// Method for computing the Stieltjes transform.
+///
+/// Families, in rough accuracy order:
+/// - **exact O(p²)**: `Blocked*` variants — bit-stable zero-error anchor;
+/// - **FFT grid**: `Fft5/Fft3/Fft2`, `Adaptive`, `Ewald`, `Dst` —
+///   O(p log p) but floor ~1e-4..1e-5 (dominated by ChebCode today);
+/// - **treecodes**: `TreeCode`, then the `ChebCode*` preset family —
+///   the speed-at-accuracy frontier;
+/// - **meta**: `Auto`, `SpeedAuto`, `AccuracyAuto` resolve to a concrete
+///   method before dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StieltjesMethod {
     /// O(p²) naive scalar loop — no SIMD, no parallel

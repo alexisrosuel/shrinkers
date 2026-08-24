@@ -50,7 +50,7 @@ fn main() {
 
     // Batch: build once, evaluate_many across etas.
     let t1 = Instant::now();
-    let batch = ChebCodeBatch::build(&evs, 0.3, 9, 16);
+    let batch = ChebCodeBatch::build_preset(&evs, shrinkers::stieltjes::ChebPreset::DEFAULT);
     let build_ms = t1.elapsed().as_secs_f64() * 1e3;
     let t2 = Instant::now();
     let all = batch.evaluate_many(&etas);

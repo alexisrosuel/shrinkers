@@ -242,9 +242,9 @@ RIE deconvolution evaluates the same spectrum for many γ (one η per γ).
 `stieltjes::ChebCodeBatch::build(...)` constructs the Chebyshev tree once;
 `evaluate_many(&etas)` runs the sweep with the tree shared read-only,
 parallelizing ACROSS the η axis and evaluating etas pairwise through a
-two-lane traversal — measured **8–11×** faster than calling
-`compute_all_stieltjes_chebcode` per η (`examples/bench_batch.rs`: 16 η at
-p=20000 → 162→14 ms; 32 η at p=50000 → 702→84 ms). For root-finding on γ,
+two-lane traversal — measured **6.7–7.5×** faster than calling
+`compute_all_stieltjes_chebcode` per η at the DEFAULT preset (~8.5–11× at
+FAST; `examples/bench_batch.rs`). For root-finding on γ,
 `stieltjes_transform_with_deriv` returns S and its analytic derivative
 dS/dx in a single exact pass.
 
@@ -283,8 +283,9 @@ On top of that, `ChebCodeBatch` adds three amortizations:
   two-lane traversal — one η per F64x2 lane, every source/node splatted
   across lanes so each accumulator lane always means "its eta". Acceptance
   uses min(η₀, η₁), i.e. both lanes stay conservative; Rayon parallelizes
-  across eta pairs with the tree shared read-only. Measured 8–11× vs naive
-  per-η calls (`examples/bench_batch.rs`);
+  across eta pairs with the tree shared read-only. Measured **6.7–7.5×**
+  vs naive per-η calls at the DEFAULT preset, and ~8.5–11× at the FAST
+  preset (`examples/bench_batch.rs`);
 - **arbitrary query grids** (`evaluate_points(points, eta, parallel)`): same
   one-tree service for deconvolution grids — this is the path that replaced
   the accidental quadratic fallback in `deconvolve_spiked`;

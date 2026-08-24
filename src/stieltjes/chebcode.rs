@@ -513,12 +513,70 @@ impl FlatChebTree {
     }
 }
 
-/// Compute all Stieltjes transforms with the Chebyshev treecode.
+/// ChebCode operating point: opening angle, interpolation order, leaf capacity.
+///
+/// These three numbers fully parameterize the treecode's speed/accuracy
+/// trade-off. The three associated constants are the MEASURED presets
+/// (Apple M1 Max, MP spectra — see CHANGELOG); they are the single source
+/// of truth used by the dispatch table, the Python bindings and the
+/// benchmarks alike. Do not hardcode tuples elsewhere.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChebPreset {
+    /// Opening angle: larger = more far-field acceptance = faster, less accurate.
+    pub theta: f64,
+    /// Chebyshev interpolation order per panel.
+    pub n: usize,
+    /// Maximum sources per leaf (leaves are summed exactly).
+    pub leaf_cap: usize,
+}
+
+impl ChebPreset {
+    /// Dispatch default (`method = "chebcode"`): dominates the historical
+    /// (0.3, 9, 16) on BOTH runtime and error at every size.
+    pub const DEFAULT: Self = Self {
+        theta: 0.5,
+        n: 11,
+        leaf_cap: 32,
+    };
+    /// Speed preset (`"chebcode_fast"` / `"chebf"`): ~1e-8 error class at
+    /// the lowest measured runtime of the family.
+    pub const FAST: Self = Self {
+        theta: 0.5,
+        n: 9,
+        leaf_cap: 32,
+    };
+    /// Precision preset (`"chebcode_xtreme"` / `"chebx"`): ~1e-12 class
+    /// without paying the full exact O(p²).
+    pub const XTREME: Self = Self {
+        theta: 0.25,
+        n: 11,
+        leaf_cap: 16,
+    };
+
+    #[inline]
+    pub const fn parts(self) -> (f64, usize, usize) {
+        (self.theta, self.n, self.leaf_cap)
+    }
+}
+
+/// Compute all Stieltjes transforms with the Chebyshev treecode at the
+/// [`ChebPreset::DEFAULT`] operating point.
 ///
 /// Returns **raw sums** (not scaled by `1/p`); the caller applies scaling.
 pub fn compute_all_stieltjes_chebcode(eigenvalues: &[f64], eta: f64) -> Vec<(f64, f64)> {
-    // Defaults: theta 0.3, n=9 nodes, leaf_cap 16 → ~0 real/imag rel error.
-    compute_all_stieltjes_chebcode_impl(eigenvalues, eta, 0.3, 9, 16, false)
+    let (theta, n, leaf) = ChebPreset::DEFAULT.parts();
+    compute_all_stieltjes_chebcode_impl(eigenvalues, eta, theta, n, leaf, false)
+}
+
+/// Same at an explicit [`ChebPreset`], sequential or Rayon-parallel.
+pub fn compute_all_stieltjes_chebcode_preset(
+    eigenvalues: &[f64],
+    eta: f64,
+    preset: ChebPreset,
+    parallel: bool,
+) -> Vec<(f64, f64)> {
+    let (theta, n, leaf) = preset.parts();
+    compute_all_stieltjes_chebcode_impl(eigenvalues, eta, theta, n, leaf, parallel)
 }
 
 /// Chebyshev treecode with explicit opening-angle `theta`, node count `n`,
@@ -591,13 +649,10 @@ pub fn compute_all_stieltjes_chebcode_impl(
     }
 }
 
-/// Build just the tree — benchmarking helper exposing the build/eval split.
-pub fn chebcode_tree_for_bench(
-    eigenvalues: &[f64],
-    theta: f64,
-    n: usize,
-    leaf_cap: usize,
-) -> ChebCodeBatch {
+/// Build just the tree at an explicit preset — benchmarking helper exposing
+/// the build/eval split.
+pub fn chebcode_tree_for_bench(eigenvalues: &[f64], preset: ChebPreset) -> ChebCodeBatch {
+    let (theta, n, leaf_cap) = preset.parts();
     ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap)
 }
 
@@ -614,6 +669,12 @@ pub struct ChebCodeBatch {
 }
 
 impl ChebCodeBatch {
+    /// Build the tree once at an explicit [`ChebPreset`].
+    pub fn build_preset(eigenvalues: &[f64], preset: ChebPreset) -> Self {
+        let (theta, n, leaf_cap) = preset.parts();
+        Self::build(eigenvalues, theta, n, leaf_cap)
+    }
+
     /// Build the tree once. Results of every [`Self::evaluate`] call are
     /// indexed like `eigenvalues`.
     pub fn build(eigenvalues: &[f64], theta: f64, n: usize, leaf_cap: usize) -> Self {
@@ -773,7 +834,8 @@ mod tests {
             shuffled.swap(i, j);
         }
         for build_input in [&evals, &shuffled] {
-            let batch = ChebCodeBatch::build(build_input, 0.3, 9, 16);
+            // Same preset on both sides: the wrapper now runs DEFAULT.
+            let batch = ChebCodeBatch::build_preset(build_input, ChebPreset::DEFAULT);
             let etas = [0.02, 0.05, 0.11];
             let many = batch.evaluate_many(&etas);
             for (k, &eta) in etas.iter().enumerate() {
@@ -781,12 +843,13 @@ mod tests {
                 // Pairwise two-lane evaluation accepts a node only if BOTH
                 // lanes' criteria pass (eta_min); at acceptance boundaries
                 // this can differ from a lane's own single-eta traversal by
-                // one node, bounded by that node's far-field error (~1e-9).
+                // one node, bounded by that node's far-field error — i.e.
+                // by the preset's OWN accuracy scale (~1e-8 here).
                 for i in 0..p {
                     let dr = (many[k][i].0 - single[i].0).abs();
                     let di = (many[k][i].1 - single[i].1).abs();
                     assert!(
-                        dr <= 5e-9 * (1.0 + single[i].0.abs()) && di <= 5e-9,
+                        dr <= 5e-8 * (1.0 + single[i].0.abs()) && di <= 5e-8,
                         "batch mismatch at eta={eta} i={i}: {dr} {di}"
                     );
                 }

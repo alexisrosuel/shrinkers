@@ -257,8 +257,14 @@ fn config_from_kwargs(
 ///     (default: 0.1 / sqrt(p)).
 ///   margin: multiplicative margin above the fitted bulk edge for spike
 ///     detection (default 1.0; slightly above 1.0 adds robustness).
-///   method: Stieltjes kernel used for the bulk deconvolution — "auto"
-///     (default), "blocked", "blocked_tiled", "fft2", "chebcode", ...
+///   method: Stieltjes kernel used for the bulk deconvolution —
+///     exact family: "blocked", "blocked_tiled" (zero error);
+///     treecode presets: "chebcode_fast"/"chebf" (~1e-8, fastest),
+///       "chebcode" (~5e-10, default), "chebcode_xtreme"/"chebx" (~6e-13);
+///     FFT family: "fft2", "fft3", "fft5" (~4e-5); also "fmm", "ewald",
+///       "dst", "hodlr", "auto", "speed_auto", "accuracy_auto".
+///     The three chebcode presets share one measured parameter set
+///     (ChebPreset in the Rust API).
 ///   parallelism: "seq" (default) or "rayon".
 ///   cutoff: far-field cutoff ratio (float) or None/"inferred" to disable.
 ///
