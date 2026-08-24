@@ -443,7 +443,8 @@ mod tests {
     fn test_symmetric_eigh_spiked() {
         // A random symmetric matrix plus a strong rank-1 spike.
         let p = 20;
-        let mut rng = rand::rng();
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(11);
         use rand::RngExt;
         let mut a = Array2::zeros((p, p));
         for i in 0..p {

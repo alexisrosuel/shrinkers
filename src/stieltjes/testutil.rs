@@ -28,3 +28,17 @@ pub(crate) fn exact_stieltjes(evals: &[f64], eta: f64) -> Vec<(f64, f64)> {
     }
     out
 }
+
+/// Deterministic Fisher–Yates shuffle (LCG driving values, matching the
+/// crate's generator convention) — lets order-invariance tests feed
+/// genuinely permuted input while staying reproducible.
+pub(crate) fn shuffled(values: &[f64], seed: u64) -> Vec<f64> {
+    let mut v = values.to_vec();
+    let mut s = seed;
+    for i in (1..v.len()).rev() {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let j = (s >> 33) as usize % (i + 1);
+        v.swap(i, j);
+    }
+    v
+}

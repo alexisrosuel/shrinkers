@@ -472,7 +472,8 @@ mod tests {
 
         // Generate MP-distributed eigenvalues
         use rand::RngExt;
-        let mut rng = rand::rng();
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(21);
         let mut evals: Vec<f64> = Vec::with_capacity(p);
         while evals.len() < p {
             let lam = rng.random::<f64>() * (lam_mp_max - lam_mp_min) + lam_mp_min;
@@ -515,7 +516,8 @@ mod tests {
         let lam_mp_max = (1.0 + c.sqrt()).powi(2);
 
         use rand::RngExt;
-        let mut rng = rand::rng();
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(22);
         let mut evals: Vec<f64> = Vec::with_capacity(p);
         while evals.len() < p - spikes.len() {
             let lam = rng.random::<f64>() * (lam_mp_max - lam_mp_min) + lam_mp_min;
@@ -696,7 +698,8 @@ mod tests {
         let lam_mp_max = (1.0 + c.sqrt()).powi(2);
 
         use rand::RngExt;
-        let mut rng = rand::rng();
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(23);
         let mut evals: Vec<f64> = Vec::with_capacity(p);
         while evals.len() < p {
             let lam = rng.random::<f64>() * (lam_mp_max - lam_mp_min) + lam_mp_min;
@@ -735,7 +738,8 @@ mod tests {
         let p = 500;
 
         use rand::RngExt;
-        let mut rng = rand::rng();
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(24);
         let mut mp_evals: Vec<f64> = Vec::with_capacity(p);
 
         while mp_evals.len() < p - 1 {
@@ -784,7 +788,8 @@ mod tests {
         let lam_mp_max = (1.0 + c.sqrt()).powi(2);
 
         use rand::RngExt;
-        let mut rng = rand::rng();
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(25);
         let mut evals: Vec<f64> = Vec::with_capacity(p);
         while evals.len() < p {
             let lam = rng.random::<f64>() * (lam_mp_max - lam_mp_min) + lam_mp_min;

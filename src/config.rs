@@ -496,31 +496,27 @@ mod tests {
 
     #[test]
     fn test_auto_resolution_is_parallelism_aware() {
-        // At large p, Auto should pick TreeCode when parallel, Fft2 when not.
-        let seq = RmtConfig::new(0.5)
-            .with_stieltjes(StieltjesMethod::Auto)
-            .with_parallelism(Parallelism::Sequential)
-            .resolve_auto(10000);
-        assert_eq!(seq.stieltjes_method, StieltjesMethod::Fft2);
-
-        let par = RmtConfig::new(0.5)
-            .with_stieltjes(StieltjesMethod::Auto)
-            .with_parallelism(Parallelism::Rayon)
-            .resolve_auto(10000);
-        assert_eq!(par.stieltjes_method, StieltjesMethod::ChebCode);
-
-        // At small p, both pick AutoVectorized.
-        let seq_small = RmtConfig::new(0.5)
-            .with_stieltjes(StieltjesMethod::Auto)
-            .with_parallelism(Parallelism::Sequential)
-            .resolve_auto(100);
-        assert_eq!(seq_small.stieltjes_method, StieltjesMethod::AutoVectorized);
-
-        let par_small = RmtConfig::new(0.5)
-            .with_stieltjes(StieltjesMethod::Auto)
-            .with_parallelism(Parallelism::Rayon)
-            .resolve_auto(100);
-        assert_eq!(par_small.stieltjes_method, StieltjesMethod::AutoVectorized);
+        // (parallelism, p, expected pick)
+        for (par, p, expected) in [
+            (Parallelism::Sequential, 10_000usize, StieltjesMethod::Fft2),
+            (Parallelism::Rayon, 10_000usize, StieltjesMethod::ChebCode),
+            (
+                Parallelism::Sequential,
+                100usize,
+                StieltjesMethod::AutoVectorized,
+            ),
+            (
+                Parallelism::Rayon,
+                100usize,
+                StieltjesMethod::AutoVectorized,
+            ),
+        ] {
+            let resolved = RmtConfig::new(0.5)
+                .with_stieltjes(StieltjesMethod::Auto)
+                .with_parallelism(par)
+                .resolve_auto(p);
+            assert_eq!(resolved.stieltjes_method, expected, "par={par:?} p={p}");
+        }
     }
 
     #[test]

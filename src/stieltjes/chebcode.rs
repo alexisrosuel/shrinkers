@@ -844,13 +844,7 @@ mod tests {
         // unsorted input (scatter correctness).
         let p = 512;
         let evals = crate::stieltjes::testutil::log_spectrum(p);
-        let mut shuffled = evals.clone();
-        let mut seed = 7u64;
-        for i in (1..p).rev() {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let j = (seed >> 33) as usize % (i + 1);
-            shuffled.swap(i, j);
-        }
+        let shuffled = crate::stieltjes::testutil::shuffled(&evals, 7);
         for build_input in [&evals, &shuffled] {
             // Same preset on both sides: the wrapper now runs DEFAULT.
             let batch = ChebCodeBatch::build_preset(build_input, ChebPreset::DEFAULT);
