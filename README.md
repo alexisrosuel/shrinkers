@@ -182,12 +182,18 @@ round; the ChebCode default is now θ=0.5, n=11, leaf=32):
 
 | p=50 000 | error | seq | rayon |
 |---|---|---|---|
-| `ChebCodeFast` (θ.5 n9 L32) | ~1e-8 | 13 ms | 3.0 ms |
-| `ChebCode` (θ.5 n11 L32) | ~5e-10 | 15 ms | 3.5 ms |
-| `ChebCodeXtreme` (θ.25 n11 L16) | ~6e-13 | 25 ms | 5.2 ms |
-| `Hodlr` (ACA, tol 1e-9) | ~7e-10 | 143 ms | 65 ms |
-| `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 1.9 s | 0.9 s |
+| `ChebCodeFast` (θ.5 n9 L32) | ~1e-8 | 12.9 ms | **2.75 ms** |
+| `ChebCode` (θ.5 n11 L32) | ~5e-10 | 14.6 ms | **3.24 ms** |
+| `ChebCodeXtreme` (θ.25 n11 L16) | ~6e-13 | 24.7 ms | **5.26 ms** |
+| `Hodlr` (ACA, tol 1e-9) | ~7e-10 | 140 ms | 64 ms |
+| `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 1.9 s | 0.86 s |
 | `BlockedTiled` (exact) | 0 | ~950 ms | ~120 ms |
+
+The ChebCode family holds the runtime minimum at EVERY size in both
+parallelism modes among methods with usable accuracy (rel err ≤ 1e-6):
+the FFT variants are now dominated everywhere (same runtime class as
+`chebcode_fast` but 4000× the error), and only at p ≤ 2000 under Rayon
+does the exact `blocked_tiled` come within ~20 % of the fastest point.
 
 ChebCode owns the speed-at-accuracy frontier on this spectrum family and,
 after the re-tune, also the near-machine-precision band that previously
@@ -208,6 +214,55 @@ two-lane traversal — measured **8–11×** faster than calling
 p=20000 → 162→14 ms; 32 η at p=50000 → 702→84 ms). For root-finding on γ,
 `stieltjes_transform_with_deriv` returns S and its analytic derivative
 dS/dx in a single exact pass.
+
+### `ChebCodeBatch`, precisely
+
+The Chebyshev tree is a flat-array structure over the sorted spectrum: each
+panel stores its interval `[lo, hi]`, a contiguous source range into the
+sorted array, `n` Chebyshev node positions and `n` barycentric weights, plus
+child indices. Panels split at their interval midpoint until they hold at
+most `leaf_cap` sources; leaves are summed EXACTLY, interior panels are
+approximated.
+
+**Build — once per spectrum, independent of η:**
+
+1. sort (skipped when input is pre-sorted; the permutation is kept so every
+   result lands back in the caller's original order);
+2. recursive partitioning of panels;
+3. leaf weights: each source spreads unit mass onto its panel's Chebyshev
+   nodes through the normalized barycentric row `(λⱼ/(x−tⱼ))/Σᵢλᵢ/(x−tᵢ)` —
+   mass-preserving by construction;
+4. interior weights: MERGED from children instead of rescanning sources —
+   each child node acts as a point mass `w·δₜ` in the parent's barycentric
+   update, O(n²) per child instead of O(count·n). This is what made builds
+   ~10× cheaper overall.
+
+**Evaluation of one query `z = x − iη`** walks the tree with an explicit
+stack: a panel well-separated from z (`half_width² < θ²·dist²`) contributes
+the rational far field `F(z) = Σⱼ wⱼ/(z−tⱼ)` evaluated on vectorized node
+pairs; anything closer descends; leaves add an exact SIMD pairwise sum.
+Cost per query: O(log p · n); for all p eigenvalues: O(p log p).
+
+On top of that, `ChebCodeBatch` adds three amortizations:
+
+- **multi-η sweeps** (`evaluate_many(&etas)`): the geometry above does not
+  depend on η, so one build serves any sweep. Etas run PAIRWISE through a
+  two-lane traversal — one η per F64x2 lane, every source/node splatted
+  across lanes so each accumulator lane always means "its eta". Acceptance
+  uses min(η₀, η₁), i.e. both lanes stay conservative; Rayon parallelizes
+  across eta pairs with the tree shared read-only. Measured 8–11× vs naive
+  per-η calls (`examples/bench_batch.rs`);
+- **arbitrary query grids** (`evaluate_points(points, eta, parallel)`): same
+  one-tree service for deconvolution grids — this is the path that replaced
+  the accidental quadratic fallback in `deconvolve_spiked`;
+- **unsorted input**: results scatter through the stored permutation, so a
+  shuffled spectrum costs nothing extra beyond the initial sort.
+
+Thread-safety: the batch is immutable after build (`&self` everywhere), so
+one instance can serve concurrent evaluations from any number of threads.
+When NOT to use it: bit-exact zero error → the exact family; arbitrary
+kernels without analytic structure → HODLR ACA; a single query with no
+spectrum-sized context → the direct kernels.
 
 Two hardware findings worth recording from the same tuning round:
 
