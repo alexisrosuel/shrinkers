@@ -42,18 +42,18 @@ rand = "0.10"
 approx = "0.5"
 
 [[bench]]
-name = "comparison"
+name = "pipeline_methods_overview"
 harness = false
 
 [[bench]]
-name = "peropt"
+name = "pipeline_config_sweep"
 harness = false
 
 [[bench]]
-name = "cache_tiling"
+name = "pipeline_cache_scaling"
 harness = false
 
 [[bench]]
-name = "tiled_opt"
+name = "kernel_tiled_blocksize"
 harness = false
 

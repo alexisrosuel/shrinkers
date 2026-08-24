@@ -246,10 +246,10 @@ pixi run measure        # python scripts/measure_current.py
 ### Rust benchmarks
 
 ```bash
-cargo bench --bench comparison   # dispatch-level method matrix (p=500/1000)
-cargo bench --bench peropt       # full configuration sweep
-cargo bench --bench cache_tiling # block-size landscape
-cargo bench --bench tiled_opt    # raw tiled-kernel micro-benchmarks
+cargo bench --bench pipeline_methods_overview  # every method end-to-end (p=500/1000)
+cargo bench --bench pipeline_config_sweep      # knob-by-knob comparison at p=1000
+cargo bench --bench pipeline_cache_scaling     # blocked vs tiled as output outgrows cache
+cargo bench --bench kernel_tiled_blocksize     # raw tiled kernel + block-size landscape
 ```
 
 ## License
