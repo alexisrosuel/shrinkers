@@ -30,7 +30,7 @@ python = ["dep:pyo3", "dep:numpy"]
 [dependencies.pyo3]
 version = "0.29"
 optional = true
-features = ["extension-module"]
+features = ["extension-module", "abi3-py39"]
 
 [dependencies.numpy]
 version = "0.29"
