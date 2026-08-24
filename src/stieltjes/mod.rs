@@ -26,25 +26,24 @@ mod autovec;
 mod blocked_autovec;
 mod cacheblock;
 mod chebcode;
-pub mod ewald;
-pub mod fft2;
-pub mod fft3;
+mod ewald;
 pub mod fft5;
 mod fftplan;
 mod hodlr;
 mod naive;
 mod simd;
-pub mod term;
+mod term;
 mod treecode;
 
+// `fft5` stays a public module: examples address `Fft5Options`/`Order`
+// by deep path for the grid-order study. Everything else is re-exported
+// flat so callers never depend on file layout.
 pub use adaptive::*;
 pub use autovec::*;
 pub use blocked_autovec::*;
 pub use cacheblock::*;
 pub use chebcode::*;
 pub use ewald::*;
-pub use fft2::*;
-pub use fft3::*;
 pub use fft5::*;
 pub use hodlr::*;
 pub use naive::*;
@@ -327,16 +326,12 @@ pub fn compute_all_stieltjes(
             adaptive::compute_all_stieltjes_adaptive(eigenvalues, eta, fft_grid_size, cutoff_ratio),
             inv_p,
         ),
-        StieltjesMethod::Fft5 => scale_aos(
+        // Fft5/Fft3/Fft2 all run the same dual-convolution kernel today —
+        // the 3-FFT and 2-FFT fusion stages were superseded (see CHANGELOG).
+        // The distinct enum variants survive because the Python API and
+        // recorded benchmarks key on the names.
+        StieltjesMethod::Fft5 | StieltjesMethod::Fft3 | StieltjesMethod::Fft2 => scale_aos(
             fft5::compute_all_stieltjes_fft5(eigenvalues, eta, fft_grid_size),
-            inv_p,
-        ),
-        StieltjesMethod::Fft3 => scale_aos(
-            fft3::compute_all_stieltjes_fft3(eigenvalues, eta, fft_grid_size),
-            inv_p,
-        ),
-        StieltjesMethod::Fft2 => scale_aos(
-            fft2::compute_all_stieltjes_fft2(eigenvalues, eta, fft_grid_size),
             inv_p,
         ),
         StieltjesMethod::TreeCode => scale_aos(
