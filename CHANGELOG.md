@@ -126,6 +126,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (1 forward + 1 inverse vs 2 forward + 1 inverse).
 
 ### Added
+- **README value-proposition front page with two measured figures**
+  (`scripts/make_readme_figures.py`, data `docs/img/readme_figures.json`).
+  Figure 1 shows what the cleaning buys on a spiked model (p=1000, c=0.25,
+  spikes 12/7/4): all spikes detected and debiased within 1%, sigma^2
+  estimated at 1.002, median relative error vs the true population spectrum
+  40% -> 4.3%. Figure 2 benchmarks the full Stieltjes transform against a
+  textbook pure-Python double loop and a chunked vectorized NumPy baseline
+  (same arithmetic, NO FFT, NO scipy): at p=4096, 6.7 s / 104 ms / 1.5 ms
+  respectively (~70x over NumPy); at p=50000 NumPy needs 14.9 s vs
+  0.15 s exact rayon (~98x) and 3.6 ms chebcode_fast (~4000x).
 - **Small-p crossover study** (`examples/small_p_crossover.rs`, data
   `docs/pareto/small_p.json`, chart `docs/pareto/crossover_small_p.png`).
   The frontier sweep starts at p=1000; this companion sweep covers

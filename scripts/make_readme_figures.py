@@ -1,0 +1,244 @@
+"""Generate the two README front-page figures with measured data.
+
+Figure 1 — what the cleaning does: sample vs cleaned vs true population
+eigenvalues under a spiked Marchenko-Pastur model (diagonal population,
+Gaussian samples).
+
+Figure 2 — how fast: shrinkers vs a naive pure-Python double loop vs a
+vectorized NumPy baseline (chunked broadcasting; NO scipy, NO FFT — the
+comparison isolates "same arithmetic, better engine").
+
+Outputs:
+  docs/img/cleaning_quality.png
+  docs/img/performance.png
+  docs/img/readme_figures.json   (measured numbers behind both figures)
+
+Run: .pixi/envs/default/bin/python scripts/make_readme_figures.py
+"""
+
+from __future__ import annotations
+
+import json
+import platform
+import time
+from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+import shrinkers as rk
+
+OUT_DIR = Path("docs/img")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+C = 0.25  # concentration ratio p/n
+
+
+# ──────────────────────────────────────────────
+# Figure 1: cleaning quality
+# ──────────────────────────────────────────────
+
+def simulate_spiked(p: int, spikes: list[float], seed: int):
+    """Diagonal-population spiked model with Gaussian samples."""
+    rng = np.random.default_rng(seed)
+    pop = np.concatenate([np.asarray(spikes), np.ones(p - len(spikes))])
+    n = round(p / C)
+    y = rng.standard_normal((p, n)) * np.sqrt(pop)[:, None]
+    sample = np.linalg.eigvalsh((y @ y.T) / n)[::-1]
+    return pop[::-1].copy(), sample  # descending
+
+
+def fig_cleaning() -> dict:
+    p = 1000
+    spikes = [12.0, 7.0, 4.0]
+    truth_desc, sample_desc = simulate_spiked(p, spikes, seed=42)
+
+    res = rk.estimate_population_eigenvalues(np.sort(sample_desc), c=C)
+    cleaned_desc = np.sort(
+        np.concatenate([res["spikes"], res["bulk_population"]])
+    )[::-1]
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+
+    ax = axes[0]
+    idx = np.arange(1, p + 1)
+    ax.plot(idx, truth_desc, "-", color="black", lw=1.5, label="population vraie")
+    ax.plot(idx, sample_desc, ".", color="#9aa5b1", ms=3.5,
+            label=f"échantillon (p={p}, c={C})")
+    ax.plot(idx, cleaned_desc, ".", color="#d62728", ms=3.5,
+            label="nettoyé par shrinkers")
+    ax.set_yscale("log")
+    ax.axhline(res["bulk_edge"], color="#2b6cb0", lw=0.8, ls="--",
+               label=f"bord de masse estimé ({res['bulk_edge']:.2f})")
+    ax.set_xlabel("rang (tri décroissant)")
+    ax.set_ylabel("valeur propre")
+    ax.set_title(f"{len(spikes)} spikes injectés, bruit σ² = "
+                 f"{res['sigma2']:.2f} (vrai 1.0)")
+    ax.legend(loc="lower left", fontsize=8, framealpha=0.9)
+
+    ax = axes[1]
+    eps = 1e-12
+    err_sample = np.abs(sample_desc - truth_desc) / np.maximum(truth_desc, eps)
+    err_clean = np.abs(cleaned_desc - truth_desc) / np.maximum(truth_desc, eps)
+    ax.plot(idx, err_sample, ".", color="#9aa5b1", ms=3.5, label="échantillon brut")
+    ax.plot(idx, err_clean, ".", color="#d62728", ms=3.5, label="nettoyé")
+    ax.set_yscale("log")
+    ax.set_xlabel("rang (tri décroissant)")
+    ax.set_ylabel("|erreur| / valeur vraie")
+    med_s = float(np.median(err_sample))
+    med_c = float(np.median(err_clean))
+    ax.set_title(f"erreur médiane : {med_s:.1%} → {med_c:.1%}")
+    ax.legend(loc="upper left", fontsize=8)
+
+    fig.suptitle(
+        "Nettoyage RMT : le déconvoluteur remonte aux valeurs propres de population",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "cleaning_quality.png", dpi=150)
+    plt.close(fig)
+
+    return {
+        "p": p, "c": C, "spikes": spikes,
+        "k_detected": int(res["k"]),
+        "sigma2_est": float(res["sigma2"]),
+        "bulk_edge_est": float(res["bulk_edge"]),
+        "median_rel_err_sample": med_s,
+        "median_rel_err_cleaned": med_c,
+        "spike_estimates": res["spikes"].tolist(),
+    }
+
+
+# ──────────────────────────────────────────────
+# Figure 2: runtime vs naive Python / NumPy
+# ──────────────────────────────────────────────
+
+def stieltjes_python_naive(lam: np.ndarray, eta: float):
+    """Textbook double loop — the 'obvious' Python implementation."""
+    p = lam.shape[0]
+    out_r = [0.0] * p
+    out_i = [0.0] * p
+    inv_p = 1.0 / p
+    for i in range(p):
+        li = lam[i]
+        sr = 0.0
+        si = 0.0
+        for lj in lam:
+            d = li - lj
+            inv = 1.0 / (d * d + eta * eta)
+            sr += d * inv
+            si += eta * inv
+        out_r[i] = sr * inv_p
+        out_i[i] = si * inv_p
+    return out_r, out_i
+
+
+def stieltjes_numpy_chunked(lam: np.ndarray, eta: float, block: int = 128):
+    """Same arithmetic, vectorized with plain NumPy broadcasting (no scipy,
+    no FFT), chunked so the p×p intermediate never materializes."""
+    p = lam.shape[0]
+    re = np.empty(p)
+    im = np.empty(p)
+    eta2 = eta * eta
+    inv_p = 1.0 / p
+    for a in range(0, p, block):
+        d = lam[a:a + block, None] - lam[None, :]
+        inv = 1.0 / (d * d + eta2)
+        re[a:a + block] = (d * inv).sum(axis=1) * inv_p
+        im[a:a + block] = (eta * inv).sum(axis=1) * inv_p
+    return re, im
+
+
+def bench(fn, *args, repeats: int = 3):
+    fn(*args)  # warmup
+    ts = []
+    for _ in range(repeats):
+        t0 = time.perf_counter()
+        fn(*args)
+        ts.append(time.perf_counter() - t0)
+    return float(np.median(ts))
+
+
+def fig_runtime() -> dict:
+    sizes = [256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 50000]
+    rows = []
+    for p in sizes:
+        rng = np.random.default_rng(p)
+        lam = np.sort(rng.uniform(0.25, 2.25, p)).astype(np.float64)
+        eta = 1.0 / np.sqrt(p)
+        row = {"p": p}
+
+        if p <= 4096:  # pure Python is O(p^2) interpreted — stop while sane
+            row["python_naive"] = bench(stieltjes_python_naive, lam, eta,
+                                        repeats=1 if p > 2048 else 3)
+        row["numpy"] = bench(stieltjes_numpy_chunked, lam, eta)
+        row["shrinkers_exact_rayon"] = bench(
+            lambda l=lam, e=eta: rk.stieltjes_transform(
+                l, eta=e, method="blocked_tiled", parallelism="rayon"))
+        row["shrinkers_chebcode_rayon"] = bench(
+            lambda l=lam, e=eta: rk.stieltjes_transform(
+                l, eta=e, method="chebcode_fast", parallelism="rayon"))
+        rows.append(row)
+        print(row)
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.6))
+
+    series = [
+        ("python_naive", "#9aa5b1", "o", "Python naïf (double boucle)"),
+        ("numpy", "#2b6cb0", "s", "NumPy vectorisé (broadcasting, sans FFT/scipy)"),
+        ("shrinkers_exact_rayon", "#d62728", "^", "shrinkers — exact, tous cœurs"),
+        ("shrinkers_chebcode_rayon", "#e05252", "v", "shrinkers — treecode, tous cœurs"),
+    ]
+    for key, color, marker, label in series:
+        pts = [(r["p"], r[key]) for r in rows if key in r]
+        if not pts:
+            continue
+        xs, ys = zip(*pts)
+        ax.plot(xs, ys, marker=marker, color=color, ms=5, lw=1.6, label=label)
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("p (nombre de valeurs propres)")
+    ax.set_ylabel("temps de calcul (s)")
+    ax.set_title("Transformée de Stieltjes complète — même arithmétique,\nmoteurs différents",
+                 fontsize=11)
+    ax.grid(True, which="both", alpha=0.25)
+    ax.legend(fontsize=8, loc="upper left")
+
+    # annotate headline speedups at the largest shared p
+    last_full = next(r for r in reversed(rows) if "python_naive" in r)
+    if "python_naive" in last_full:
+        speedup_np = last_full["numpy"] / last_full["shrinkers_exact_rayon"]
+        speedup_py = last_full["python_naive"] / last_full["shrinkers_exact_rayon"]
+        ax.annotate(
+            f"à p={last_full['p']} :\n{speedup_py:.0f}× vs Python naïf\n{speedup_np:.1f}× vs NumPy",
+            xy=(last_full["p"], last_full["shrinkers_exact_rayon"]),
+            xytext=(-120, 30), textcoords="offset points",
+            fontsize=8.5, color="#333333",
+            arrowprops=dict(arrowstyle="->", color="#666666", lw=0.8))
+
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "performance.png", dpi=150)
+    plt.close(fig)
+
+    return {"rows": rows}
+
+
+if __name__ == "__main__":
+    cleaning = fig_cleaning()
+    runtime = fig_runtime()
+    meta = {
+        "machine": platform.platform(),
+        "processor": platform.processor(),
+        "numpy_version": np.__version__,
+        "eta_convention": "eta = 1/sqrt(p)",
+        "timing": "median of 3 (naive: 1 rep above p=2048)",
+        "date_utc": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()),
+    }
+    payload = {"meta": meta, "cleaning": cleaning, "runtime": runtime}
+    (OUT_DIR / "readme_figures.json").write_text(json.dumps(payload, indent=2))
+    print(json.dumps(meta, indent=2))
+    print("figures written to", OUT_DIR)

@@ -1,0 +1,92 @@
+{
+  "meta": {
+    "machine": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "processor": "arm",
+    "numpy_version": "2.5.1",
+    "eta_convention": "eta = 1/sqrt(p)",
+    "timing": "median of 3 (naive: 1 rep above p=2048)",
+    "date_utc": "2026-08-24 13:37 UTC"
+  },
+  "cleaning": {
+    "p": 1000,
+    "c": 0.25,
+    "spikes": [
+      12.0,
+      7.0,
+      4.0
+    ],
+    "k_detected": 3,
+    "sigma2_est": 1.0023494592610331,
+    "bulk_edge_est": 2.2552862833373246,
+    "median_rel_err_sample": 0.404051369288408,
+    "median_rel_err_cleaned": 0.043417075528356885,
+    "spike_estimates": [
+      12.007568843158056,
+      7.065935898650943,
+      4.067536836392795
+    ]
+  },
+  "runtime": {
+    "rows": [
+      {
+        "p": 256,
+        "python_naive": 0.02763349999440834,
+        "numpy": 0.000169791019288823,
+        "shrinkers_exact_rayon": 5.904198042117059e-05,
+        "shrinkers_chebcode_rayon": 4.1916995542123914e-05
+      },
+      {
+        "p": 512,
+        "python_naive": 0.11316120799165219,
+        "numpy": 0.0007504999812226743,
+        "shrinkers_exact_rayon": 0.00024408299941569567,
+        "shrinkers_chebcode_rayon": 0.0001478340127505362
+      },
+      {
+        "p": 1024,
+        "python_naive": 0.46304287502425723,
+        "numpy": 0.0029090830066706985,
+        "shrinkers_exact_rayon": 0.00020683297771029174,
+        "shrinkers_chebcode_rayon": 0.00018508400535210967
+      },
+      {
+        "p": 2048,
+        "python_naive": 1.9465423749934416,
+        "numpy": 0.02690450000227429,
+        "shrinkers_exact_rayon": 0.00043904100311920047,
+        "shrinkers_chebcode_rayon": 0.00026879101642407477
+      },
+      {
+        "p": 4096,
+        "python_naive": 7.610274209000636,
+        "numpy": 0.10671537500456907,
+        "shrinkers_exact_rayon": 0.001294749992666766,
+        "shrinkers_chebcode_rayon": 0.0005245840002316982
+      },
+      {
+        "p": 8192,
+        "numpy": 0.45304587500868365,
+        "shrinkers_exact_rayon": 0.00454495899612084,
+        "shrinkers_chebcode_rayon": 0.0006581670022569597
+      },
+      {
+        "p": 16384,
+        "numpy": 0.5710871249902993,
+        "shrinkers_exact_rayon": 0.019204000011086464,
+        "shrinkers_chebcode_rayon": 0.001597667025635019
+      },
+      {
+        "p": 32768,
+        "numpy": 7.525265667005442,
+        "shrinkers_exact_rayon": 0.205218250019243,
+        "shrinkers_chebcode_rayon": 0.008470208005746827
+      },
+      {
+        "p": 50000,
+        "numpy": 15.149448582989862,
+        "shrinkers_exact_rayon": 0.1602343329868745,
+        "shrinkers_chebcode_rayon": 0.0036884160072077066
+      }
+    ]
+  }
+}

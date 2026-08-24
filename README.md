@@ -11,6 +11,56 @@ BBP), and deconvolve the bulk (El Karoui). Features O(p log p)
 FFT-accelerated Stieltjes transforms, auto-vectorized loops, cache blocking,
 and PyO3 bindings.
 
+## Why shrinkers?
+
+**1 · It actually un-distorts the spectrum.** Sample eigenvalues of a
+high-dimensional covariance are biased artifacts: the bulk is smeared over
+`[(1−√c)², (1+√c)²]·σ²`, genuine spikes are compressed toward the edge.
+`shrinkers` inverts that distortion and recovers the population spectrum:
+
+![Cleaning quality](docs/img/cleaning_quality.png)
+
+*Spiked model, p = 1000, c = 0.25, σ² = 1, three spikes injected at 12 / 7 / 4.
+All 3 spikes are detected and debiased to within 1 % (12.01 / 7.07 / 4.07),
+the noise level is estimated at σ̂² = 1.002, and the median relative error
+against the true population eigenvalues drops from **40 % to 4.3 %** in a
+single call (`estimate_population_eigenvalues`).*
+
+**2 · It is absurdly fast for what it computes.** The engine underneath is an
+exact O(p²) Stieltjes transform rewritten as a symmetric-pair sweep with NEON
+register kernels — compared below against the two baselines people actually
+write: a textbook pure-Python double loop, and vectorized NumPy broadcasting
+(same arithmetic, chunked so the p×p matrix never materializes; **no FFT, no
+scipy**):
+
+![Performance](docs/img/performance.png)
+
+*Full transform of all p points, η = 1/√p, Apple M1 Max, NumPy 2.5.1.*
+
+| p | Python naïf | NumPy | shrinkers (exact) | gain vs NumPy |
+|---|---|---|---|---|
+| 1 024 | 0.42 s | 2.9 ms | **0.28 ms** | ~10× |
+| 4 096 | 6.7 s | 104 ms | **1.5 ms** | ~70× |
+| 50 000 | *(~2 h extrapolées)* | 14.9 s | **0.15 s** | ~98× |
+
+At p = 50 000 the approximate treecode path (`chebcode_fast`) answers in
+**3.6 ms** — about 4000× faster than NumPy at ~1e-8 relative accuracy — and
+the higher-precision `chebcode` preset (~5e-10) costs about the same (frontier
+table below). Every number
+is reproducible: `scripts/make_readme_figures.py` regenerates both figures and
+`docs/img/readme_figures.json` holds the raw measurements.
+
+### What's inside
+
+- `deconvolve_spiked(evals, c)` — the one-call pipeline: BEMA detection →
+  inverse-BBP spike debiasing → El Karoui bulk deconvolution;
+- 21 Stieltjes-transform variants spanning the whole speed/accuracy frontier —
+  machine-precision exact kernels, Chebyshev treecodes (~1e-8 … ~6e-13),
+  FFT grids, HODLR — plus data-driven `speed_auto` / `accuracy_auto` picks;
+- correlation-matrix cleaning with eigenvector-overlap correction, direct
+  precision-matrix shrinkage, Tracy–Widom spike detection;
+- Rust API + PyO3 bindings, GIL released during computation.
+
 ## Primary entry point: spiked + bulk deconvolution
 
 The **core** of the crate is a single call that cleans the sample eigenvalues
