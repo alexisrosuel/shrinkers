@@ -35,36 +35,3 @@
 //! ξ(λᵢ) = λᵢ / |1 - c + c·λᵢ·m_g(λᵢ - iη)|²
 //!
 //! m_g(z) = (1/p) Σⱼ 1/(z - λⱼ),   z = λᵢ - iη
-
-/// Reconstruct a covariance matrix from eigenvectors and shrunk eigenvalues:
-/// Σ_clean = U · diag(ξ(Λ)) · Uᵀ
-///
-/// This is the basic reconstruction without eigenvector angular overlap
-/// correction. For the overlap-corrected version used by the cleaning
-/// pipeline, use [`crate::pipeline::reconstruct_covariance`].
-pub fn reconstruct_covariance_basic(
-    eigenvectors: &ndarray::Array2<f64>,
-    shrinked_eigenvalues: &ndarray::Array1<f64>,
-) -> ndarray::Array2<f64> {
-    let scaled = eigenvectors * &shrinked_eigenvalues.view().insert_axis(ndarray::Axis(0));
-    scaled.dot(&eigenvectors.t())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use approx::assert_relative_eq;
-
-    #[test]
-    fn test_reconstruct_covariance() {
-        use ndarray::Array1;
-        let diag = Array1::from_vec(vec![1.0, 1.0, 1.0]);
-        let eigenvectors = ndarray::Array2::from_diag(&diag);
-        let evals = vec![1.0, 2.0, 3.0];
-        let shrunk = crate::deconvolution::rie_shrinkage_default(&evals, 0.5);
-        let reconstructed = reconstruct_covariance_basic(&eigenvectors, &shrunk);
-        for i in 0..3 {
-            assert_relative_eq!(reconstructed[[i, i]], shrunk[i], epsilon = 1e-10);
-        }
-    }
-}

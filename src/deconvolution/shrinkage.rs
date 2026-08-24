@@ -114,12 +114,6 @@ pub fn rie_shrinkage_default(eigenvalues: &[f64], c: f64) -> Array1<f64> {
     rie_shrinkage(eigenvalues, &config)
 }
 
-/// Fully naive version (all optimizations off) for benchmarking.
-pub fn rie_shrinkage_naive(eigenvalues: &[f64], c: f64) -> Array1<f64> {
-    let config = RmtConfig::fully_naive(c);
-    rie_shrinkage(eigenvalues, &config)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,20 +136,6 @@ mod tests {
         let original_sum: f64 = evals.iter().sum();
         let result_sum: f64 = result.iter().sum();
         assert_relative_eq!(original_sum, result_sum, epsilon = 1e-10);
-    }
-
-    #[test]
-    fn test_naive_matches_default() {
-        let mut evals: Vec<f64> = (0..137).map(|i| ((i as f64 + 1.0) * 0.1).ln_1p()).collect();
-        evals.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-        let default = rie_shrinkage_default(&evals, 0.42);
-        let naive = rie_shrinkage_naive(&evals, 0.42);
-
-        assert_eq!(default.len(), naive.len());
-        for (o, n) in default.iter().zip(naive.iter()) {
-            assert_relative_eq!(o, n, epsilon = 1e-13);
-        }
     }
 
     #[test]

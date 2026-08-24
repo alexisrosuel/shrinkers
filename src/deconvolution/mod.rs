@@ -245,31 +245,6 @@ pub fn spectral_deconvolution(
     }
 }
 
-/// Convenience: return only the density on the original λ-grid.
-///
-/// This is useful when the user just wants to plot the density without
-/// caring about the intermediate Stieltjes transforms.
-pub fn deconvolve_density(
-    eigenvalues: &[f64],
-    c: f64,
-    n_points: usize,
-    eta: Option<f64>,
-    lambda_min: Option<f64>,
-    lambda_max: Option<f64>,
-    config: &RmtConfig,
-) -> (Vec<f64>, Vec<f64>) {
-    let result = spectral_deconvolution(
-        eigenvalues,
-        c,
-        n_points,
-        eta,
-        lambda_min,
-        lambda_max,
-        config,
-    );
-    (result.lambda_grid, result.density)
-}
-
 // ──────────────────────────────────────────────
 //  Tests
 // ──────────────────────────────────────────────
@@ -285,9 +260,11 @@ mod tests {
 
     /// Deterministic regression test.
     ///
-    /// Golden-master values computed via Python `shrinkers.spectral_deconvolution`
-    /// on 2026-07-28.  If this test fails after a code change, the change
-    /// altered the numerical output — verify it's intentional.
+    /// Golden-master values computed via the Python binding of
+    /// `spectral_deconvolution` on 2026-07-28 (the function has since been
+    /// un-exported from the pymodule; the Rust entry point is unchanged).
+    /// If this test fails after a code change, the change altered the
+    /// numerical output — verify it's intentional.
     #[test]
     fn test_golden_master_regression() {
         let evals = vec![6.0, 4.0, 2.5, 1.5, 1.0, 0.6, 0.3, 0.1];

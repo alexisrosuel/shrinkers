@@ -35,9 +35,6 @@ pub struct AdaptiveDeconvolutionResult {
     pub levels: Vec<DeconvolutionResult>,
 }
 
-/// Default number of η levels in the descent.
-pub const DEFAULT_ETA_LEVELS: usize = 5;
-
 /// Default ratio between consecutive η levels (each step divides η by this).
 pub const DEFAULT_ETA_RATIO: f64 = 3.0;
 
@@ -50,7 +47,8 @@ pub const DEFAULT_ETA_RATIO: f64 = 3.0;
 /// * `n_points` — Grid resolution for each η level.
 /// * `eta` — The **finest** (smallest) η to reach. If `None`, defaults to
 ///   `0.1/√p`. The descent starts at `eta * ratio^(levels-1)`.
-/// * `levels` — Number of η levels (default [`DEFAULT_ETA_LEVELS`]).
+/// * `levels` — Number of η levels (required; no default is applied — a
+///   documented default existed only as an unused constant).
 /// * `ratio` — Factor between consecutive levels (default [`DEFAULT_ETA_RATIO`]).
 /// * `config` — `RmtConfig`.
 ///

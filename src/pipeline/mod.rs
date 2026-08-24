@@ -23,34 +23,6 @@ use crate::eigenvector_overlaps::compute_angular_overlaps;
 use ndarray::Array2;
 
 // ──────────────────────────────────────────────
-//  Noise variance estimation (median of sample eigenvalues)
-// ──────────────────────────────────────────────
-
-/// Estimate the noise variance σ² from the sample eigenvalue spectrum.
-///
-/// Uses the **raw median** of the sample eigenvalues — kept for
-/// compatibility. Note this is *uncorrected*: the Marchenko–Pastur law is
-/// right-skewed, so the raw median overestimates σ². The cleaning pipeline
-/// ([`clean_eigensystem`]) instead uses the MP-median-corrected estimator
-/// [`crate::spiked::estimate_bulk_noise`].
-pub fn estimate_noise_variance(sample_evals: &[f64]) -> f64 {
-    median(sample_evals)
-}
-
-/// Compute the median of a slice of f64 values.
-fn median(values: &[f64]) -> f64 {
-    let n = values.len();
-    if n == 0 {
-        return 0.0;
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-    if n % 2 == 0 {
-        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-    } else {
-        sorted[n / 2]
-    }
-}
 
 // ──────────────────────────────────────────────
 //  Covariance reconstruction from eigenvectors + overlaps
@@ -270,36 +242,6 @@ pub fn clean_eigensystem(
 /// decomposition for the spectral step.
 ///
 /// NOTE: This function allocates the p×p empirical covariance matrix.
-/// For very large p, prefer `clean_covariance_from_eigensystem` if you
-/// already have the eigensystem from Python/scipy.
-///
-/// # Arguments
-///
-/// * `X` — Data matrix, shape (T, N), should be mean-centered.
-/// * `c` — Concentration ratio N/T. If None, computed as N/T.
-/// * `config` — `RmtConfig` controlling RIE shrinkage method.
-///
-/// # Returns
-///
-/// Cleaned covariance matrix, shape (N, N).
-pub fn clean_covariance_from_data(
-    data: &Array2<f64>,
-    c: Option<f64>,
-    config: &RmtConfig,
-) -> Array2<f64> {
-    let (t, n) = data.dim();
-    let c = c.unwrap_or_else(|| n as f64 / t as f64);
-
-    // ── 1. Empirical covariance Σ = X^T X / T ──
-    let sigma_emp = data.t().dot(data) / t as f64;
-
-    // ── 2. Spectral decomposition ──
-    let (eigenvalues, eigenvectors) = symmetric_eigh(&sigma_emp);
-
-    // ── 3. Clean ──
-    clean_covariance_from_eigensystem(&eigenvectors, &eigenvalues, c, config)
-}
-
 /// Clean a correlation matrix and return the cleaned covariance matrix plus
 /// the cleaned eigenvalues, sorted eigenvectors, and their theoretical
 /// alignment with the population eigenvectors.

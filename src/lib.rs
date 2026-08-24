@@ -29,13 +29,12 @@ pub mod stieltjes;
 // Private modules used internally
 mod math;
 
-// High-level items (reconstruct_covariance_basic, top-level docs) live in rmt.rs
+// Crate-level API documentation lives in rmt.rs
 mod rmt;
 
 // Re-exports so that downstream code can use `shrinkers::RmtConfig` etc.
 pub use config::*;
 pub use deconvolution::*;
-pub use rmt::*;
 pub use spiked::*;
 pub use stieltjes::stieltjes_term;
 

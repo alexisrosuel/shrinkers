@@ -53,30 +53,9 @@ pub fn bbp_angle_overlaps(spikes: &[f64], gamma: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Debiased projection: rescale a sample eigenvector's loadings by the
-/// inverse of its asymptotic overlap, producing a debiased direction.
-///
-/// Given a sample eigenvector $\hat u$ (length p) and its squared overlap
-/// $\alpha^2$, the debiased vector is $\hat u / \alpha$. This is the
-/// S-POET / debiased-PCA rescaling that corrects the understated projection
-/// alignment of sample eigenvectors.
-///
-/// # Returns
-///
-/// A new `Vec<f64>` of length p. If $\alpha^2 \le 0$, returns a zero vector
-/// (no signal to debias).
-pub fn debias_eigenvector(u_hat: &[f64], alpha2: f64) -> Vec<f64> {
-    if alpha2 <= 0.0 {
-        return vec![0.0; u_hat.len()];
-    }
-    let scale = 1.0 / alpha2.sqrt();
-    u_hat.iter().map(|&x| x * scale).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use approx::assert_relative_eq;
 
     #[test]
     fn test_bbp_angle_overlap_large_spike() {
@@ -103,22 +82,5 @@ mod tests {
             assert!(a >= prev);
             prev = a;
         }
-    }
-
-    #[test]
-    fn test_debias_eigenvector() {
-        let u = vec![0.6, 0.8];
-        let alpha2 = 0.25; // α = 0.5
-        let debiased = debias_eigenvector(&u, alpha2);
-        // scale = 1/0.5 = 2
-        assert_relative_eq!(debiased[0], 1.2, epsilon = 1e-12);
-        assert_relative_eq!(debiased[1], 1.6, epsilon = 1e-12);
-    }
-
-    #[test]
-    fn test_debias_eigenvector_no_signal() {
-        let u = vec![0.6, 0.8];
-        let debiased = debias_eigenvector(&u, 0.0);
-        assert_eq!(debiased, vec![0.0, 0.0]);
     }
 }
