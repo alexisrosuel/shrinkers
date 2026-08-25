@@ -136,6 +136,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   windowed imaginary part — the same computation with fewer transforms
   (1 forward + 1 inverse vs 2 forward + 1 inverse).
 
+### Changed
+- Documented a negative result: an F64x2 SIMD rewrite of the
+  blocked-tiled symmetric sweep measured 36% SLOWER than the shipped
+  scalar kernel at p=5k/20k (scalar fdiv latency is already hidden by
+  the ILP of four independent register-resident rows), with rel
+  deviation up to 2e-9 from bit-exact outputs. Reverted; the scalar
+  kernel stands.
+
 ### Added
 - **`StieltjesMethod::ChebCodeBalanced`** (`"chebcode_balanced"` / Python
   alias `"chebb"`): new ChebCode preset (theta=0.55, n=11, leaf=32) at
