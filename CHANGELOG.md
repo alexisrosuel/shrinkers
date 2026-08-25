@@ -3,7 +3,7 @@
 All notable changes to **shrinkers** are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.3.0] — 2026-08-25
+## [0.1.0] — 2026-08-25
 
 ### Changed
 - **Documented the η choice** (`docs/eta_choice.md`) with a reproducible
