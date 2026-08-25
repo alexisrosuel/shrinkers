@@ -11,6 +11,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   intermediate frontier point between FAST (~1e-8) and XTREME (~1e-12).
 
 ### Changed
+- **HODLR: one ACA compression now serves both cross blocks** via the
+  exact kernel relation M(R<-L) = -conj(M(L<-R)^T), transferred at the
+  factor level (U2 = -conj(V1), V2 = conj(U1)). Full Hodlr path at
+  p=20 000 seq: 82.3 -> 49.9 ms (-41%, 1.68x); rel-L2 vs BlockedTiled
+  improves to 6.7e-10 from 1.1e-9 (the transferred adaptive rank is
+  whichever side compressed tighter). Both Aca and Random modes.
 - **Fixed: Python `method="auto"` resolves through the measured Pareto
   table** instead of the pre-table heuristic that sent p=20k sequential
   to Fft2. Default-path `deconvolve_spiked` at p=20 000: 10.6 ms ->

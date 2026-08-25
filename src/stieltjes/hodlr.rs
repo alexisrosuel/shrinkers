@@ -785,50 +785,63 @@ fn rec(
     }
 
     // Cross terms L←R and R←L (`out` is already re-based on [lo, hi)).
+    //
+    // The kernel satisfies M(R←L)[j,i] = -conj(M(L←R)[i,j]) for the same
+    // two halves with roles swapped (d -> -d flips Re, keeps Im), so ONE
+    // compression serves both blocks: U2 = -conj(V1), V2 = conj(U1) under
+    // the bilinear U·Vᵀ convention of `apply_cross`. This halves the
+    // off-diagonal compression work at every level.
     let tgt_l = &sorted[lo..mid];
     let src_r = &sorted[mid..hi];
-    {
-        let f = match s.mode {
-            HodlrMode::Aca => {
-                let (u_re, u_im, v_re, v_im, _rk) =
-                    aca(tgt_l, src_r, s.eta, s.eta_sq, s.tol, s.max_rank);
-                AcaFactors {
-                    u_re,
-                    u_im,
-                    v_re,
-                    v_im,
-                }
+    let f = match s.mode {
+        HodlrMode::Aca => {
+            let (u_re, u_im, v_re, v_im, _rk) =
+                aca(tgt_l, src_r, s.eta, s.eta_sq, s.tol, s.max_rank);
+            AcaFactors {
+                u_re,
+                u_im,
+                v_re,
+                v_im,
             }
-            HodlrMode::Random => rand_block(tgt_l, src_r, s.eta, s.eta_sq, s.tol, s.max_rank, seed),
-        };
-        apply_cross(&f, tgt_l.len(), src_r.len(), out, 0);
+        }
+        HodlrMode::Random => rand_block(tgt_l, src_r, s.eta, s.eta_sq, s.tol, s.max_rank, seed),
+    };
+    apply_cross(&f, tgt_l.len(), src_r.len(), out, 0);
+
+    // Transferred factors for R←L: U2[t,j] = -conj(V1[t,i]),
+    // V2[t,i] = conj(U1[t,j]).
+    let n_src_r = src_r.len();
+    let mut u2_re = Vec::with_capacity(f.v_re.len());
+    let mut u2_im = Vec::with_capacity(f.v_im.len());
+    let rank_v = f.v_re.len().checked_div(n_src_r).unwrap_or(0);
+    for t in 0..rank_v {
+        for k in 0..n_src_r {
+            u2_re.push(-f.v_re[t * n_src_r + k]);
+            u2_im.push(f.v_im[t * n_src_r + k]);
+        }
     }
-    let tgt_r = &sorted[mid..hi];
-    let src_l = &sorted[lo..mid];
-    {
-        let f = match s.mode {
-            HodlrMode::Aca => {
-                let (u_re, u_im, v_re, v_im, _rk) =
-                    aca(tgt_r, src_l, s.eta, s.eta_sq, s.tol, s.max_rank);
-                AcaFactors {
-                    u_re,
-                    u_im,
-                    v_re,
-                    v_im,
-                }
-            }
-            HodlrMode::Random => rand_block(
-                tgt_r,
-                src_l,
-                s.eta,
-                s.eta_sq,
-                s.tol,
-                s.max_rank,
-                child_seed(false),
-            ),
-        };
-        apply_cross(&f, tgt_r.len(), src_l.len(), out, mid - lo);
+    let m_tgt_l = tgt_l.len();
+    let mut v2_re = Vec::with_capacity(f.u_re.len());
+    let mut v2_im = Vec::with_capacity(f.u_im.len());
+    let rank_u = f.u_re.len().checked_div(m_tgt_l).unwrap_or(0);
+    for t in 0..rank_u {
+        for k in 0..m_tgt_l {
+            v2_re.push(f.u_re[t * m_tgt_l + k]);
+            v2_im.push(-f.u_im[t * m_tgt_l + k]);
+        }
     }
+    apply_cross(
+        &AcaFactors {
+            u_re: u2_re,
+            u_im: u2_im,
+            v_re: v2_re,
+            v_im: v2_im,
+        },
+        src_r.len(),
+        tgt_l.len(),
+        out,
+        mid - lo,
+    );
 }
 
 /// Compute all Stieltjes transforms with the hierarchical low-rank method.
