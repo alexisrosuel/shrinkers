@@ -13,6 +13,10 @@ All evaluation paths reduce to
 
     S(x_k) = Σ_j 1 / ((x_k − λ_j) − iη),      k = 1..Q
 
+where `p` is the number of (sample) eigenvalues λ_j, `i` the imaginary
+unit, and η the regularization offset — an imaginary shift keeping every
+denominator nonzero; the library default is η = 0.1/√p
+(see [`eta_choice.md`](eta_choice.md)). `Q` is the number of query points:
 with Q = p when cleaning eigenvalues (`rie_shrinkage`) and Q = n_points
 (default 200) on the deconvolution grid (`compute_stieltjes_at_points`).
 Direct summation is O(p·Q). The treecode makes both large cases
@@ -29,14 +33,16 @@ input). A balanced binary tree is then built recursively:
 * splitting happens at the **midpoint of the value interval**
   (`partition_point` on the sorted range), not the median of counts —
   children get geometrically balanced intervals, which is what keeps the
-  opening-angle test meaningful; degenerate splits fall back to the index
+  opening-angle test meaningful (the test compares a node's half-width
+  against θ × its distance to the query; θ is defined in
+  [Traversal](#traversal)); degenerate splits fall back to the index
   midpoint;
 * recursion stops when a node holds ≤ `leaf_cap` sources (leaves carry
   their sources exactly);
 * everything lives in structure-of-arrays vectors (`lo`, `hi`, `hw_sq`,
   `lo_idx`, `hi_idx`, child indices as `i32` with `-1` marking a leaf,
-  plus `n` node positions and `n` weights per node) — no pointer chasing,
-  cache-friendly traversal.
+  plus the per-node panel positions and weights described below) — no
+  pointer chasing, cache-friendly traversal.
 
 ![ChebCode tree layout](chebcode_tree.png)
 
@@ -53,19 +59,20 @@ densities** `w_j`: the unique set of weights such that the rational
     F(z) = Σ_j w_j / (z − t_j)
 
 reproduces the kernel sum at every source location of the panel — the
-barycentric Lagrange row-update. For each source `x`:
+barycentric Lagrange row-update. For each panel source `x_s`:
 
-    v_j = λ_j / (x − t_j),   w_j += v_j · (Σ_i v_i)⁻¹,
+    v_j = β_j / (x_s − t_j),   w_j += v_j · (Σ_i v_i)⁻¹,
 
-where `λ_j = (−1)^j` (halved at the endpoints) are the barycentric
-weights. If `x` hits a node exactly, that single weight absorbs the mass.
+where `β_j = (−1)^j` (halved at the endpoints) are the barycentric
+weights — distinct from the eigenvalues λ_j of the Problem section. If
+`x_s` hits a node exactly, that single weight absorbs the mass.
 Leaf weights therefore sum exactly to the leaf's source count.
 
 ![Equivalent densities](chebcode_equivalent_densities.png)
 
 The figure computes the real construction (same normalized barycentric
-row update) for 60 sources on one panel, evaluating only where the θ test
-would accept it — see `scripts/make_chebcode_figures.py` for the exact
+row update) for 60 sources on one panel, evaluating only where the θ
+test (opening angle, defined in [Traversal](#traversal)) would accept it — see `scripts/make_chebcode_figures.py` for the exact
 computation behind the printed deviation.
 
 Two implementation details matter:
@@ -86,18 +93,26 @@ Measured share of end-to-end runtime: **build is 10–11 %** at p = 20k–50k
 
 ## Traversal
 
-Per query point `z = x − iη`, a stack-based DFS visits nodes; three cases:
+Per query point `z = x − iη` (x is z's real part), a stack-based DFS
+visits nodes; three cases. Notation used below, defined here once:
+
+* `hw ≡ (hi − lo)/2` — a node's half-width (`hw_sq` in code is its square);
+* `cl ≡ max(lo − x, x − hi, 0)` — the *clamped* distance from the query's
+  real part to the node interval (zero inside it), computed branchlessly;
+* `θ ∈ (0, 1)` — the **opening angle**: the acceptance knob of the whole
+  family. A node is "well separated" iff `hw² < θ²·(cl² + η²)`; larger θ
+  accepts panels farther away ⇒ fewer recursions ⇒ faster and less
+  accurate. Each preset ships its own θ (table below); `theta_sq` is just
+  θ² hoisted out of the loop.
 
 1. **leaf** — exact pairwise sum over its sources with the SIMD two-lane
    helper (`F64x2`, refined Newton–Raphson reciprocal because AArch64 has
    no FP64 vector divide; see `stieltjes::simd`). Same lane layout as the
    far-field loop.
-2. **internal, well-separated** — the *branchless* distance from `z` to
-   the node interval is `cl = max(lo − z, z − hi, 0)`, and the opening-
-   angle test compares half-width² against `θ²·(cl² + η²)` (precomputed
-   `theta_sq`). Accepted ⇒ far-field contribution
+2. **internal, well-separated** — i.e. the test above passes. Accepted ⇒
+   far-field contribution
 
-        Re += Σ_j w_j·(z − t_j)/((z − t_j²) + η²),
+        Re += Σ_j w_j·(z − t_j)/((z − t_j)² + η²),
         Im += Σ_j w_j·η/((z − t_j)² + η²),
 
    evaluated **term-by-term** on the panel's `n` nodes with the same
