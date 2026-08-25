@@ -16,11 +16,10 @@ jobs:
         include:
           - { os: ubuntu-latest, target: x86_64 }
           - { os: ubuntu-latest, target: aarch64 }
-          # GitHub retired the Intel macos-13 runner label; build the
-          # x86_64 wheel by cross-compiling on the arm64 runner instead
-          # (maturin-action installs the rustup target automatically).
+          # macOS ships arm64 wheels only: GitHub retired the Intel
+          # runner label and Apple has not sold Intel Macs since 2020;
+          # Intel users build from the sdist.
           - { os: macos-14, target: aarch64 }
-          - { os: macos-14, target: x86_64 }
           - { os: windows-latest, target: x86_64 }
     runs-on: ${{ matrix.os }}
     steps:

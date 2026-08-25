@@ -25,9 +25,10 @@ pixi add --pypi shrinkers       # in a pixi.toml: [pypi-dependencies]
 pip install shrinkers
 ```
 
-Wheels are published for Linux (x86_64, aarch64) and macOS (arm64,
-x86_64); Windows and other platforms build from the sdist with a Rust
-toolchain. To hack on the crate itself, see [Development](#development).
+Wheels are published for Linux (x86_64, aarch64) and macOS (arm64 —
+Intel Macs are no longer served, build from the sdist); Windows and
+other platforms build from the sdist with a Rust toolchain. To hack on
+the crate itself, see [Development](#development).
 
 ## Why shrinkers?
 
@@ -202,6 +203,9 @@ Key findings:
 - [`docs/python_api.md`](docs/python_api.md) — full Python API reference;
 - [`docs/internals.md`](docs/internals.md) — method map, algorithm math, the
   complete benchmark record and the unsafe-code policy;
+- [`docs/hardware_optimizations.md`](docs/hardware_optimizations.md) —
+  every machine-facing optimization (SIMD refined reciprocal, register
+  tiles, cache blocking, layout) with the measured negatives kept;
 - [`docs/chebcode_algorithms.md`](docs/chebcode_algorithms.md) — deep dive
   into the ChebCode* treecodes (tree layout, Chebyshev equivalent
   densities, traversal, presets, measured parameter sensitivities);

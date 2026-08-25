@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.1.1] — 2026-08-26
 
 ### Added
+- **`docs/hardware_optimizations.md`**: catalogue of the machine-level
+  optimizations across the fast O(p^2) exact kernels and ChebCode* —
+  hoisted-reciprocal scalar term, pair-once symmetric sweep in
+  register-resident 4-row tiles, measured bs8 cache-block sweet spot,
+  AoS-vs-SoA small-p crossover, F64x2 refined Newton-Raphson reciprocal
+  (AArch64 lacks FP64 vector divide), per-term far-field stability,
+  build-side division hoisting and parent composition, SoA layout,
+  chunked parallel dispatch — including the documented negative results.
 - **`docs/chebcode_algorithms.md`**: full algorithm reference for the
   ChebCode* treecode family — tree layout, Chebyshev equivalent
   densities with barycentric weights and parent composition, the
