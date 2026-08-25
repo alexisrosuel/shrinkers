@@ -44,7 +44,7 @@ input). A balanced binary tree is then built recursively:
   plus the per-node panel positions and weights described below) — no
   pointer chasing, cache-friendly traversal.
 
-![ChebCode tree layout](chebcode_tree.png)
+![ChebCode tree layout](img/chebcode_tree.png)
 
 Depth is ⌈log₂(p / leaf_cap)⌉ ≈ 11 levels at p = 50 000 with leaf_cap 32.
 
@@ -68,7 +68,7 @@ weights — distinct from the eigenvalues λ_j of the Problem section. If
 `x_s` hits a node exactly, that single weight absorbs the mass.
 Leaf weights therefore sum exactly to the leaf's source count.
 
-![Equivalent densities](chebcode_equivalent_densities.png)
+![Equivalent densities](img/chebcode_equivalent_densities.png)
 
 The figure computes the real construction (same normalized barycentric
 row update) for 60 sources on one panel, evaluating only where the θ
@@ -126,7 +126,7 @@ visits nodes; three cases. Notation used below, defined here once:
      denominator exactly like the leaf loop — unconditional stability.
 3. **not separated** — recurse into children.
 
-![One query's traversal path](chebcode_traversal.png)
+![One query's traversal path](img/chebcode_traversal.png)
 
 The result is returned in the caller's original order although the tree is
 built on the sorted multiset.
@@ -149,7 +149,7 @@ O((p + Q)·log p)-class scaling and the measured runtimes in
 | `chebcode_balanced` (`chebb`) | 0.55 | 11 | 32 | ~3e-10 | FAST+6 % runtime |
 | `chebcode_xtreme` (`chebx`) | 0.25 | 11 | 16 | ~1e-12/13 | precision niche |
 
-![Measured preset accuracy classes](chebcode_presets.png)
+![Measured preset accuracy classes](img/chebcode_presets.png)
 
 Parameter sensitivity, measured with
 `examples/measure_cheb_sweep.rs` (interleaved A/B, error vs the exact
