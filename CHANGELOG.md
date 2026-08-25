@@ -137,6 +137,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (1 forward + 1 inverse vs 2 forward + 1 inverse).
 
 ### Changed
+- Documented a second negative result: exploiting K(b,a)=-conj(K(a,b))
+  in the PARALLEL tiled path (private full-size buffers per span +
+  reduction, each unordered pair computed once) measured 3.5-4.9x
+  SLOWER than the duplicated-pair baseline at p=10k/20k/50k - the
+  n_spans x p private-buffer footprint (~48 MB at p=50k) streams
+  column updates from RAM, far costlier than the halved arithmetic
+  buys back. Reverted; sequential paths already exploit the identity.
+- Recorded as future work: HODLR off-diagonal blocks satisfy
+  M(B,A) = -conj(M(A,B)^T), so one ACA compression could serve both
+  orientations if the solver ever needs one.
 - Documented a negative result: an F64x2 SIMD rewrite of the
   blocked-tiled symmetric sweep measured 36% SLOWER than the shipped
   scalar kernel at p=5k/20k (scalar fdiv latency is already hidden by
