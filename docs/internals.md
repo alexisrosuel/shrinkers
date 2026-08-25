@@ -384,6 +384,28 @@ Full `rie_shrinkage` pipeline (includes spike detection + shrinkage overhead):
 Numerical correctness is preserved: the fast-kernel output matches a pure-NumPy
 reference of the El Karoui deconvolution to ~1e-13 max relative error.
 
+### Why there is no FMM variant (feasibility note)
+
+A multipole expansion would remove the remaining `log p` from the
+treecodes. The idea was attempted and rejected once already: the
+Lorentz kernel `1/((x−y) − iη)` has its pole **off the real axis**
+(at `y = x + iη`), and analytic 1D translations of such an off-axis
+pole are numerically unstable (see the module header of
+`src/stieltjes/hodlr.rs`). A revisit would need one of:
+
+* a kernel-independent FMM (dense Chebyshev M2L matrices), trading the
+  instability for per-level dense work that mostly cancels the gain at
+  1D problem sizes;
+* exponential/specialized expansions derived for Lorentzian kernels —
+  a research-grade derivation with per-level translation error that
+  compounds over ~11 levels at p = 50 000.
+
+The realistic ceiling is bounded: the log factor is worth roughly
+30-40% of traversal time at p = 50 000 (build share is only 10%, so
+construction is not the bottleneck), shrinking slowly as p grows.
+Verdict: not worth the complexity unless target sizes reach ~10⁶,
+where O(p) far-field would finally dominate the constant-factor loss.
+
 ## Unsafe code policy
 
 The crate is unsafe-free with **one deliberate, audited exception**:
