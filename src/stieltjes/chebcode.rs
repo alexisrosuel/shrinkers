@@ -558,6 +558,14 @@ impl ChebPreset {
         n: 11,
         leaf_cap: 16,
     };
+    /// Balanced preset (`"chebcode_balanced"` / `"chebb"`): ~3e-10 error at
+    /// FAST+~6% runtime — sits between FAST (~1e-8) and XTREME (~1e-12),
+    /// dominating neither.
+    pub const BALANCED: Self = Self {
+        theta: 0.55,
+        n: 11,
+        leaf_cap: 32,
+    };
 
     #[inline]
     pub const fn parts(self) -> (f64, usize, usize) {
@@ -572,6 +580,7 @@ impl ChebPreset {
             crate::config::StieltjesMethod::ChebCode => Some(Self::DEFAULT),
             crate::config::StieltjesMethod::ChebCodeFast => Some(Self::FAST),
             crate::config::StieltjesMethod::ChebCodeXtreme => Some(Self::XTREME),
+            crate::config::StieltjesMethod::ChebCodeBalanced => Some(Self::BALANCED),
             _ => None,
         }
     }

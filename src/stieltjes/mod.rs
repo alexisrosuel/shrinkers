@@ -129,6 +129,7 @@ fn stieltjes_sum_for_one(
         | StieltjesMethod::ChebCode
         | StieltjesMethod::ChebCodeFast
         | StieltjesMethod::ChebCodeXtreme
+        | StieltjesMethod::ChebCodeBalanced
         | StieltjesMethod::Ewald
         | StieltjesMethod::Dst
         | StieltjesMethod::AccuracyAuto
@@ -210,7 +211,8 @@ pub fn compute_stieltjes_at_points(
         // quadratic in p even though the treecode was selected.
         StieltjesMethod::ChebCode
         | StieltjesMethod::ChebCodeFast
-        | StieltjesMethod::ChebCodeXtreme => {
+        | StieltjesMethod::ChebCodeXtreme
+        | StieltjesMethod::ChebCodeBalanced => {
             let preset = chebcode::ChebPreset::from_method(method)
                 .expect("matched the ChebCode method family above");
             let (theta, n, leaf_cap) = preset.parts();
@@ -386,7 +388,8 @@ pub fn compute_all_stieltjes(
         // shared by dispatch, Python bindings and benchmarks.
         StieltjesMethod::ChebCode
         | StieltjesMethod::ChebCodeFast
-        | StieltjesMethod::ChebCodeXtreme => {
+        | StieltjesMethod::ChebCodeXtreme
+        | StieltjesMethod::ChebCodeBalanced => {
             let preset = chebcode::ChebPreset::from_method(method)
                 .expect("matched the ChebCode method family above");
             scale_aos(

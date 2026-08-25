@@ -80,6 +80,7 @@ spiked covariance model. It orchestrates the full pipeline:
   `"blocked_hybrid"`, `"adaptive"`, `"fft5"`, `"fft3"`, `"fft2"`, `"fmm"`
   (alias `"treecode"`), `"chebcode"` (alias `"chebyshev"`),
   `"chebcode_fast"` (alias `"chebf"`; ~1e-8, fastest of the family),
+  `"chebcode_balanced"` (alias `"chebb"`; ~5e-10),
   `"chebcode_xtreme"` (alias `"chebx"`; ~6e-13), `"hodlr"`, `"ewald"`,
   `"dst"`, `"speed_auto"` (alias `"speed"`), `"accuracy_auto"`
   (alias `"accuracy"`), or `"auto"`.

@@ -57,6 +57,9 @@ pub enum StieltjesMethod {
     /// Precision-tuned ChebCode preset (theta=0.25, n=11, leaf=16):
     /// ~1e-12/1e-13 class without paying the full exact O(p²).
     ChebCodeXtreme,
+    /// Middle ChebCode preset (theta=0.55, n=11, leaf=32): ~3e-10 class at
+    /// roughly the FAST price (+6%) — measured round-2 operating point.
+    ChebCodeBalanced,
     /// O(p·k + M log M) Ewald near/far splitting: exact near window +
     /// coarse-grid FFT far part (smooth kernel, small grid)
     Ewald,
@@ -97,6 +100,7 @@ impl StieltjesMethod {
             Self::ChebCode => "chebcode",
             Self::ChebCodeFast => "chebcode_fast",
             Self::ChebCodeXtreme => "chebcode_xtreme",
+            Self::ChebCodeBalanced => "chebcode_balanced",
             Self::Ewald => "ewald",
             Self::Dst => "dst",
             Self::Auto => "auto",
@@ -123,6 +127,7 @@ impl StieltjesMethod {
             Self::ChebCode => "O(p log p) Chebyshev-interpolation treecode",
             Self::ChebCodeFast => "ChebCode speed preset (theta .5, n 9, leaf 32)",
             Self::ChebCodeXtreme => "ChebCode precision preset (theta .25, n 11, leaf 16)",
+            Self::ChebCodeBalanced => "ChebCode balanced preset (theta .55, n 11, leaf 32)",
             Self::Ewald => "O(p·k+M log M) Ewald near/far splitting",
             Self::Dst => "O(p log p) DST-I real part (odd-extension)",
             Self::Auto => "Auto-select based on problem size",
@@ -150,6 +155,7 @@ impl StieltjesMethod {
             Self::ChebCode,
             Self::ChebCodeFast,
             Self::ChebCodeXtreme,
+            Self::ChebCodeBalanced,
             Self::Ewald,
             Self::Dst,
         ]

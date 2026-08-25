@@ -137,6 +137,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (1 forward + 1 inverse vs 2 forward + 1 inverse).
 
 ### Added
+- **`StieltjesMethod::ChebCodeBalanced`** (`"chebcode_balanced"` / Python
+  alias `"chebb"`): new ChebCode preset (theta=0.55, n=11, leaf=32) at
+  ~3e-10 rel-L2 error and roughly FAST+6% runtime — a measured operating
+  point between FAST (~1e-8) and XTREME (~1e-12); it dominates neither
+  and takes no auto-dispatch bin. Duel data in
+  `examples/measure_xtreme_duel.rs`.
 - **README value-proposition front page with two measured figures**
   (`scripts/make_readme_figures.py`, data `docs/img/readme_figures.json`).
   Figure 1 shows what the cleaning buys on a spiked model (p=1000, c=0.25,
