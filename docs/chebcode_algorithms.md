@@ -38,6 +38,8 @@ input). A balanced binary tree is then built recursively:
   plus `n` node positions and `n` weights per node) — no pointer chasing,
   cache-friendly traversal.
 
+![ChebCode tree layout](chebcode_tree.png)
+
 Depth is ⌈log₂(p / leaf_cap)⌉ ≈ 11 levels at p = 50 000 with leaf_cap 32.
 
 ## Equivalent densities on Chebyshev panels
@@ -58,6 +60,13 @@ barycentric Lagrange row-update. For each source `x`:
 where `λ_j = (−1)^j` (halved at the endpoints) are the barycentric
 weights. If `x` hits a node exactly, that single weight absorbs the mass.
 Leaf weights therefore sum exactly to the leaf's source count.
+
+![Equivalent densities](chebcode_equivalent_densities.png)
+
+The figure computes the real construction (same normalized barycentric
+row update) for 60 sources on one panel, evaluating only where the θ test
+would accept it — see `scripts/make_chebcode_figures.py` for the exact
+computation behind the printed deviation.
 
 Two implementation details matter:
 
@@ -102,6 +111,8 @@ Per query point `z = x − iη`, a stack-based DFS visits nodes; three cases:
      denominator exactly like the leaf loop — unconditional stability.
 3. **not separated** — recurse into children.
 
+![One query's traversal path](chebcode_traversal.png)
+
 The result is returned in the caller's original order although the tree is
 built on the sorted multiset.
 
@@ -122,6 +133,8 @@ O((p + Q)·log p)-class scaling and the measured runtimes in
 | `chebcode_fast` (`chebf`) | 0.50 | 9 | 32 | ~1e-8 | fastest; owns most speed bins |
 | `chebcode_balanced` (`chebb`) | 0.55 | 11 | 32 | ~3e-10 | FAST+6 % runtime |
 | `chebcode_xtreme` (`chebx`) | 0.25 | 11 | 16 | ~1e-12/13 | precision niche |
+
+![Measured preset accuracy classes](chebcode_presets.png)
 
 Parameter sensitivity, measured with
 `examples/measure_cheb_sweep.rs` (interleaved A/B, error vs the exact
