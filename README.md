@@ -164,7 +164,7 @@ The only other Python package implementing RIE shrinkage is **pyRMT** (PyPI). Ou
 
 ### 🐛 pyRMT has a critical bug
 
-`pyRMT.stieltjes(z, E)` computes $\operatorname{tr}(zI - E)$ instead of the correct $\operatorname{tr}\bigl((zI - E)^{-1}\bigr)$ — the matrix inverse is missing. This makes its RIE shrinkage completely wrong (~360% relative error).
+`pyRMT.stieltjes(z, E)` computes $\mathrm{tr}(zI - E)$ instead of the correct $\mathrm{tr}\bigl((zI - E)^{-1}\bigr)$ — the matrix inverse is missing. This makes its RIE shrinkage completely wrong (~360% relative error).
 
 | Method | p=100, c=0.5 | p=500, c=0.5 |
 |--------|-------------|-------------|
