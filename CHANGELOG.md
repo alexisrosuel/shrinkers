@@ -137,6 +137,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (1 forward + 1 inverse vs 2 forward + 1 inverse).
 
 ### Changed
+- Campaign diagnostics committed without code change: ChebCodeFast
+  tree build is 10-11% of end-to-end runtime (below the 15% action
+  threshold), and the windowed cutoff-ratio curve at p=10k shows
+  rel-L2 stuck near 0.35-0.5 across ratio 4..30 while runtime grows
+  linearly - ratio 10 sits at the knee and is kept.
+### Changed
 - Documented a third negative result: a symmetric privatized parallel
   variant of the AutoVectorized sweep at SMALL p (where the private
   buffers DO fit L2, unlike the large-p attempt below) measured

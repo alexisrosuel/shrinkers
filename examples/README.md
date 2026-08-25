@@ -22,6 +22,9 @@ Their outputs feed `scripts/` plots and the numbers recorded under
   transfer order; analyzed by `scripts/analyze_order_sweep.py`.
 - `measure_batch_gamma_sweep.rs` — batch-vs-loop benchmark for the ChebCode
   η-sweep workflow.
+- `measure_cheb_sweep.rs` / `measure_xtreme_duel.rs` / `measure_build_share.rs` /
+  `measure_windowed_ratio.rs` — Pareto-campaign probes (ChebCode preset grid,
+  preset duels, tree-build share, windowed-ratio curve).
 - `measure_eta_sweep.rs` — η regularization study (bias, stability,
   runtime); analyzed in `docs/eta_choice.md`.
 - `ab_quick_timing.rs` — quick single-method A/B timing from the CLI.
