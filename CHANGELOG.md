@@ -137,6 +137,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (1 forward + 1 inverse vs 2 forward + 1 inverse).
 
 ### Changed
+- Documented a third negative result: a symmetric privatized parallel
+  variant of the AutoVectorized sweep at SMALL p (where the private
+  buffers DO fit L2, unlike the large-p attempt below) measured
+  136-182% slower at p=1k/2k/5k. Root cause: dual-output inner loops
+  (row update + conjugated column update per term) defeat the LLVM
+  auto-vectorization that makes autovec competitive - losing SIMD costs
+  more than halving the pair arithmetic gains. Symmetry exploitation
+  beyond the existing sequential kernels is closed out.
 - Documented a second negative result: exploiting K(b,a)=-conj(K(a,b))
   in the PARALLEL tiled path (private full-size buffers per span +
   reduction, each unordered pair computed once) measured 3.5-4.9x
