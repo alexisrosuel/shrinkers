@@ -420,7 +420,7 @@ no global grid; ChebCode remains the approximate-frontier optimum.
   (`pixi run build`, or maturin directly with `CONDA_PREFIX` set) — a
   stale installed module is indistinguishable from a code regression.
 
-## [0.3.0] — shrinkers
+## Internal history — pre-publication
 
 First release under the new name.
 
@@ -442,4 +442,3 @@ First release under the new name.
   macOS arm64/x86_64) + sdist, published to PyPI via trusted
   publishing on `v*` tags
 
-[0.3.0]: https://github.com/alexisrosuel/shrinkers/releases/tag/v0.3.0
