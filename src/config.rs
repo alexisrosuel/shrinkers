@@ -185,26 +185,13 @@ impl StieltjesMethod {
     /// - p ≥ 5000:  `ChebCode` (parallel Chebyshev treecode, ~1.7-2× faster
     ///   than the multipole `TreeCode` at every size, with ~0 error)
     pub fn resolve(p: usize, parallelism: Parallelism) -> Self {
-        match parallelism {
-            Parallelism::Parallel => {
-                if p <= 200 {
-                    Self::AutoVectorized
-                } else if p < 5000 {
-                    Self::Blocked
-                } else {
-                    Self::ChebCode
-                }
-            }
-            Parallelism::Sequential | Parallelism::Auto => {
-                if p <= 200 {
-                    Self::AutoVectorized
-                } else if p < 5000 {
-                    Self::Blocked
-                } else {
-                    Self::Fft2
-                }
-            }
-        }
+        // Data-driven: pick the fastest method under the accuracy cap from
+        // the measured Pareto table (regenerated from
+        // docs/pareto/bench_after.json). The pre-table heuristic hardcoded
+        // here sent e.g. p=20k sequential to Fft2 — measured ~12x slower
+        // than ChebCodeFast for the deconvolution grid path.
+        let parallel = matches!(parallelism, Parallelism::Parallel);
+        pareto_autogen::pareto_pick(true, parallel, p)
     }
 }
 
@@ -502,23 +489,28 @@ mod tests {
 
     #[test]
     fn test_auto_resolution_is_parallelism_aware() {
-        // (parallelism, p, expected pick)
+        // (parallelism, p, expected pick) — mirrors the regenerated Pareto
+        // speed bins; update together with pareto_autogen.rs.
         for (par, p, expected) in [
-            (Parallelism::Sequential, 10_000usize, StieltjesMethod::Fft2),
+            (
+                Parallelism::Sequential,
+                10_000usize,
+                StieltjesMethod::ChebCodeBalanced,
+            ),
             (
                 Parallelism::Parallel,
                 10_000usize,
-                StieltjesMethod::ChebCode,
+                StieltjesMethod::ChebCodeFast,
             ),
             (
                 Parallelism::Sequential,
                 100usize,
-                StieltjesMethod::AutoVectorized,
+                StieltjesMethod::ChebCodeFast,
             ),
             (
                 Parallelism::Parallel,
                 100usize,
-                StieltjesMethod::AutoVectorized,
+                StieltjesMethod::ChebCodeBalanced,
             ),
         ] {
             let resolved = RmtConfig::new(0.5)
@@ -538,7 +530,7 @@ mod tests {
             .resolve_auto(10000);
         assert_eq!(cfg.parallelism, Parallelism::Sequential);
         // Method resolved based on the resolved (sequential) parallelism.
-        assert_eq!(cfg.stieltjes_method, StieltjesMethod::Fft2);
+        assert_eq!(cfg.stieltjes_method, StieltjesMethod::ChebCodeBalanced);
     }
 }
 

@@ -137,6 +137,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (1 forward + 1 inverse vs 2 forward + 1 inverse).
 
 ### Changed
+- **Fixed: Python `method="auto"` now resolves through the measured
+  Pareto table** instead of the pre-table size heuristic that sent
+  e.g. p=20k sequential to Fft2. End-to-end `deconvolve_spiked` at
+  p=20 000 drops from 10.6 ms to 0.70 ms (15x) with identical detected
+  k and spike estimates; `StieltjesMethod::Auto` and the hardcoded
+  `resolve()` tests now mirror the regenerated pareto_autogen bins.
 - Campaign diagnostics committed without code change: ChebCodeFast
   tree build is 10-11% of end-to-end runtime (below the 15% action
   threshold), and the windowed cutoff-ratio curve at p=10k shows
