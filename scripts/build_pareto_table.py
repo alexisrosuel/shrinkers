@@ -150,6 +150,7 @@ RUST_VARIANTS = {
     "chebcode": "ChebCode",
     "chebcode_fast": "ChebCodeFast",
     "chebcode_xtreme": "ChebCodeXtreme",
+    "chebcode_balanced": "ChebCodeBalanced",
 }
 
 
