@@ -73,7 +73,7 @@ the bulk deconvolution.
 | BlockedTiled | 37.6 ms | 37.6 ms | 37.6 ms |
 
 Runtime is essentially η-independent: the exact kernel does identical work;
-the treecode's adaptivity barely notices (slightly *faster* at large η since
+the ChebCode treecode's adaptivity barely notices (slightly *faster* at large η since
 smoother kernels need fewer nodes).
 
 ### Empirical-vs-population gap (part A of the sweep)

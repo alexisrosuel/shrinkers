@@ -10,7 +10,8 @@ free-probability deconvolution: detect spikes (BEMA — Bulk Eigenvalue
 Matching Analysis), debias them with the inverse BBP map (the
 Baik–Ben Arous–Péché phase transition), and deconvolve the bulk (El
 Karoui). Features O(p log p)
-Chebyshev-treecode Stieltjes transforms, auto-vectorized loops,
+ChebCode treecodes (Chebyshev interpolation) for the
+Stieltjes transform, auto-vectorized loops,
 cache blocking, multi-threaded kernels (**~6× on an 8-core machine**, one keyword away),
 and PyO3 bindings.
 
@@ -53,7 +54,7 @@ vectorized NumPy version:
 *Full transform of all p points, log-log over the whole 10⁰–10⁵ range,
 η = 1/√p, Apple M1 Max, NumPy 2.5.1.*
 
-| p | Naive Python | NumPy | shrinkers exact ¹ | shrinkers treecode ² |
+| p | Naive Python | NumPy | shrinkers exact ¹ | shrinkers ChebCode ² |
 |---|---|---|---|---|
 | 1 024 | 0.32 s | 2.3 ms | **0.33 ms** · 7× | **0.22 ms** · 11× |
 | 4 096 | 5.2 s | 94 ms | **1.2 ms** · 81× | **0.48 ms** · 195× |
@@ -82,7 +83,7 @@ sharing. Measured on the 8-core machine above (fresh sweep,
 | 10 000 | 38.6 ms | 6.4 ms | **×6.0** |
 | 50 000 | 0.94 s | 0.16 s | **×5.9** |
 
-The Chebyshev treecode scales too (×3.3–4.5). Note also that the NumPy baseline in figure 2
+ChebCodeFast scales too (×3.3–4.5). Note also that the NumPy baseline in figure 2
 is itself single-core — even pinned to one thread, shrinkers still wins
 by roughly an order of magnitude (9.1× at p≈5000).
 
@@ -91,12 +92,12 @@ by roughly an order of magnitude (9.1× at p≈5000).
 - `deconvolve_spiked(evals, c)` — the one-call pipeline: BEMA detection →
   inverse-BBP spike debiasing → El Karoui bulk deconvolution;
 - Stieltjes-transform methods spanning the whole speed/accuracy frontier —
-  machine-precision exact kernels, Chebyshev treecodes (~1e-8 … ~6e-13),
+  machine-precision exact kernels, ChebCode treecodes (~1e-8 … ~6e-13),
   HODLR — plus data-driven `speed_auto` / `accuracy_auto` picks;
 - correlation-matrix cleaning with eigenvector-overlap correction, direct
   precision-matrix shrinkage, Tracy–Widom spike detection;
 - Rust API + PyO3 bindings with the GIL released during computation;
-- multi-core execution built in — exact and treecode kernels parallelize
+- multi-core execution built in — exact and ChebCode kernels parallelize
   multi-core (`parallel=True`).
 
 ## Quickstart

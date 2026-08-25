@@ -98,6 +98,12 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 | `Fft2` | O(p log p) | Same dual-convolution kernel | ~4e-5 rel |
 | `TreeCode` | O(p log p) | 1D balanced tree (FMM) | User-controllable |
 | `ChebCode` | O(p log p) | Chebyshev-interpolation tree | ~5e-10 rel |
+
+> **Naming note:** `TreeCode` (alias `"fmm"`) is the legacy plain 1D
+> tree code — a different method from the `ChebCode*` family, which are
+> also tree codes but interpolate source densities on Chebyshev nodes.
+> Prose and benchmarks saying "treecode" without qualification mean the
+> ChebCode family.
 | `Hodlr` | O(r² p log p) | Hierarchical low-rank (ACA / RandNLA modes) | tol-driven (ACA tol 1e-9 → ~7e-10 measured) |
 | `Ewald` | O(p·k + M log M) | Near/far splitting + coarse FFT | User-controllable |
 | `Dst` | O(p log p) | Alias for the `Adaptive` composition (shared FFT grid) | ~4e-5 rel |
