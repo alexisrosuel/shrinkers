@@ -3,7 +3,7 @@ authors = ["alexisrosuel <rosuelalexis1@gmail.com>"]
 channels = ["conda-forge"]
 name = "shrinkers"
 platforms = ["osx-arm64", "linux-64"]
-version = "0.3.0"
+version = "0.1.0"
 
 [tasks]
 # Build the Rust extension into the pixi env (dev install)

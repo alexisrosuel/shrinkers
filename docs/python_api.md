@@ -285,7 +285,7 @@ original trace exactly.
 ## Module attributes
 
 - `shrinkers.__version__` — `str`, the crate version (single-sourced from
-  `Cargo.toml`; e.g. `"0.3.0"`).
+  `Cargo.toml`; e.g. `"0.1.0"`).
 - `shrinkers.__doc__` — `str`, short module description.
 
 ---
