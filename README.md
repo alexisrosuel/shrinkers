@@ -202,6 +202,9 @@ Key findings:
 - [`docs/python_api.md`](docs/python_api.md) — full Python API reference;
 - [`docs/internals.md`](docs/internals.md) — method map, algorithm math, the
   complete benchmark record and the unsafe-code policy;
+- [`docs/chebcode_algorithms.md`](docs/chebcode_algorithms.md) — deep dive
+  into the ChebCode* treecodes (tree layout, Chebyshev equivalent
+  densities, traversal, presets, measured parameter sensitivities);
 - [`CHANGELOG.md`](CHANGELOG.md) — release history and known caveats.
 
 ## Development

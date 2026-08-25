@@ -99,6 +99,9 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 | `TreeCode` | O(p log p) | 1D balanced tree (FMM) | User-controllable |
 | `ChebCode` | O(p log p) | Chebyshev-interpolation tree | ~5e-10 rel |
 
+> The `ChebCode*` family is documented in depth in
+> [chebcode_algorithms.md](chebcode_algorithms.md).
+
 > **Naming note:** `TreeCode` (alias `"fmm"`) is the legacy plain 1D
 > tree code — a different method from the `ChebCode*` family, which are
 > also tree codes but interpolate source densities on Chebyshev nodes.

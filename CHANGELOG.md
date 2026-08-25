@@ -6,6 +6,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.1.1] — 2026-08-26
 
 ### Added
+- **`docs/chebcode_algorithms.md`**: full algorithm reference for the
+  ChebCode* treecode family — tree layout, Chebyshev equivalent
+  densities with barycentric weights and parent composition, the
+  branchless opening-angle traversal, SIMD near/far-field loops,
+  preset table with measured parameter sensitivities, η coupling,
+  batch API and usage sites. Cross-linked from README and internals.
 - **`StieltjesMethod::ChebCodeBalanced`** (`"chebcode_balanced"` /
   `"chebb"`): ~3e-10 rel-L2 at roughly FAST+6% runtime — a measured
   intermediate frontier point between FAST (~1e-8) and XTREME (~1e-12).
