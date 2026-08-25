@@ -3,6 +3,26 @@
 All notable changes to **shrinkers** are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.1] — 2026-08-26
+
+### Added
+- **`StieltjesMethod::ChebCodeBalanced`** (`"chebcode_balanced"` /
+  `"chebb"`): ~3e-10 rel-L2 at roughly FAST+6% runtime — a measured
+  intermediate frontier point between FAST (~1e-8) and XTREME (~1e-12).
+
+### Changed
+- **Fixed: Python `method="auto"` resolves through the measured Pareto
+  table** instead of the pre-table heuristic that sent p=20k sequential
+  to Fft2. Default-path `deconvolve_spiked` at p=20 000: 10.6 ms ->
+  0.70 ms (15x). `Auto` now tracks every future re-sweep for free.
+- Dispatch bins regenerated from a two-pass merged sweep;
+  `chebcode_balanced` wins the speed_seq <=1000 and <=10000 bins.
+- Campaign diagnostics: ChebCodeFast tree build measured at 10-11% of
+  runtime (below action threshold); windowed ratio 10 confirmed at the
+  knee; four symmetry-exploitation attempts measured slower and are
+  documented with root causes (see CHANGELOG history below and
+  docs/internals.md).
+
 ## [0.1.0] — 2026-08-25
 
 ### Changed
