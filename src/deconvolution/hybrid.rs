@@ -54,7 +54,9 @@ pub struct SpikedDeconvolutionResult {
 /// * `c` — Concentration ratio $p/n$.
 /// * `n_points` — Grid resolution for the bulk deconvolution.
 /// * `eta` — Regularization for the bulk deconvolution (default `0.1/√p`).
-/// * `config` — `RmtConfig` (used for eta consistency with the rest of the crate).
+/// * `config` — `RmtConfig` selecting the Stieltjes kernel and its
+///   optimizations (its `eta` field is ignored; see
+///   [`super::spectral_deconvolution`]).
 ///
 /// # Returns
 ///
@@ -83,7 +85,9 @@ pub fn deconvolve_bulk(
 /// * `eta` — Regularization for the bulk deconvolution (default `0.1/√p`).
 /// * `margin` — Multiplicative margin above the fitted bulk edge for spike
 ///   detection (default 1.0; slightly above 1.0 adds robustness).
-/// * `config` — `RmtConfig` (used for eta consistency with the rest of the crate).
+/// * `config` — `RmtConfig` selecting the Stieltjes kernel and its
+///   optimizations (its `eta` field is ignored; see
+///   [`super::spectral_deconvolution`]).
 ///
 /// # Returns
 ///

@@ -1,7 +1,9 @@
 //! FFT-based O(p log p) Stieltjes transform via two separate convolutions.
 //!
-//!   Im[m_g] = (f_emp * K_η)(λ)   where K_η(x) = η/(x²+η²) (even Cauchy kernel)
-//!   Re[m_g] = (f_emp * R_η)(λ)   where R_η(x) =  x/(x²+η²) (odd Cauchy kernel)
+//!   Im\[m_g\] = (f_emp * K_η)(λ)   where K_η(x) = η/(x²+η²) (even Cauchy kernel)
+//!   Re\[m_g\] = (f_emp * R_η)(λ)   where R_η(x) =  x/(x²+η²) (odd Cauchy kernel)
+//!
+//! (`m_g` is the empirical Stieltjes transform; `f_emp` its spectral density.)
 //!
 //! Both convolutions are done via FFT.  With adequate padding, the density is
 //! zero at the domain boundaries, so the odd kernel's periodic boundary
@@ -31,7 +33,7 @@
 //! Splatting and interpolation default to the 8-point heptic stencil
 //! ([`Order::Heptic`]); all narrower stencils remain available through
 //! [`compute_all_stieltjes_fft5_with_order`] / [`Fft5Options`]. Measured on
-//! MP-like spectra (`examples/order_sweep.rs`, error vs exact O(p²)):
+//! MP-like spectra (`examples/measure_fft_order_sweep.rs`, error vs exact O(p²)):
 //!
 //! ```text
 //!   error vs grid size m (p=5000):          floor (order-independent):
@@ -66,6 +68,8 @@
 use num_complex::Complex64;
 use rustfft::FftDirection;
 
+use super::next_pow2;
+
 /// Result of the FFT grid convolution: the convolved grid plus the mapping
 /// parameters needed to interpolate the Stieltjes transform at arbitrary
 /// query points.
@@ -96,7 +100,7 @@ struct FftGrid {
 /// passes (the FFT dominates), so at a *fixed grid* they are nearly free.
 /// Their usefulness is bounded by the periodization (wrap-around) floor:
 /// once the transfer error drops below it, extra order buys nothing — see
-/// the module docs and `examples/order_sweep.rs` for the measured picture.
+/// the module docs and `examples/measure_fft_order_sweep.rs` for the measured picture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Order {
     Linear,
@@ -203,10 +207,10 @@ fn interp_at<const N: usize>(
 
 /// Knobs of the FFT grid convolution beyond the method choice.
 ///
-/// Defaults reproduce the historical adaptive behaviour (cubic transfer,
-/// padding `max(1000η, 0.75·raw_range)`, grid `dx ≤ η/8` rounded to a power
-/// of two). The fields are exposed for accuracy experiments and for tuning
-/// the accuracy/speed trade-off; see `examples/order_sweep.rs`.
+/// Defaults are the heptic transfer stencil, padding
+/// `max(1000η, 0.75·raw_range)`, and a grid `dx ≤ η/8` rounded to a power of
+/// two. The fields are exposed for accuracy experiments and for tuning the
+/// accuracy/speed trade-off; see `examples/measure_fft_order_sweep.rs`.
 #[derive(Debug, Clone, Copy)]
 pub struct Fft5Options {
     /// Grid transfer stencil.
@@ -515,7 +519,7 @@ pub fn compute_all_stieltjes_fft5_with_order(
 
 /// Fully configurable entry point: transfer order, forced grid size and
 /// padding multipliers. See [`Fft5Options`] for the knobs and
-/// `examples/order_sweep.rs` for the measured accuracy/speed landscape.
+/// `examples/measure_fft_order_sweep.rs` for the measured accuracy/speed landscape.
 pub fn compute_all_stieltjes_fft5_with_options(
     eigenvalues: &[f64],
     eta: f64,
@@ -556,14 +560,6 @@ pub fn compute_stieltjes_fft_at_points(
         fft_convolution(eigenvalues, eta, &opts)
     };
     interpolate_grid(&grid, query_points, order)
-}
-
-fn next_pow2(n: usize) -> usize {
-    let mut p = 1;
-    while p < n {
-        p <<= 1;
-    }
-    p
 }
 
 #[cfg(test)]
@@ -662,11 +658,11 @@ mod tests {
         }
     }
 
-    /// Regression guard for the cubic grid-transfer upgrade: at the default
-    /// adaptive grid, cubic must not be worse than linear against the exact
-    /// O(p²) sum (measured: ~8–12× better on MP-like spectra).
+    /// At the default adaptive grid the widest (heptic) transfer stencil must
+    /// not be worse than the narrowest (linear) one against the exact O(p²)
+    /// sum — the module's "wider stencils never lose" claim.
     #[test]
-    fn test_cubic_not_worse_than_linear() {
+    fn test_default_transfer_not_worse_than_linear() {
         for &p in &[512usize, 2000] {
             let c: f64 = 0.5;
             let lo = (1.0 - c.sqrt()).powi(2);
@@ -681,20 +677,9 @@ mod tests {
             evs.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let eta = 1.0 / (p as f64).sqrt();
 
-            let mut exact_sq = 0.0f64;
-            let mut refs = Vec::with_capacity(p);
-            for &li in &evs {
-                let mut sr = 0.0;
-                let mut si = 0.0;
-                for &lj in &evs {
-                    let d = li - lj;
-                    let den = d * d + eta * eta;
-                    sr += d / den;
-                    si += eta / den;
-                }
-                refs.push((sr, si));
-                exact_sq += sr * sr + si * si;
-            }
+            // Exact O(p²) reference (raw sums, as returned by the kernels).
+            let refs = crate::stieltjes::testutil::exact_stieltjes(&evs, eta);
+            let exact_sq: f64 = refs.iter().map(|(sr, si)| sr * sr + si * si).sum();
 
             let err_of = |res: Vec<(f64, f64)>| -> f64 {
                 let num: f64 = res
@@ -706,10 +691,10 @@ mod tests {
             };
 
             let lin = err_of(compute_all_stieltjes_fft5_linear(&evs, eta, None));
-            let cub = err_of(compute_all_stieltjes_fft5(&evs, eta, None));
+            let default = err_of(compute_all_stieltjes_fft5(&evs, eta, None));
             assert!(
-                cub <= lin,
-                "p={p}: cubic ({cub:.3e}) should beat linear ({lin:.3e})"
+                default <= lin,
+                "p={p}: default/heptic ({default:.3e}) should beat linear ({lin:.3e})"
             );
         }
     }

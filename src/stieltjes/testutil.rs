@@ -29,6 +29,30 @@ pub(crate) fn exact_stieltjes(evals: &[f64], eta: f64) -> Vec<(f64, f64)> {
     out
 }
 
+/// Deterministic 64-bit LCG yielding reproducible uniforms in `[0, 1)`.
+///
+/// Used to build synthetic random spectra without pulling in `rand`; a single
+/// definition replaces the copies that used to live in each test module.
+pub(crate) struct Lcg(u64);
+
+impl Lcg {
+    pub(crate) fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+}
+
+impl Iterator for Lcg {
+    type Item = f64;
+
+    fn next(&mut self) -> Option<f64> {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        Some((self.0 >> 11) as f64 / (1u64 << 53) as f64)
+    }
+}
+
 /// Deterministic Fisher–Yates shuffle (LCG driving values, matching the
 /// crate's generator convention) — lets order-invariance tests feed
 /// genuinely permuted input while staying reproducible.

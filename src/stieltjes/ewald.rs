@@ -28,12 +28,14 @@
 //! The split is exact (`K = K_near + K_far`), so the only errors are the
 //! (controllable) near-window truncation and the coarse-grid discretization.
 //! Empirically this gives ~2% real / ~0.6% imaginary error with a grid ~10×
-//! smaller than the plain FFT — better than `fft5`'s ~15% real error.
+//! smaller than a plain FFT grid at equal padding.
 //!
 //! Only `exp` is needed (no complex `erf`), so this uses only stable Rust std.
 
 use num_complex::Complex64;
 use rustfft::FftDirection;
+
+use super::next_pow2;
 
 /// Default splitting scale: `alpha = ALPHA_OVER_ETA / eta`.
 /// Chosen so the near window `R = 3/alpha` comfortably covers the `η`-scale
@@ -215,14 +217,6 @@ fn far_part(
     (reals, imags)
 }
 
-fn next_pow2(n: usize) -> usize {
-    let mut p = 1;
-    while p < n {
-        p <<= 1;
-    }
-    p
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,7 +237,7 @@ mod tests {
 
     #[test]
     fn test_ewald_accuracy_vs_exact() {
-        // Ewald should be accurate to ~a few % (better than fft5's ~15% real).
+        // Ewald should be accurate to ~a few percent in absolute terms.
         //
         // NOTE on the error metric: the real part Re[S] is antisymmetric and
         // near-cancelling, so its value at many points is tiny. A per-point

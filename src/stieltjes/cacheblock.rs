@@ -15,7 +15,7 @@
 //! - **Far-field cutoff**: When |λᵢ-λⱼ| ≫ η, skip the term entirely.
 //!   For η = 0.1/√p and large p, this yields ~O(p·k) effectively.
 //!
-//! - **Structure-of-Arrays (SoA) output**: Returns separate Vec<f64> for
+//! - **Structure-of-Arrays (SoA) output**: Returns separate `Vec<f64>` for
 //!   real and imaginary parts to enable SIMD-friendly downstream processing.
 
 use crate::stieltjes::autovec::autovec_stieltjes_sum;
@@ -27,7 +27,7 @@ use rayon::prelude::*;
 /// Returns (real_parts, imag_parts) as separate SoA-style vectors.
 /// Each vector has length p, one entry per eigenvalue.
 ///
-/// This is the special case of [`compute_stieltjes_blocked_at_points`] where
+/// This is the special case of `compute_stieltjes_blocked_at_points` where
 /// the query points are the sample eigenvalues themselves. It delegates to
 /// that function so that **all** optimizations (cache blocking, write
 /// batching, loop unrolling, FMA, far-field cutoff) are shared between the
@@ -43,18 +43,13 @@ use rayon::prelude::*;
 /// exceeds cache). Measured 13-22% faster than the λⱼ-outer order across
 /// p=1000..50000.
 ///
-/// The `block_size` argument is passed through to the tiled kernel, which
-/// auto-tunes it when `None` (see [`auto_tiled_block_size`]). Callers that
-/// want the cache-optimal size should pass `None`.
+/// The tiled kernel auto-tunes its own block size (see
+/// (`auto_tiled_block_size`); there is no caller-facing override.
 ///
 /// # Arguments
 /// * `eigenvalues` — sorted eigenvalues (length p)
 /// * `eta` — regularization parameter
 /// * `cutoff` — far-field cutoff ratio (None = disabled, Some(r) = enabled with ratio r)
-///
-/// The historical `block_size` argument was removed: this kernel delegates
-/// to the 2D-tiled implementation, which always auto-selects its own block
-/// size — accepting one here was a lie in the signature.
 pub fn compute_all_stieltjes_blocked(
     eigenvalues: &[f64],
     eta: f64,
@@ -73,10 +68,10 @@ pub fn compute_all_stieltjes_blocked(
 /// independently over all λⱼ (source eigenvalues). Each thread computes its
 /// own λᵢ sum into local scalar variables — no shared state or reduction needed.
 ///
-/// This differs from `compute_all_stieltjes_blocked` which iterates λⱼ-outer
-/// (accumulating into shared arrays) — that structure cannot be parallelized
-/// without expensive per-thread partial arrays. The λᵢ-outer structure is
-/// trivially data-parallel.
+/// This differs from `compute_all_stieltjes_blocked`, which delegates to the
+/// output-block-outer tiled kernel and is therefore *not* organised for a
+/// simple data-parallel split. The λᵢ-outer structure here is trivially
+/// data-parallel: each thread accumulates its own λᵢ from scratch.
 ///
 /// Delegates to the single-point kernel [`stieltjes_sum_cutoff`] — no
 /// duplicated inner-loop body.
@@ -97,14 +92,22 @@ pub(crate) fn compute_all_stieltjes_blocked_parallel(
         .map(|&lambda_i| stieltjes_sum_cutoff(lambda_i, eigenvalues, eta, cutoff))
         .collect();
 
-    // Transpose Vec<(f64, f64)> into two separate Vecs
-    let mut reals = Vec::with_capacity(p);
-    let mut imags = Vec::with_capacity(p);
+    split_aos(results)
+}
+
+/// Split AoS `(real, imag)` pairs into two SoA vectors.
+///
+/// The blocked family produces per-λᵢ pairs (from a parallel map); the SIMD
+/// consumers want dense `real`/`imag` streams. One definition serves the
+/// blocked, windowed and blocked-autovec paths.
+#[inline]
+pub(crate) fn split_aos(results: Vec<(f64, f64)>) -> (Vec<f64>, Vec<f64>) {
+    let mut reals = Vec::with_capacity(results.len());
+    let mut imags = Vec::with_capacity(results.len());
     for (r, i) in results {
         reals.push(r);
         imags.push(i);
     }
-
     (reals, imags)
 }
 
@@ -165,7 +168,6 @@ pub(crate) fn compute_stieltjes_blocked_at_points(
     query_points: &[f64],
     eigenvalues: &[f64],
     eta: f64,
-    block_size: Option<usize>,
     cutoff: Option<f64>,
 ) -> (Vec<f64>, Vec<f64>) {
     let nq = query_points.len();
@@ -174,7 +176,9 @@ pub(crate) fn compute_stieltjes_blocked_at_points(
         return (Vec::new(), Vec::new());
     }
 
-    let bs = block_size.unwrap_or(BLOCK_SZ);
+    // The block size is always the shared default: the historical
+    // `Option<usize>` parameter was never passed anything but `None`.
+    let bs = BLOCK_SZ;
     let eta_sq = eta * eta;
     // Effective cutoff distance = cutoff_ratio * eta. When cutoff is None,
     // no term is skipped.
@@ -596,9 +600,8 @@ fn at_points_inner_loop_no_cutoff(
 /// search) and only iterate over that window.
 ///
 /// This turns the O(p²) iteration into O(p·k) where k is the average window
-/// size — skipping far-field iterations entirely (not just skipping the write,
-/// which is what the branch-based cutoff in `compute_all_stieltjes_blocked`
-/// does). For η = 0.1/√p and large p, k ≪ p, so this is a large win.
+/// size — far-field terms are skipped entirely rather than visited and
+/// discarded. For η = 0.1/√p and large p, k ≪ p, so this is a large win.
 ///
 /// Requires `cutoff` to be `Some` (the window is the whole point). If `None`,
 /// falls back to the full blocked computation.
@@ -726,14 +729,7 @@ pub(crate) fn compute_all_stieltjes_blocked_windowed_parallel(
         .map(|&lambda_i| stieltjes_sum_windowed(lambda_i, eigenvalues, eta, cut))
         .collect();
 
-    let mut reals = Vec::with_capacity(p);
-    let mut imags = Vec::with_capacity(p);
-    for (r, i) in results {
-        reals.push(r);
-        imags.push(i);
-    }
-
-    (reals, imags)
+    split_aos(results)
 }
 
 /// Auto-select the optimal cache block size for the tiled variant.
@@ -784,7 +780,7 @@ fn auto_tiled_block_size(p: usize) -> usize {
 /// per-iteration `if use_cutoff` branch and the compiler emits a single
 /// (smaller, I-cache-friendly) loop body instead of two inlined copies.
 ///
-/// Auto-selects the block size via [`auto_tiled_block_size`] when `block_size`
+/// Auto-selects the block size via `auto_tiled_block_size` when `block_size`
 /// is `None`.
 pub fn compute_all_stieltjes_blocked_tiled(
     eigenvalues: &[f64],
@@ -1564,7 +1560,7 @@ pub(crate) const PARALLEL_TILED_BS: usize = 32;
 ///
 /// Contiguous groups of output blocks are distributed over threads; every
 /// thread runs the full-square hot body
-/// ([`tiled_span_no_cutoff`] / [`tiled_span_cutoff`]) over its own span,
+/// (`tiled_span_no_cutoff` / `tiled_span_cutoff`) over its own span,
 /// so outputs are accumulated in disjoint, cache-aligned regions — no
 /// reduction, no false sharing. (The symmetric half-work pairing of the
 /// sequential no-cutoff kernel needs scattered cross-chunk updates and does
@@ -1788,7 +1784,7 @@ mod tests {
             .collect();
 
         for &cut in &[None, Some(10.0)] {
-            let (br, bi) = compute_stieltjes_blocked_at_points(&query, &evals, eta, None, cut);
+            let (br, bi) = compute_stieltjes_blocked_at_points(&query, &evals, eta, cut);
             for (i, &q) in query.iter().enumerate() {
                 // Reference: the single-point kernel with the SAME cutoff
                 // semantics (None = all terms, Some = skip far-field terms).

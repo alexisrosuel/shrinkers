@@ -401,18 +401,6 @@ fn rand_block(
         for ta in 0..ell {
             g_re[ta * ell + ta] += lambda;
         }
-        let mut aug_re = vec![0.0f64; ell * 2 * ell];
-        let mut aug_im = vec![0.0f64; ell * 2 * ell];
-        for ta in 0..ell {
-            for tb in 0..ell {
-                aug_re[ta * 2 * ell + tb] = g_re[ta * ell + tb];
-                aug_im[ta * 2 * ell + tb] = g_im[ta * ell + tb];
-            }
-            for tb in 0..n.min(ell) {
-                aug_re[ta * 2 * ell + ell + tb] = b_re[ta * n + tb];
-                aug_im[ta * 2 * ell + ell + tb] = b_im[ta * n + tb];
-            }
-        }
         // The RHS must hold all n columns; solve directly on (G, B) instead
         // of an augmented copy sized for n.
         let w_re = solve_spd_complex(&g_re, &g_im, ell, &b_re, &b_im, n);
@@ -426,8 +414,6 @@ fn rand_block(
             r.copy_from_slice(&w_re[..ell * n]);
             r
         };
-        let _ = &aug_re;
-        let _ = &aug_im;
 
         // --- Validation: evaluate whole test columns so boundary-localized
         // error cannot hide between sparse point probes ---
@@ -917,24 +903,14 @@ pub(crate) const DEFAULT_ACA_RANK: usize = 32;
 
 #[cfg(test)]
 mod tests {
-    struct Lcg(u64);
-    impl Iterator for Lcg {
-        type Item = f64;
-        fn next(&mut self) -> Option<f64> {
-            self.0 = self
-                .0
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            Some((self.0 >> 11) as f64 / (1u64 << 53) as f64)
-        }
-    }
+    use crate::stieltjes::testutil::{Lcg, exact_stieltjes};
 
     /// MP-like spectrum with two outliers (benchmark harness convention).
     fn spectrum(p: usize) -> Vec<f64> {
         let c: f64 = 0.5;
         let lo = (1.0 - c.sqrt()).powi(2);
         let hi = (1.0 + c.sqrt()).powi(2);
-        let mut v: Vec<f64> = Lcg(42)
+        let mut v: Vec<f64> = Lcg::new(42)
             .take(p.saturating_sub(2))
             .map(|x| lo + x * (hi - lo))
             .collect();
@@ -946,21 +922,6 @@ mod tests {
 
     #[test]
     fn hodlr_matches_exact() {
-        let crate_ref = |evs: &[f64], eta: f64| -> Vec<(f64, f64)> {
-            evs.iter()
-                .map(|&li| {
-                    let mut sr = 0.0;
-                    let mut si = 0.0;
-                    for &lj in evs {
-                        let d = li - lj;
-                        let inv = 1.0 / (d * d + eta * eta);
-                        sr += d * inv;
-                        si += eta * inv;
-                    }
-                    (sr, si)
-                })
-                .collect()
-        };
         for p in [256usize, 1000, 4000] {
             let evs = spectrum(p);
             let eta = 1.0 / (p as f64).sqrt();
@@ -973,7 +934,7 @@ mod tests {
                 false,
                 super::HodlrMode::Aca,
             );
-            let exact = crate_ref(&evs, eta);
+            let exact = exact_stieltjes(&evs, eta);
             let mut num = 0.0;
             let mut den = 0.0;
             for i in 0..p {
@@ -1054,8 +1015,8 @@ mod tests {
                     sr += gr * sol[k * n + j] - gi * sol[ell * n + k * n + j];
                     si += gr * sol[ell * n + k * n + j] + gi * sol[k * n + j];
                 }
-                let _ = si;
                 worst = worst.max((sr - b_re[i * n + j]).abs());
+                worst = worst.max((si - b_im[i * n + j]).abs());
             }
         }
         eprintln!("solve_spd residual={worst:.3e}");
@@ -1116,16 +1077,10 @@ mod tests {
             );
             let mut num = 0.0f64;
             let mut den = 0.0f64;
-            for (i, &x) in evs.iter().enumerate() {
-                let (mut sr, mut si) = (0.0, 0.0);
-                for &y in &evs {
-                    let d = x - y;
-                    let inv = 1.0 / (d * d + eta * eta);
-                    sr += d * inv;
-                    si += eta * inv;
-                }
-                num += (got[i].0 - sr).powi(2) + (got[i].1 - si).powi(2);
-                den += sr.powi(2) + si.powi(2);
+            let exact = exact_stieltjes(&evs, eta);
+            for i in 0..evs.len() {
+                num += (got[i].0 - exact[i].0).powi(2) + (got[i].1 - exact[i].1).powi(2);
+                den += exact[i].0.powi(2) + exact[i].1.powi(2);
             }
             let rel = (num / den).sqrt();
             eprintln!("hodlr-rand p={p} rel_l2={rel:.3e}");
@@ -1140,7 +1095,7 @@ mod tests {
         let p = 500;
         let mut evs = spectrum(p);
         // Shuffle deterministically.
-        let mut s = Lcg(7u64);
+        let mut s = Lcg::new(7u64);
         for i in (1..p).rev() {
             let j = (s.next().unwrap() * (i as f64 + 1.0)) as usize % (i + 1);
             evs.swap(i, j);
@@ -1156,18 +1111,11 @@ mod tests {
             super::HodlrMode::Aca,
         );
         // Ground truth per ORIGINAL index.
+        let exact = exact_stieltjes(&evs, eta);
         let mut worst = 0.0f64;
         let mut worst_i = 0usize;
         for i in 0..p {
-            let mut sr = 0.0;
-            let mut si = 0.0;
-            for &lj in &evs {
-                let d = evs[i] - lj;
-                let inv = 1.0 / (d * d + eta * eta);
-                sr += d * inv;
-                si += eta * inv;
-            }
-            let e = ((got[i].0 - sr).powi(2) + (got[i].1 - si).powi(2)).sqrt();
+            let e = ((got[i].0 - exact[i].0).powi(2) + (got[i].1 - exact[i].1).powi(2)).sqrt();
             if e > worst {
                 worst = e;
                 worst_i = i;
@@ -1180,17 +1128,7 @@ mod tests {
 
 #[cfg(test)]
 mod aca_tests {
-    struct Lcg(u64);
-    impl Iterator for Lcg {
-        type Item = f64;
-        fn next(&mut self) -> Option<f64> {
-            self.0 = self
-                .0
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            Some((self.0 >> 11) as f64 / (1u64 << 53) as f64)
-        }
-    }
+    use crate::stieltjes::testutil::Lcg;
 
     #[test]
     fn aca_block_reconstruction() {
@@ -1198,7 +1136,7 @@ mod aca_tests {
         let p = 256;
         let lo = (1.0 - 0.5f64.sqrt()).powi(2);
         let hi = (1.0 + 0.5f64.sqrt()).powi(2);
-        let mut evs: Vec<f64> = Lcg(42).take(p).map(|x| lo + x * (hi - lo)).collect();
+        let mut evs: Vec<f64> = Lcg::new(42).take(p).map(|x| lo + x * (hi - lo)).collect();
         evs.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let eta = 1.0 / (p as f64).sqrt();
 

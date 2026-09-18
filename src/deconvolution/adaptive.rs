@@ -101,17 +101,10 @@ pub fn deconvolve_adaptive(
         ));
     }
 
-    let result = levels_out.last().cloned().unwrap_or_else(|| {
-        spectral_deconvolution(
-            eigenvalues,
-            c,
-            n_points,
-            Some(eta_final),
-            None,
-            None,
-            config,
-        )
-    });
+    let result = levels_out
+        .last()
+        .cloned()
+        .expect("levels >= 1 guarantees at least one η level");
 
     AdaptiveDeconvolutionResult {
         result,

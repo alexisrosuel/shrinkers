@@ -22,7 +22,7 @@
 //! The result is a method that is simultaneously cache-blocked, SIMD-vectorized,
 //! FMA-optimized, and (optionally) cutoff-accelerated.
 
-use crate::stieltjes::autovec::autovec_stieltjes_sum;
+use crate::stieltjes::cacheblock;
 use crate::stieltjes::term::BLOCK_SZ;
 use rayon::prelude::*;
 
@@ -145,20 +145,16 @@ pub(crate) fn compute_all_stieltjes_blocked_autovec_parallel(
         .map(|&lambda_i| stieltjes_sum_blocked_autovec(lambda_i, eigenvalues, eta, cutoff))
         .collect();
 
-    let mut reals = Vec::with_capacity(p);
-    let mut imags = Vec::with_capacity(p);
-    for (r, i) in results {
-        reals.push(r);
-        imags.push(i);
-    }
-
-    (reals, imags)
+    cacheblock::split_aos(results)
 }
 
 /// Compute a single Stieltjes sum with far-field cutoff via binary search.
 ///
 /// `None` means "no cutoff" — compute all terms exactly (matching the
 /// sequential `compute_all_stieltjes_blocked_autovec` semantics).
+///
+/// This is the same kernel as `cacheblock::stieltjes_sum_cutoff` — the two
+/// names survive only because each family's docs refer to its own entry point.
 #[inline(always)]
 pub fn stieltjes_sum_blocked_autovec(
     lambda_i: f64,
@@ -166,26 +162,7 @@ pub fn stieltjes_sum_blocked_autovec(
     eta: f64,
     cutoff: Option<f64>,
 ) -> (f64, f64) {
-    let Some(cut) = cutoff else {
-        return autovec_stieltjes_sum(lambda_i, eigenvalues, eta);
-    };
-    let eta_sq = eta * eta;
-    let mut sum_real = 0.0;
-    let mut sum_inv = 0.0;
-
-    let window = cut * eta;
-    let lo = eigenvalues.partition_point(|&x| x < lambda_i - window);
-    let hi = eigenvalues.partition_point(|&x| x <= lambda_i + window);
-
-    for &lambda_j in &eigenvalues[lo..hi] {
-        let diff = lambda_i - lambda_j;
-        let denom = diff.mul_add(diff, eta_sq);
-        let inv = 1.0 / denom;
-        sum_real += diff * inv;
-        sum_inv += inv;
-    }
-
-    (sum_real, eta * sum_inv)
+    cacheblock::stieltjes_sum_cutoff(lambda_i, eigenvalues, eta, cutoff)
 }
 
 #[cfg(test)]

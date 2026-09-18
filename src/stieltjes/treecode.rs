@@ -207,16 +207,11 @@ fn build_flat(sorted: &[f64], lo: f64, hi: f64, tree: &mut FlatTree, binom: &[f6
     idx
 }
 
-/// Compute all Stieltjes transforms using a 1D tree code / FMM.
-///
-/// Returns **raw sums** (not scaled by `1/p`); the caller applies scaling.
-///
-/// # Arguments
-/// Dispatch default opening angle and multipole order of the
-/// `TreeCode` variant (~5e-4 relative error class on both parts). Named
-/// here so the dispatcher carries no magic numbers.
+/// Dispatch default opening angle of the `TreeCode` variant (~5e-4 relative
+/// error class on both parts). Named here so the dispatcher carries no magic
+/// numbers.
 pub(crate) const DEFAULT_THETA: f64 = 0.5;
-/// Dispatch default multipole order.
+/// Dispatch default multipole order of the `TreeCode` variant.
 pub(crate) const DEFAULT_ORDER: usize = 6;
 
 /// Treecode/FMM with explicit opening-angle `theta`, multipole `order`, and
@@ -226,6 +221,7 @@ pub(crate) const DEFAULT_ORDER: usize = 6;
 ///
 /// Smaller `theta` / larger `order` = more accurate but more work.
 /// `parallel = true` parallelizes over query points (each is independent).
+/// The dispatcher calls this with `DEFAULT_THETA` / `DEFAULT_ORDER`.
 pub fn compute_all_stieltjes_treecode_impl(
     eigenvalues: &[f64],
     eta: f64,

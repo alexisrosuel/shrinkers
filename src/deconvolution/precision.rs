@@ -33,9 +33,8 @@
 //! eigenvalues in the module tests.
 
 use ndarray::Array1;
-use rayon::prelude::*;
 
-use crate::config::{FftGridSize, Parallelism, RmtConfig};
+use crate::config::RmtConfig;
 use crate::stieltjes;
 
 /// Compute the direct precision shrinkage factor for a single eigenvalue.
@@ -75,41 +74,17 @@ pub fn direct_precision_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Ar
         return Array1::zeros(0);
     }
 
-    // Resolve Auto strategy to a concrete method based on problem size.
-    let resolved_config = config.resolve_auto(p);
-
-    let c = resolved_config.c;
-    let eta = resolved_config
-        .eta
-        .unwrap_or_else(|| crate::stieltjes::default_eta(p));
-
-    // Compute all Stieltjes transforms (reuses the fast kernel).
-    let stieltjes_results = stieltjes::compute_all_stieltjes(
-        eigenvalues,
-        eta,
-        resolved_config.stieltjes_method,
-        match resolved_config.fft_grid_size {
-            FftGridSize::Auto => None,
-            FftGridSize::Custom(s) => Some(s),
-        },
-        resolved_config.cutoff,
-        resolved_config.block_size,
-        resolved_config.parallelism,
-    );
+    // Resolve Auto, pick the default η, and run the Stieltjes kernel once.
+    let resolved = stieltjes::resolve_and_compute_stieltjes(eigenvalues, config);
+    let c = resolved.config.c;
 
     // Apply the direct precision factor, optionally in parallel.
-    let result: Vec<f64> = match resolved_config.parallelism {
-        Parallelism::Parallel => eigenvalues
-            .par_iter()
-            .zip(stieltjes_results.par_iter())
-            .map(|(&lambda_i, &(mg_real, _))| precision_factor(lambda_i, c, mg_real))
-            .collect(),
-        Parallelism::Sequential | Parallelism::Auto => eigenvalues
-            .iter()
-            .zip(stieltjes_results.iter())
-            .map(|(&lambda_i, &(mg_real, _))| precision_factor(lambda_i, c, mg_real))
-            .collect(),
-    };
+    let result = stieltjes::map_stieltjes(
+        eigenvalues,
+        &resolved.pairs,
+        resolved.config.parallelism,
+        |lambda_i, mg_real, _| precision_factor(lambda_i, c, mg_real),
+    );
     Array1::from_vec(result)
 }
 
@@ -122,6 +97,7 @@ pub fn direct_precision_shrinkage_default(eigenvalues: &[f64], c: f64) -> Array1
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Parallelism;
     use approx::assert_relative_eq;
 
     #[test]

@@ -92,7 +92,9 @@ pub fn empirical_stieltjes_at_point(z_real: f64, z_imag: f64, eigenvalues: &[f64
 /// * `eta` — Regularization parameter (imaginary shift). Default: 0.1 / sqrt(p)
 /// * `lambda_min` — Minimum lambda for the grid. If None, inferred from eigenvalues.
 /// * `lambda_max` — Maximum lambda for the grid. If None, inferred from eigenvalues.
-/// * `config` — `RmtConfig` (used for eta and consistency with RIE)
+/// * `config` — `RmtConfig` selecting the Stieltjes kernel, parallelism,
+///   cutoff and block size. Its `eta` field is **ignored**: this driver takes
+///   η from the explicit `eta` argument (falling back to `0.1/√p`).
 ///
 /// # Returns
 ///
@@ -171,10 +173,12 @@ pub fn spectral_deconvolution(
     // Step 1: Compute g(z) = sample Stieltjes transform at every grid point
     // in one batched call to the fast Stieltjes library.
     //
-    // The library computes S(λ) = Σⱼ 1/((λ-λⱼ) - iη) = Σⱼ (λ-λⱼ)/((λ-λⱼ)²+η²)
-    // + i·Σⱼ η/((λ-λⱼ)²+η²), i.e. convention B (Im[S] > 0 for Im[z] > 0),
-    // scaled by 1/p. This matches the convention used by the rest of the
-    // deconvolution (see below), so no sign flip is needed.
+    // The kernel returns RAW (unscaled) sums in this crate's convention
+    // (Im[S] < 0 for z = λ + iη):
+    //   S(λ) = Σⱼ 1/((λ-λⱼ) - iη) = Σⱼ (λ-λⱼ)/den + i·Σⱼ η/den,
+    //   den = (λ-λⱼ)² + η².
+    // The 1/p scaling and the conversion into the Im[g] > 0 convention used
+    // by the MP inversion below are applied explicitly at the call site.
     let raw = crate::stieltjes::compute_stieltjes_at_points(
         &lambda_grid,
         eigenvalues,

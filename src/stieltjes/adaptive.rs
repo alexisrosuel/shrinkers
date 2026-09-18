@@ -16,6 +16,9 @@
 //!
 //! The window radius `R` is chosen so the imaginary-part error roughly matches
 //! the real-part error, giving a balanced overall error.
+//!
+//! Note this module is the *kernel*; the deconvolution-level η schedule lives
+//! in [`crate::deconvolution::adaptive`].
 
 use crate::stieltjes::cacheblock::compute_all_stieltjes_blocked_windowed;
 use crate::stieltjes::fft5::compute_all_stieltjes_fft5;
@@ -117,16 +120,8 @@ mod tests {
         let adaptive = compute_all_stieltjes_adaptive(&evals, eta, None, Some(10.0));
 
         // Exact real part (raw sum, matching adaptive's raw output).
-        let mut exact_re = vec![0.0_f64; p];
-        for i in 0..p {
-            let li = evals[i];
-            let mut s = 0.0;
-            for &lj in &evals {
-                let d = li - lj;
-                s += d / (d * d + eta * eta);
-            }
-            exact_re[i] = s;
-        }
+        let exact = crate::stieltjes::testutil::exact_stieltjes(&evals, eta);
+        let exact_re: Vec<f64> = exact.iter().map(|&(r, _)| r).collect();
 
         let mut max_err = 0.0_f64;
         for i in 0..p {
@@ -134,7 +129,8 @@ mod tests {
             max_err = max_err.max((adaptive[i].0 - exact_re[i]).abs() / scale);
         }
         eprintln!("adaptive real max rel err: {max_err:.4}");
-        // FFT real part is approximate (~15% error). Allow generous tolerance.
+        // FFT real part is approximate (measured ~4e-5 relative at the
+        // operating point). Allow generous tolerance.
         assert!(max_err < 0.5, "adaptive real error too large: {max_err}");
     }
 
@@ -149,27 +145,14 @@ mod tests {
         let adaptive = compute_all_stieltjes_adaptive(&evals, eta, None, Some(10.0));
 
         // Exact real and imaginary parts
-        let mut exact_re = vec![0.0_f64; p];
-        let mut exact_im = vec![0.0_f64; p];
-        for i in 0..p {
-            let li = evals[i];
-            let mut sr = 0.0;
-            let mut si = 0.0;
-            for &lj in &evals {
-                let d = li - lj;
-                let denom = d * d + eta * eta;
-                sr += d / denom;
-                si += eta / denom;
-            }
-            exact_re[i] = sr;
-            exact_im[i] = si;
-        }
+        let exact = crate::stieltjes::testutil::exact_stieltjes(&evals, eta);
 
         let mut err_r = 0.0_f64;
         let mut err_i = 0.0_f64;
         for i in 0..p {
-            err_r = err_r.max((adaptive[i].0 - exact_re[i]).abs() / exact_re[i].abs().max(1e-12));
-            err_i = err_i.max((adaptive[i].1 - exact_im[i]).abs() / exact_im[i].abs().max(1e-12));
+            let (exact_re, exact_im) = exact[i];
+            err_r = err_r.max((adaptive[i].0 - exact_re).abs() / exact_re.abs().max(1e-12));
+            err_i = err_i.max((adaptive[i].1 - exact_im).abs() / exact_im.abs().max(1e-12));
         }
         eprintln!(
             "adaptive error balance: real={err_r:.4} imag={err_i:.4} ratio={:.2}",

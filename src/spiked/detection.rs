@@ -29,6 +29,40 @@ pub struct SpikeDetection {
     pub spike_indices: Vec<usize>,
 }
 
+impl SpikeDetection {
+    /// No spikes detected (empty input, or nothing above the threshold).
+    fn empty() -> Self {
+        Self {
+            k: 0,
+            bulk_edge: 0.0,
+            sigma2: 0.0,
+            spike_indices: Vec::new(),
+        }
+    }
+}
+
+/// Ascending indices of the eigenvalues strictly above `threshold`.
+///
+/// `eigenvalues` must be sorted ascending: the scan walks from the top and
+/// stops at the first value at or below the threshold, so it costs O(k + 1)
+/// rather than O(p).
+fn scan_above(eigenvalues: &[f64], threshold: f64) -> Vec<usize> {
+    debug_assert!(
+        eigenvalues.windows(2).all(|w| w[0] <= w[1]),
+        "spike scan requires eigenvalues sorted ascending"
+    );
+    let mut spike_indices = Vec::new();
+    for (i, &lam) in eigenvalues.iter().enumerate().rev() {
+        if lam > threshold {
+            spike_indices.push(i);
+        } else {
+            break;
+        }
+    }
+    spike_indices.reverse();
+    spike_indices
+}
+
 /// Marchenko–Pastur median factor $m(\gamma)$.
 ///
 /// The median of the Marchenko–Pastur distribution (with $\sigma^2 = 1$) is
@@ -98,14 +132,8 @@ fn median(sorted: &[f64]) -> f64 {
 /// A [`SpikeDetection`] with the estimated spike count, bulk edge, and noise
 /// variance.
 pub fn detect_spikes_bema(eigenvalues: &[f64], gamma: f64, margin: f64) -> SpikeDetection {
-    let n = eigenvalues.len();
-    if n == 0 {
-        return SpikeDetection {
-            k: 0,
-            bulk_edge: 0.0,
-            sigma2: 0.0,
-            spike_indices: Vec::new(),
-        };
+    if eigenvalues.is_empty() {
+        return SpikeDetection::empty();
     }
 
     // Step 1: estimate σ² from the MP-median-corrected sample median.
@@ -113,28 +141,11 @@ pub fn detect_spikes_bema(eigenvalues: &[f64], gamma: f64, margin: f64) -> Spike
     let edge = bbp_threshold(gamma, sigma2);
     let threshold = edge * margin.max(1.0);
 
-    // The early-break scan below relies on ascending order.
-    debug_assert!(
-        eigenvalues.windows(2).all(|w| w[0] <= w[1]),
-        "detect_spikes_bema requires eigenvalues sorted ascending"
-    );
-
-    // Step 2: count eigenvalues above the threshold.
-    // eigenvalues are ascending, so the spikes are the largest ones.
-    let mut k = 0;
-    let mut spike_indices = Vec::new();
-    for (i, &lam) in eigenvalues.iter().enumerate().rev() {
-        if lam > threshold {
-            k += 1;
-            spike_indices.push(i);
-        } else {
-            break;
-        }
-    }
-    spike_indices.reverse();
+    // Step 2: the spikes are the largest eigenvalues above the threshold.
+    let spike_indices = scan_above(eigenvalues, threshold);
 
     SpikeDetection {
-        k,
+        k: spike_indices.len(),
         bulk_edge: edge,
         sigma2,
         spike_indices,
@@ -243,22 +254,11 @@ pub fn detect_spikes_tracy_widom(
 ) -> SpikeDetection {
     let n = eigenvalues.len();
     if n == 0 {
-        return SpikeDetection {
-            k: 0,
-            bulk_edge: 0.0,
-            sigma2: 0.0,
-            spike_indices: Vec::new(),
-        };
+        return SpikeDetection::empty();
     }
 
     let sigma2 = sigma2.unwrap_or_else(|| estimate_bulk_noise(eigenvalues, gamma));
     let edge = bbp_threshold(gamma, sigma2);
-
-    // The early-break scan below relies on ascending order.
-    debug_assert!(
-        eigenvalues.windows(2).all(|w| w[0] <= w[1]),
-        "detect_spikes_tracy_widom requires eigenvalues sorted ascending"
-    );
 
     // Tracy-Widom fluctuation scale: the largest bulk eigenvalue is
     // approximately edge + σ²·(n^{-2/3})·(1+√γ)^{4/3}·F₁. We use the
@@ -268,20 +268,10 @@ pub fn detect_spikes_tracy_widom(
     let fluctuation = sigma2 * (1.0 + gamma.sqrt()).powf(4.0 / 3.0) * tw / n_eff.powf(2.0 / 3.0);
     let threshold = edge + fluctuation;
 
-    let mut k = 0;
-    let mut spike_indices = Vec::new();
-    for (i, &lam) in eigenvalues.iter().enumerate().rev() {
-        if lam > threshold {
-            k += 1;
-            spike_indices.push(i);
-        } else {
-            break;
-        }
-    }
-    spike_indices.reverse();
+    let spike_indices = scan_above(eigenvalues, threshold);
 
     SpikeDetection {
-        k,
+        k: spike_indices.len(),
         bulk_edge: edge,
         sigma2,
         spike_indices,

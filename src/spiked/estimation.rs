@@ -21,9 +21,9 @@
 //!    the crate's fast Stieltjes library (`compute_all_stieltjes`) and the
 //!    `shrinkage_factor` formula, so there is zero duplication of the kernel.
 
-use crate::config::{FftGridSize, RmtConfig};
+use crate::config::RmtConfig;
 use crate::deconvolution::shrinkage_factor;
-use crate::stieltjes::compute_all_stieltjes;
+use crate::stieltjes;
 
 /// BBP threshold: the smallest population spike that produces a detectable
 /// sample spike. Below this, the spike is absorbed into the bulk.
@@ -73,35 +73,20 @@ pub fn inverse_bbp(lambda_hat: f64, gamma: f64, sigma2: f64) -> f64 {
 ///
 /// A `Vec<f64>` of population eigenvalue estimates, same length as input.
 pub fn ledoit_wolf_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Vec<f64> {
-    let p = eigenvalues.len();
-    if p == 0 {
+    if eigenvalues.is_empty() {
         return Vec::new();
     }
 
-    let resolved = config.resolve_auto(p);
-    let c = resolved.c;
-    let eta = resolved
-        .eta
-        .unwrap_or_else(|| crate::stieltjes::default_eta(p));
+    // Resolve Auto, pick the default η, and run the Stieltjes kernel once.
+    let resolved = stieltjes::resolve_and_compute_stieltjes(eigenvalues, config);
+    let c = resolved.config.c;
 
-    let stieltjes = compute_all_stieltjes(
+    stieltjes::map_stieltjes(
         eigenvalues,
-        eta,
-        resolved.stieltjes_method,
-        match resolved.fft_grid_size {
-            FftGridSize::Auto => None,
-            FftGridSize::Custom(s) => Some(s),
-        },
-        resolved.cutoff,
-        resolved.block_size,
-        resolved.parallelism,
-    );
-
-    eigenvalues
-        .iter()
-        .zip(stieltjes.iter())
-        .map(|(&li, &(mr, mi))| shrinkage_factor(li, c, mr, mi))
-        .collect()
+        &resolved.pairs,
+        resolved.config.parallelism,
+        |li, mr, mi| shrinkage_factor(li, c, mr, mi),
+    )
 }
 
 #[cfg(test)]

@@ -11,9 +11,8 @@
 //! is no separate "RIE" module anymore.
 
 use ndarray::Array1;
-use rayon::prelude::*;
 
-use crate::config::{FftGridSize, Parallelism, RmtConfig};
+use crate::config::RmtConfig;
 use crate::stieltjes;
 
 /// Compute the shrinkage factor for a single eigenvalue.
@@ -64,42 +63,18 @@ pub fn rie_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Array1<f64> {
         return Array1::zeros(0);
     }
 
-    // Resolve Auto strategy to a concrete method based on problem size
-    let resolved_config = config.resolve_auto(p);
-
-    let c = resolved_config.c;
-    let eta = resolved_config
-        .eta
-        .unwrap_or_else(|| crate::stieltjes::default_eta(p));
+    // Resolve Auto, pick the default η, and run the Stieltjes kernel once.
+    let resolved = stieltjes::resolve_and_compute_stieltjes(eigenvalues, config);
+    let c = resolved.config.c;
     let original_trace: f64 = eigenvalues.iter().copied().sum();
 
-    // Compute all Stieltjes transforms
-    let stieltjes_results = stieltjes::compute_all_stieltjes(
+    // Apply the shrinkage factor, optionally in parallel.
+    let shrinked = stieltjes::map_stieltjes(
         eigenvalues,
-        eta,
-        resolved_config.stieltjes_method,
-        match resolved_config.fft_grid_size {
-            FftGridSize::Auto => None,
-            FftGridSize::Custom(s) => Some(s),
-        },
-        resolved_config.cutoff,
-        resolved_config.block_size,
-        resolved_config.parallelism,
+        &resolved.pairs,
+        resolved.config.parallelism,
+        |lambda_i, mg_real, mg_imag| shrinkage_factor(lambda_i, c, mg_real, mg_imag),
     );
-
-    // Apply shrinkage factor, optionally in parallel
-    let shrinked: Vec<f64> = match resolved_config.parallelism {
-        Parallelism::Parallel => eigenvalues
-            .par_iter()
-            .zip(stieltjes_results.par_iter())
-            .map(|(&lambda_i, &(mg_real, mg_imag))| shrinkage_factor(lambda_i, c, mg_real, mg_imag))
-            .collect(),
-        Parallelism::Sequential | Parallelism::Auto => eigenvalues
-            .iter()
-            .zip(stieltjes_results.iter())
-            .map(|(&lambda_i, &(mg_real, mg_imag))| shrinkage_factor(lambda_i, c, mg_real, mg_imag))
-            .collect(),
-    };
 
     // Trace preservation
     let shrinked_trace: f64 = shrinked.iter().copied().sum();
@@ -117,7 +92,7 @@ pub fn rie_shrinkage_default(eigenvalues: &[f64], c: f64) -> Array1<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StieltjesMethod;
+    use crate::config::{Parallelism, StieltjesMethod};
     use approx::assert_relative_eq;
 
     #[test]

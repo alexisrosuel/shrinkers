@@ -37,7 +37,7 @@
 //!   family has two floors: rayon requests below `RAYON_MIN_P` run
 //!   sequential (scheduling would dominate), and tiled-parallel only kicks
 //!   in at `PAR_TILED_MIN_P`.
-//! - Two deliberate η conventions coexist ([`default_eta`] is the single
+//! - Two deliberate η conventions coexist (`default_eta` is the single
 //!   library constant): **η = 0.1/√p** wherever the crate picks a default
 //!   itself, **η = 1/√p** inside every recorded benchmark harness
 //!   (`pareto_data`, `bench_one`, `small_p_crossover`; declared in their
@@ -76,7 +76,7 @@ pub use naive::*;
 pub use term::*;
 pub use treecode::*;
 
-use crate::config::{CutoffConfig, Parallelism, StieltjesMethod};
+use crate::config::{CutoffConfig, Parallelism, RmtConfig, StieltjesMethod};
 use rayon::prelude::*;
 
 /// The crate-wide default regularization: **η = 0.1/√p**.
@@ -93,6 +93,67 @@ use rayon::prelude::*;
 pub(crate) fn default_eta(p: usize) -> f64 {
     const SCALE: f64 = 0.1;
     SCALE / (p as f64).sqrt()
+}
+
+/// An [`RmtConfig`] resolved for a concrete problem size, together with the
+/// Stieltjes transform of every eigenvalue computed with it.
+///
+/// This is the shared prologue of the pointwise estimators
+/// ([`crate::deconvolution::rie_shrinkage`],
+/// [`crate::deconvolution::direct_precision_shrinkage`],
+/// [`crate::spiked::ledoit_wolf_shrinkage`]): resolve `Auto`, pick the crate
+/// default η when the caller pinned none, then run the selected kernel once.
+pub(crate) struct ResolvedStieltjes {
+    /// The config after `resolve_auto`, ready to be consumed by a map step.
+    pub config: RmtConfig,
+    /// `(Re m_g, Im m_g)` per eigenvalue, already scaled by `1/p`.
+    pub pairs: Vec<(f64, f64)>,
+}
+
+/// Resolve `config` against `p` and evaluate the Stieltjes transform once for
+/// every eigenvalue. See [`ResolvedStieltjes`].
+pub(crate) fn resolve_and_compute_stieltjes(
+    eigenvalues: &[f64],
+    config: &RmtConfig,
+) -> ResolvedStieltjes {
+    let config = config.resolve_auto(eigenvalues.len());
+    let eta = config.eta.unwrap_or_else(|| default_eta(eigenvalues.len()));
+    let pairs = compute_all_stieltjes(
+        eigenvalues,
+        eta,
+        config.stieltjes_method,
+        config.fft_grid_size.grid_points(),
+        config.cutoff,
+        config.block_size,
+        config.parallelism,
+    );
+    ResolvedStieltjes { config, pairs }
+}
+
+/// Apply `f(lambda_i, Re m_g, Im m_g)` elementwise to the eigenvalues and
+/// their Stieltjes transforms, executing in parallel when the config asks for
+/// it. The output order matches the input order in both branches.
+pub(crate) fn map_stieltjes<F>(
+    eigenvalues: &[f64],
+    pairs: &[(f64, f64)],
+    parallelism: Parallelism,
+    f: F,
+) -> Vec<f64>
+where
+    F: Fn(f64, f64, f64) -> f64 + Sync + Send,
+{
+    match parallelism {
+        Parallelism::Parallel => eigenvalues
+            .par_iter()
+            .zip(pairs.par_iter())
+            .map(|(&lambda_i, &(mg_real, mg_imag))| f(lambda_i, mg_real, mg_imag))
+            .collect(),
+        Parallelism::Sequential | Parallelism::Auto => eigenvalues
+            .iter()
+            .zip(pairs.iter())
+            .map(|(&lambda_i, &(mg_real, mg_imag))| f(lambda_i, mg_real, mg_imag))
+            .collect(),
+    }
 }
 
 /// Compute the Stieltjes sum S(λᵢ) = Σⱼ 1/((λᵢ-λⱼ) - iη)
@@ -145,6 +206,16 @@ fn stieltjes_sum_for_one(
     }
 }
 
+/// Resolve a ChebCode method variant to its measured preset.
+///
+/// The presets themselves live in [`chebcode::ChebPreset`] — the single source
+/// of truth shared by dispatch, Python bindings and benchmarks. Panics if
+/// `method` is outside the ChebCode family; both call sites match the family
+/// first.
+fn cheb_preset(method: StieltjesMethod) -> chebcode::ChebPreset {
+    chebcode::ChebPreset::from_method(method).expect("method is a ChebCode variant")
+}
+
 /// Compute the raw Stieltjes sum at arbitrary query points (not necessarily
 /// sample eigenvalues) using the selected method.
 ///
@@ -153,12 +224,19 @@ fn stieltjes_sum_for_one(
 /// transform on a uniform grid (e.g. the deconvolution grid), where the query
 /// points differ from the sample eigenvalues.
 ///
-/// For the direct methods (`Naive`, `AutoVectorized`, `Blocked`,
-/// `BlockedTiled`, `BlockedWindowed`, `BlockedAutoVec`) this delegates to the
-/// corresponding single-point kernel. For the global/approximate methods
-/// (`Adaptive`, `Fft5`, `Fft3`, `Fft2`, `TreeCode`, `Ewald`, `Dst`, `Auto`)
-/// which cannot be evaluated efficiently at a single point, it falls back to
-/// the exact auto-vectorized kernel — preserving correctness.
+/// Dispatch per method family:
+///
+/// - the blocked family (`Blocked`, `BlockedTiled`, `BlockedWindowed`,
+///   `BlockedHybrid`) uses the write-batched query-point kernel, or delegates
+///   to the single-point kernel when parallel;
+/// - `Fft5`/`Fft3`/`Fft2` run one O(p log p) convolution over the whole grid
+///   and interpolate at the query points;
+/// - the `ChebCode*` presets build the Chebyshev tree once and serve every
+///   query point from it;
+/// - everything else (`Naive`, `AutoVectorized`, `BlockedAutoVec`, `Adaptive`,
+///   `TreeCode`, `Ewald`, `Dst`, `Hodlr`, unresolved `Auto`) delegates to the
+///   single-point kernel, which for the global methods means the exact
+///   auto-vectorized O(p²) fallback — correct but not size-optimal.
 pub fn compute_stieltjes_at_points(
     query_points: &[f64],
     eigenvalues: &[f64],
@@ -192,7 +270,6 @@ pub fn compute_stieltjes_at_points(
                     query_points,
                     eigenvalues,
                     eta,
-                    None,
                     cutoff,
                 );
                 reals.into_iter().zip(imags).collect()
@@ -213,8 +290,7 @@ pub fn compute_stieltjes_at_points(
         | StieltjesMethod::ChebCodeFast
         | StieltjesMethod::ChebCodeXtreme
         | StieltjesMethod::ChebCodeBalanced => {
-            let preset = chebcode::ChebPreset::from_method(method)
-                .expect("matched the ChebCode method family above");
+            let preset = cheb_preset(method);
             let (theta, n, leaf_cap) = preset.parts();
             let batch = chebcode::ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap);
             batch.evaluate_points(query_points, eta, parallel)
@@ -265,6 +341,18 @@ const PAR_TILED_MIN_P: usize = 2000;
 /// end-to-end through the Python boundary): sequential beats per-row-rayon
 /// up to p≈512 and loses from p≈768 — 512 is the conservative floor.
 const RAYON_MIN_P: usize = 512;
+
+/// Smallest power of two `≥ n` (and `1` for `n == 0`).
+///
+/// Shared by the FFT-grid and Ewald kernels, which both size their transform
+/// grid this way.
+pub(crate) fn next_pow2(n: usize) -> usize {
+    let mut p = 1;
+    while p < n {
+        p <<= 1;
+    }
+    p
+}
 
 /// Cheap O(p) sortedness check so the tree-code methods can skip their
 /// defensive O(p log p) sort when the caller passes pre-sorted eigenvalues
@@ -390,8 +478,7 @@ pub fn compute_all_stieltjes(
         | StieltjesMethod::ChebCodeFast
         | StieltjesMethod::ChebCodeXtreme
         | StieltjesMethod::ChebCodeBalanced => {
-            let preset = chebcode::ChebPreset::from_method(method)
-                .expect("matched the ChebCode method family above");
+            let preset = cheb_preset(method);
             scale_aos(
                 chebcode::compute_all_stieltjes_chebcode_preset(eigenvalues, eta, preset, parallel),
                 inv_p,
