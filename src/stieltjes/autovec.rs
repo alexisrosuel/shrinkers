@@ -16,7 +16,7 @@ use crate::stieltjes::term::stieltjes_term_hoisted;
 /// Idea 1 (eta-hoist): accumulates the raw reciprocal `inv` and multiplies
 /// by `eta` once at the end, saving one `fmul` per term.
 #[inline(always)]
-pub fn autovec_stieltjes_sum(lambda_i: f64, eigenvalues: &[f64], eta: f64) -> (f64, f64) {
+pub(crate) fn autovec_stieltjes_sum(lambda_i: f64, eigenvalues: &[f64], eta: f64) -> (f64, f64) {
     let mut sum_real = 0.0;
     let mut sum_inv = 0.0;
 
@@ -29,12 +29,13 @@ pub fn autovec_stieltjes_sum(lambda_i: f64, eigenvalues: &[f64], eta: f64) -> (f
     (sum_real, eta * sum_inv)
 }
 
+#[cfg(any(test, feature = "python"))]
 /// One-pass value + derivative: `S(x) = Σ 1/(x−λⱼ−iη)` and
 /// `S'(x) = Σ −1/(x−λⱼ−iη)²` (derivative w.r.t. the real query point).
 ///
 /// With d = x−λⱼ and den = d²+η²:
 /// `S'ᵣₑ = −Σ (d²−η²)/den²`, `S'ᵢₘ = −Σ 2dη/den²`.
-pub fn stieltjes_with_deriv_sum(
+pub(crate) fn stieltjes_with_deriv_sum(
     lambda_i: f64,
     eigenvalues: &[f64],
     eta: f64,
@@ -57,11 +58,13 @@ pub fn stieltjes_with_deriv_sum(
     ((s_re, eta * s_inv), (d_re, d_im))
 }
 
+#[cfg(any(test, feature = "python"))]
 /// Paired value/derivative vectors.
-pub type ValuesAndDerivs = (Vec<(f64, f64)>, Vec<(f64, f64)>);
+pub(crate) type ValuesAndDerivs = (Vec<(f64, f64)>, Vec<(f64, f64)>);
 
+#[cfg(any(test, feature = "python"))]
 /// Value + derivative for every query point (exact O(p²), single pass).
-pub fn compute_all_stieltjes_with_deriv(eigenvalues: &[f64], eta: f64) -> ValuesAndDerivs {
+pub(crate) fn compute_all_stieltjes_with_deriv(eigenvalues: &[f64], eta: f64) -> ValuesAndDerivs {
     let p = eigenvalues.len();
     let mut vals = Vec::with_capacity(p);
     let mut derivs = Vec::with_capacity(p);

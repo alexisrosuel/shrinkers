@@ -20,7 +20,7 @@ each platform's runner.
 
 ### Scalar term: hoisted reciprocal
 
-`stieltjes_term_hoisted(lambda_i, lambda_j, eta)` returns `(re, im)`
+`stieltjes_term_hoisted(lambda_i, lambda_j, eta)` (internal, `pub(crate)`) returns `(re, im)`
 with the expensive part structured as one reciprocal plus FMAs instead of
 a full complex division:
 

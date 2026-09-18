@@ -32,7 +32,7 @@
 //!
 //! Splatting and interpolation default to the 8-point heptic stencil
 //! ([`Order::Heptic`]); all narrower stencils remain available through
-//! [`compute_all_stieltjes_fft5_with_order`] / [`Fft5Options`]. Measured on
+//! [`Fft5Options`]. Measured on
 //! MP-like spectra (`examples/measure_fft_order_sweep.rs`, error vs exact O(p²)):
 //!
 //! ```text
@@ -480,37 +480,12 @@ fn fft_convolution_kernel_fft(
 /// kernel), using the default (heptic, 8-point) grid transfer.
 ///
 /// `grid_size_opt` overrides the adaptive rule `dx ≤ η/8` when `Some`.
-pub fn compute_all_stieltjes_fft5(
+pub(crate) fn compute_all_stieltjes_fft5(
     eigenvalues: &[f64],
     eta: f64,
     grid_size_opt: Option<usize>,
 ) -> Vec<(f64, f64)> {
     let opts = Fft5Options {
-        m_override: grid_size_opt,
-        ..Fft5Options::default()
-    };
-    compute_all_stieltjes_fft5_with_options(eigenvalues, eta, &opts)
-}
-
-/// [`Order::Linear`] variant of [`compute_all_stieltjes_fft5`]: the historical
-/// 2-point stencil. Kept for A/B comparisons and as a conservative fallback.
-pub fn compute_all_stieltjes_fft5_linear(
-    eigenvalues: &[f64],
-    eta: f64,
-    grid_size_opt: Option<usize>,
-) -> Vec<(f64, f64)> {
-    compute_all_stieltjes_fft5_with_order(eigenvalues, eta, grid_size_opt, Order::Linear)
-}
-
-/// Shared implementation for all transfer orders.
-pub fn compute_all_stieltjes_fft5_with_order(
-    eigenvalues: &[f64],
-    eta: f64,
-    grid_size_opt: Option<usize>,
-    order: Order,
-) -> Vec<(f64, f64)> {
-    let opts = Fft5Options {
-        order,
         m_override: grid_size_opt,
         ..Fft5Options::default()
     };
@@ -520,6 +495,11 @@ pub fn compute_all_stieltjes_fft5_with_order(
 /// Fully configurable entry point: transfer order, forced grid size and
 /// padding multipliers. See [`Fft5Options`] for the knobs and
 /// `examples/measure_fft_order_sweep.rs` for the measured accuracy/speed landscape.
+///
+/// Public for the benchmark harnesses in `examples/` and `benches/`, which
+/// call one kernel directly to A/B it. The supported entry point for
+/// callers is the dispatcher (`compute_all_stieltjes`), which resolves
+/// `StieltjesMethod` to the right kernel and applies the `1/p` scaling.
 pub fn compute_all_stieltjes_fft5_with_options(
     eigenvalues: &[f64],
     eta: f64,
@@ -541,7 +521,7 @@ pub fn compute_all_stieltjes_fft5_with_options(
 /// interpolates at the query points.
 ///
 /// Returns raw sums (not scaled by `1/p`), one `(real, imag)` per query point.
-pub fn compute_stieltjes_fft_at_points(
+pub(crate) fn compute_stieltjes_fft_at_points(
     query_points: &[f64],
     eigenvalues: &[f64],
     eta: f64,
@@ -630,8 +610,14 @@ mod tests {
             for eta in [0.05, 0.2, 0.5] {
                 let evals: Vec<f64> = (0..p).map(|i| ((i as f64 + 1.0) / 50.0).ln_1p()).collect();
 
-                let new_res =
-                    compute_all_stieltjes_fft5_with_order(&evals, eta, None, Order::Linear);
+                let new_res = compute_all_stieltjes_fft5_with_options(
+                    &evals,
+                    eta,
+                    &Fft5Options {
+                        order: Order::Linear,
+                        ..Fft5Options::default()
+                    },
+                );
                 let old_grid = fft_convolution_kernel_fft(&evals, eta, None);
                 let old_res = interpolate_grid(&old_grid, &evals, Order::Linear);
 
@@ -690,7 +676,14 @@ mod tests {
                 (num / exact_sq).sqrt()
             };
 
-            let lin = err_of(compute_all_stieltjes_fft5_linear(&evs, eta, None));
+            let lin = err_of(compute_all_stieltjes_fft5_with_options(
+                &evs,
+                eta,
+                &Fft5Options {
+                    order: Order::Linear,
+                    ..Fft5Options::default()
+                },
+            ));
             let default = err_of(compute_all_stieltjes_fft5(&evs, eta, None));
             assert!(
                 default <= lin,

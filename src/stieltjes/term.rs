@@ -19,7 +19,7 @@
 //! consumer as `adaptive::DEFAULT_CUTOFF_RATIO`.)
 
 /// Default cache block size (in number of eigenvalues). Must be a multiple of 4.
-pub const BLOCK_SZ: usize = 64;
+pub(crate) const BLOCK_SZ: usize = 64;
 
 /// Standard Stieltjes term: `1 / ((λᵢ-λⱼ) - iη)` → `(real, imag)`.
 #[inline(always)]
@@ -37,7 +37,7 @@ pub fn stieltjes_term(lambda_i: f64, lambda_j: f64, eta: f64) -> (f64, f64) {
 /// saving one `fmul` per term. Mathematically identical (eta is a
 /// loop-invariant constant) and slightly MORE precise (fewer rounding steps).
 #[inline(always)]
-pub fn stieltjes_term_hoisted(lambda_i: f64, lambda_j: f64, eta: f64) -> (f64, f64) {
+pub(crate) fn stieltjes_term_hoisted(lambda_i: f64, lambda_j: f64, eta: f64) -> (f64, f64) {
     let diff = lambda_i - lambda_j;
     let denom = diff.mul_add(diff, eta * eta);
     let inv = 1.0 / denom;

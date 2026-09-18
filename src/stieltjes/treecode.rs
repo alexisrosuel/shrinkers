@@ -222,7 +222,7 @@ pub(crate) const DEFAULT_ORDER: usize = 6;
 /// Smaller `theta` / larger `order` = more accurate but more work.
 /// `parallel = true` parallelizes over query points (each is independent).
 /// The dispatcher calls this with `DEFAULT_THETA` / `DEFAULT_ORDER`.
-pub fn compute_all_stieltjes_treecode_impl(
+pub(crate) fn compute_all_stieltjes_treecode_impl(
     eigenvalues: &[f64],
     eta: f64,
     theta: f64,

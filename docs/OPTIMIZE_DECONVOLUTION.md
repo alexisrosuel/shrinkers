@@ -103,6 +103,11 @@ So the naive loop is exact but slow; the fast methods are approximate. **You mus
 
 ### Refactor (2026-08-03): single source of truth for the blocked kernel
 
+> Dated log entry. Both kernels named below are `pub(crate)` today
+> (see the 0.1.1 changelog) and `compute_all_stieltjes_blocked` has since
+> been re-pointed at the 2D-tiled kernel, so the "thin wrapper" description
+> below no longer matches the code.
+
 The two blocked kernels were structurally identical — `compute_all_stieltjes_blocked`
 (target = sample eigenvalues) and `compute_stieltjes_blocked_at_points` (target =
 arbitrary query points) differed only in the target array and output length. To

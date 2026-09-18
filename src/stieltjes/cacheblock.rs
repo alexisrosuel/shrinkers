@@ -50,7 +50,7 @@ use rayon::prelude::*;
 /// * `eigenvalues` — sorted eigenvalues (length p)
 /// * `eta` — regularization parameter
 /// * `cutoff` — far-field cutoff ratio (None = disabled, Some(r) = enabled with ratio r)
-pub fn compute_all_stieltjes_blocked(
+pub(crate) fn compute_all_stieltjes_blocked(
     eigenvalues: &[f64],
     eta: f64,
     cutoff: Option<f64>,
@@ -449,7 +449,7 @@ fn at_points_inner_loop<const CUT: bool>(
 ///
 /// Requires `cutoff` to be `Some` (the window is the whole point). If `None`,
 /// falls back to the full blocked computation.
-pub fn compute_all_stieltjes_blocked_windowed(
+pub(crate) fn compute_all_stieltjes_blocked_windowed(
     eigenvalues: &[f64],
     eta: f64,
     block_size: Option<usize>,
@@ -626,6 +626,11 @@ fn auto_tiled_block_size(p: usize) -> usize {
 ///
 /// Auto-selects the block size via `auto_tiled_block_size` when `block_size`
 /// is `None`.
+///
+/// Public for the benchmark harnesses in `examples/` and `benches/`, which
+/// call one kernel directly to A/B it. The supported entry point for
+/// callers is the dispatcher (`compute_all_stieltjes`), which resolves
+/// `StieltjesMethod` to the right kernel and applies the `1/p` scaling.
 pub fn compute_all_stieltjes_blocked_tiled(
     eigenvalues: &[f64],
     eta: f64,
@@ -1435,6 +1440,11 @@ pub(crate) const PARALLEL_TILED_BS: usize = 32;
 /// which ignored tiling entirely; it also gives `BlockedTiled` + Rayon a
 /// genuinely parallel path where it previously ran sequentially. Measured
 /// ~2.5× faster than the old parallel path at p=20000 (8-core M-series).
+///
+/// Public for the benchmark harnesses in `examples/` and `benches/`, which
+/// call one kernel directly to A/B it. The supported entry point for
+/// callers is the dispatcher (`compute_all_stieltjes`), which resolves
+/// `StieltjesMethod` to the right kernel and applies the `1/p` scaling.
 pub fn compute_all_stieltjes_blocked_tiled_parallel(
     eigenvalues: &[f64],
     eta: f64,
@@ -1496,6 +1506,7 @@ pub fn compute_all_stieltjes_blocked_tiled_parallel(
     (reals, imags)
 }
 
+#[cfg(any(test, feature = "python"))]
 /// Float32 (single-precision) 2D-tiled Stieltjes sum.
 ///
 /// Same structure as [`compute_all_stieltjes_blocked_tiled`] but operates on

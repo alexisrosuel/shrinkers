@@ -41,7 +41,7 @@ const DEFAULT_CUTOFF_RATIO: f64 = 10.0;
 /// * `eta` — regularization parameter
 /// * `fft_grid_size` — optional FFT grid size (None = auto)
 /// * `cutoff` — far-field cutoff ratio for the imaginary window (None = default)
-pub fn compute_all_stieltjes_adaptive(
+pub(crate) fn compute_all_stieltjes_adaptive(
     eigenvalues: &[f64],
     eta: f64,
     fft_grid_size: Option<usize>,

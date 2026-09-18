@@ -61,20 +61,23 @@ mod term;
 mod testutil;
 mod treecode;
 
-// `fft5` stays a public module: examples address `Fft5Options`/`Order`
-// by deep path for the grid-order study. Everything else is re-exported
-// flat so callers never depend on file layout.
-pub use adaptive::*;
-pub use autovec::*;
-pub use blocked_autovec::*;
+// Re-export surface. Everything a caller outside this module needs goes
+// through `compute_all_stieltjes` / `compute_stieltjes_at_points` (the
+// dispatcher, which resolves `StieltjesMethod`) or, for the benchmark
+// harnesses, through the kernels re-exported here flat so they never depend
+// on file layout.
+//
+// The rest of the family is `pub(crate)`: `autovec`'s flat names are used by
+// the Python bindings, and the modules whose every item is internal
+// (`adaptive`, `blocked_autovec`, `ewald`, `naive`, `treecode`) are reached by
+// module path and are not re-exported at all.
+#[cfg(feature = "python")]
+pub(crate) use autovec::*;
 pub use cacheblock::*;
 pub use chebcode::*;
-pub use ewald::*;
 pub use fft5::*;
 pub use hodlr::*;
-pub use naive::*;
 pub use term::*;
-pub use treecode::*;
 
 use crate::config::{CutoffConfig, Parallelism, RmtConfig, StieltjesMethod};
 use rayon::prelude::*;
@@ -618,6 +621,7 @@ pub fn compute_all_stieltjes(
     }
 }
 
+#[cfg(feature = "python")]
 /// Compute the full Stieltjes transform in **single precision (f32)**.
 ///
 /// This is the f32 counterpart of [`compute_all_stieltjes`] for the
@@ -630,7 +634,7 @@ pub fn compute_all_stieltjes(
 ///
 /// Only the `Blocked`/`BlockedTiled` methods are supported in f32; other
 /// methods fall back to the f64 path.
-pub fn compute_all_stieltjes_f32(
+pub(crate) fn compute_all_stieltjes_f32(
     eigenvalues: &[f32],
     eta: f32,
     method: StieltjesMethod,

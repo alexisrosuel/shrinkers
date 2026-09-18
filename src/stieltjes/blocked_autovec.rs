@@ -35,7 +35,7 @@ use rayon::prelude::*;
 /// * `eta` — regularization parameter
 /// * `block_size` — cache block size (default: 64)
 /// * `cutoff` — far-field cutoff ratio (None = disabled, Some(r) = enabled)
-pub fn compute_all_stieltjes_blocked_autovec(
+pub(crate) fn compute_all_stieltjes_blocked_autovec(
     eigenvalues: &[f64],
     eta: f64,
     block_size: Option<usize>,
@@ -156,7 +156,7 @@ pub(crate) fn compute_all_stieltjes_blocked_autovec_parallel(
 /// This is the same kernel as `cacheblock::stieltjes_sum_cutoff` — the two
 /// names survive only because each family's docs refer to its own entry point.
 #[inline(always)]
-pub fn stieltjes_sum_blocked_autovec(
+pub(crate) fn stieltjes_sum_blocked_autovec(
     lambda_i: f64,
     eigenvalues: &[f64],
     eta: f64,

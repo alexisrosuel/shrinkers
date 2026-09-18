@@ -60,7 +60,7 @@ const PAD_MULT: f64 = 5.0;
 /// * `eta` — regularization parameter
 /// * `alpha_opt` — optional splitting scale (None = auto `0.07/eta`)
 /// * `grid_size_opt` — optional far-grid size (None = auto)
-pub fn compute_all_stieltjes_ewald(
+pub(crate) fn compute_all_stieltjes_ewald(
     eigenvalues: &[f64],
     eta: f64,
     alpha_opt: Option<f64>,

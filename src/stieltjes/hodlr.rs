@@ -835,6 +835,11 @@ fn rec(
 /// Returns **raw sums** (not scaled by `1/p`). `tol` bounds each off-diagonal
 /// block's estimated relative Frobenius residual; `max_rank` caps every block
 /// (adjacent blocks may saturate it — they are small near the leaves).
+///
+/// Public for the benchmark harnesses in `examples/` and `benches/`, which
+/// call one kernel directly to A/B it. The supported entry point for
+/// callers is the dispatcher (`compute_all_stieltjes`), which resolves
+/// `StieltjesMethod` to the right kernel and applies the `1/p` scaling.
 pub fn compute_all_stieltjes_hodlr_impl(
     eigenvalues: &[f64],
     eta: f64,

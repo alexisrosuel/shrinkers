@@ -42,6 +42,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   knee; four symmetry-exploitation attempts measured slower and are
   documented with root causes (see CHANGELOG history below and
   docs/internals.md).
+- **BREAKING (Rust API): the individual Stieltjes kernels are no longer
+  `pub`.** `compute_all_stieltjes` / `compute_stieltjes_at_points` (the
+  dispatcher over `StieltjesMethod`) are the supported entry points; the
+  per-family kernels below them had no callers outside the crate. Now
+  `pub(crate)`: `naive_stieltjes_sum`, `autovec_stieltjes_sum`,
+  `stieltjes_with_deriv_sum`, `ValuesAndDerivs`,
+  `compute_all_stieltjes_with_deriv`, `compute_all_stieltjes_blocked`,
+  `compute_all_stieltjes_blocked_windowed`,
+  `compute_all_stieltjes_blocked_autovec`, `stieltjes_sum_blocked_autovec`,
+  `compute_all_stieltjes_adaptive`, `compute_all_stieltjes_ewald`,
+  `compute_all_stieltjes_treecode_impl`, `compute_all_stieltjes_fft5`,
+  `compute_stieltjes_fft_at_points`, `BLOCK_SZ`, `stieltjes_term_hoisted`,
+  `compute_all_stieltjes_f32` (Python-only) and
+  `compute_all_stieltjes_chebcode_preset`. Deleted as unused:
+  `compute_all_stieltjes_fft5_linear` and
+  `compute_all_stieltjes_fft5_with_order`, two thin wrappers over
+  `compute_all_stieltjes_fft5_with_options`, which is what the grid-order
+  study actually calls. Kept `pub` **only** because the `examples/` and
+  `benches/` harnesses call them directly, and documented as such:
+  `compute_all_stieltjes_blocked_tiled(_parallel)`,
+  `compute_all_stieltjes_chebcode(_impl)`, `chebcode_tree_for_bench`,
+  `compute_all_stieltjes_hodlr_impl`,
+  `compute_all_stieltjes_fft5_with_options`. The empty `pub use <mod>::*`
+  re-exports that resulted are gone.
+  Five of those items exist only for the Python bindings or for the unit
+  tests (`compute_all_stieltjes_f32`, `stieltjes_with_deriv_sum`,
+  `ValuesAndDerivs`, `compute_all_stieltjes_with_deriv`,
+  `compute_all_stieltjes_blocked_tiled_f32`); they are additionally gated on
+  `feature = "python"` / `test`, so a plain Rust build compiles none of them.
+  Without that gate `cargo clippy --all-targets` — the CI rust job, which does
+  not enable the `python` feature — reports them as dead code.
+
+### Fixed
+- **Changelog correction.** The 0.1.0 "Removed" entry claimed a set of
+  "config knobs that did nothing" had been deleted: `Strategy`
+  (+ `with_strategy`), `Precision` + `RmtConfig::precision` +
+  `with_precision`, `FftGridSize` + `fft_grid_size` + `with_fft_grid`,
+  `RmtConfig::label`, `StieltjesMethod::{description, all}` and
+  `Parallelism::name`. None were removed — that paragraph came in with a
+  changelog-only commit and `src/config.rs` is unchanged since the initial
+  import. They are retained deliberately:
+  - `FftGridSize`/`fft_grid_size` are read by the dispatcher
+    (`grid_points()`), and `FftGridSize::Custom` is reachable through the
+    public builder even though no preset uses it;
+  - `Strategy`/`with_strategy` are the documented preset entry point
+    (`docs/internals.md`) and are covered by the config tests;
+  - `StieltjesMethod::all` and `Parallelism::all` drive the exhaustive
+    method × parallelism test matrix;
+  - `RmtConfig::label`, `StieltjesMethod::description` and
+    `Parallelism::name` are public API of a published crate, so dropping
+    them is a semver decision rather than a cleanup.
+  `Precision`/`RmtConfig::precision`/`with_precision` remain genuinely
+  inert (the real f32 path is Python's `precision="f32"` side channel);
+  they stay as declared-but-unread so that removing them is a deliberate
+  breaking change, not a silent one.
 
 ## [0.1.0] — 2026-08-25
 
@@ -429,12 +484,14 @@ no global grid; ChebCode remains the approximate-frontier optimum.
     wrappers `compute_all_stieltjes_treecode` / `_hodlr` (dispatch defaults
     became named consts next to each kernel: `treecode::DEFAULT_THETA/_ORDER`,
     `hodlr::DEFAULT_LEAF/_ACA_TOL/_ACA_RANK`);
-  - config knobs that did nothing: `Strategy` (+ `with_strategy`),
-    `Precision` + `RmtConfig::precision` + `with_precision` (the real f32
-    path is Python's `precision="f32"` side channel), `FftGridSize` +
-    `fft_grid_size` + `with_fft_grid` (`Custom` was never constructible),
-    `RmtConfig::label`, `StieltjesMethod::{description, all}`,
-    `Parallelism::name`;
+  - **the config knobs were NOT removed.** An earlier revision of this entry
+    also listed `Strategy`/`with_strategy`,
+    `Precision`/`precision`/`with_precision`,
+    `FftGridSize`/`fft_grid_size`/`with_fft_grid`, `RmtConfig::label`,
+    `StieltjesMethod::{description, all}` and `Parallelism::name` as removed.
+    That never happened: the paragraph was written by a changelog-only commit
+    (`871cb01`) that did not touch `src/config.rs`. All of them are still
+    present and public. Corrected under 0.1.1 below;
   - campaign probes: benches `chebyshev_fmm`/`local_expansion` (~530 lines
     of prototype FMM living inside bench files), examples
     `profile_cheb`/`fft_bench`/`check_poly` (its Horner-instability proof

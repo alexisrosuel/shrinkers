@@ -12,7 +12,7 @@ use crate::stieltjes::stieltjes_term;
 /// so it matches the performance of a straightforward C/Python loop.
 #[inline(always)]
 #[allow(clippy::needless_range_loop)] // deliberate: matches naive C/Python baseline
-pub fn naive_stieltjes_sum(lambda_i: f64, eigenvalues: &[f64], eta: f64) -> (f64, f64) {
+pub(crate) fn naive_stieltjes_sum(lambda_i: f64, eigenvalues: &[f64], eta: f64) -> (f64, f64) {
     let mut sum_real = 0.0;
     let mut sum_imag = 0.0;
     // Deliberately uses indexing (not iter) to match naive C/Python style

@@ -623,13 +623,18 @@ impl ChebPreset {
 /// [`ChebPreset::DEFAULT`] operating point.
 ///
 /// Returns **raw sums** (not scaled by `1/p`); the caller applies scaling.
+///
+/// Public for the benchmark harnesses in `examples/` and `benches/`, which
+/// call one kernel directly to A/B it. The supported entry point for
+/// callers is the dispatcher (`compute_all_stieltjes`), which resolves
+/// `StieltjesMethod` to the right kernel and applies the `1/p` scaling.
 pub fn compute_all_stieltjes_chebcode(eigenvalues: &[f64], eta: f64) -> Vec<(f64, f64)> {
     let (theta, n, leaf) = ChebPreset::DEFAULT.parts();
     compute_all_stieltjes_chebcode_impl(eigenvalues, eta, theta, n, leaf, false)
 }
 
 /// Same at an explicit [`ChebPreset`], sequential or Rayon-parallel.
-pub fn compute_all_stieltjes_chebcode_preset(
+pub(crate) fn compute_all_stieltjes_chebcode_preset(
     eigenvalues: &[f64],
     eta: f64,
     preset: ChebPreset,
@@ -644,6 +649,11 @@ pub fn compute_all_stieltjes_chebcode_preset(
 ///
 /// Returns **raw sums** (not scaled by `1/p`).
 /// `parallel = true` parallelizes over query points (each is independent).
+///
+/// Public for the benchmark harnesses in `examples/` and `benches/`, which
+/// call one kernel directly to A/B it. The supported entry point for
+/// callers is the dispatcher (`compute_all_stieltjes`), which resolves
+/// `StieltjesMethod` to the right kernel and applies the `1/p` scaling.
 pub fn compute_all_stieltjes_chebcode_impl(
     eigenvalues: &[f64],
     eta: f64,
