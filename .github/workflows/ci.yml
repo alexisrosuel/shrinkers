@@ -30,8 +30,36 @@ jobs:
       - name: Clippy (all targets, deny warnings)
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Docs (deny rustdoc warnings)
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       - name: Tests
         run: cargo test
+
+  lint:
+    name: Python — ruff / mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Pinned to the versions the repo was linted with: `ruff check` without
+      # an explicit `select` follows the installed ruff's default rule set, so
+      # a floating version makes this gate non-reproducible.
+      - name: Install lint tooling
+        run: pip install "ruff==0.16.1" "mypy==2.3.0" numpy
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Mypy
+        run: mypy scripts tests
 
   python:
     name: Python ${{ matrix.python-version }} — wheel + pytest

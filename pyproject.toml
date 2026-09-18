@@ -54,3 +54,6 @@ target-version = "py39"
 
 [tool.mypy]
 ignore_missing_imports = true
+# No `python_version` pin: mypy no longer supports targets below 3.10, and the
+# installed numpy stubs require 3.12+. The declared floor (3.9) is therefore
+# only covered by the runtime CI matrix, not by mypy.

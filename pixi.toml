@@ -20,8 +20,8 @@ bench-stieltjes = "python scripts/bench_stieltjes.py"
 measure = "python scripts/measure_current.py"
 # Run clippy lints (Rust)
 lint = "cargo clippy --all-targets -- -D warnings"
-# Lint Python code
-lint-py = "ruff check scripts tests"
+# Lint Python code (scripts, tests and the type stub)
+lint-py = "ruff check ."
 # Format Rust code
 fmt = "cargo fmt"
 # Check formatting
