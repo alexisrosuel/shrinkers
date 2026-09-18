@@ -205,9 +205,12 @@ fn barycentric_row(x: f64, t: &[f64], lam: &[f64], w: &mut [f64], v: &mut [f64],
         w[hit] += mass;
         return;
     }
-    let inv_s = 1.0 / s;
+    // `mass·(1/s)` is common to every node: hoisting it turns the original
+    // `w_j += mass · v_j · inv_s` (FMUL + FMUL + FADD) into one hoisted FMUL
+    // plus a single fused `mul_add` per node — one fewer rounding step too.
+    let m = mass * (1.0 / s);
     for (wj, &vj) in w.iter_mut().zip(v.iter()).take(n) {
-        *wj += mass * vj * inv_s;
+        *wj = m.mul_add(vj, *wj);
     }
 }
 
