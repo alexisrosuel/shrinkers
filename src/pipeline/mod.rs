@@ -235,13 +235,6 @@ pub fn clean_eigensystem(
     }
 }
 
-/// Clean covariance matrix from a data matrix X (T, N).
-///
-/// Computes the empirical covariance, spectral decomposition, then cleans
-/// via RIE + eigenvector shrinkage. Uses LAPACK-style symmetric eigen-
-/// decomposition for the spectral step.
-///
-/// NOTE: This function allocates the p×p empirical covariance matrix.
 /// Clean a correlation matrix and return the cleaned covariance matrix plus
 /// the cleaned eigenvalues, sorted eigenvectors, and their theoretical
 /// alignment with the population eigenvectors.
@@ -249,6 +242,8 @@ pub fn clean_eigensystem(
 /// The spectral decomposition is computed internally with a symmetric
 /// eigendecomposition (Jacobi iteration). For very large p, prefer
 /// `clean_eigensystem` if you already have the eigensystem from Python/scipy.
+///
+/// NOTE: this allocates a dense p×p working copy for the eigendecomposition.
 ///
 /// # Arguments
 ///
