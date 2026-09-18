@@ -32,7 +32,6 @@ type-py = "mypy scripts tests"
 [dependencies]
 python = "3.14.*"
 numpy = ">=2"
-scipy = ">=1"
 pip = ">=26.1.2,<27"
 matplotlib = ">=3.11.1,<4"
 # Build tool for the PyO3 extension — must be declared so the env is reproducible
