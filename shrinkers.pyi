@@ -1,16 +1,18 @@
 """Type stubs for the shrinkers PyO3 extension module.
 
-All functions return plain dicts; these TypedDicts document their exact
-shapes for type checkers and IDEs.
+Most functions return plain dicts documented by the TypedDicts below;
+`inverse_bbp`, `ledoit_wolf_shrinkage` and `shrink_eigenvalues` return
+`np.ndarray` / `float` directly.
 """
 
-from typing import Literal, Optional, TypedDict, Union
+from typing import Literal, TypedDict
 
 import numpy as np
+from typing_extensions import TypeAlias
 
 __version__: str
 
-Method = Literal[
+Method: TypeAlias = Literal[
     "naive",
     "autovec",
     "blocked",
@@ -30,6 +32,8 @@ Method = Literal[
     "chebf",
     "chebcode_xtreme",
     "chebx",
+    "chebcode_balanced",
+    "chebb",
     "hodlr",
     "ewald",
     "dst",
@@ -39,10 +43,9 @@ Method = Literal[
     "accuracy_auto",
     "accuracy",
 ]
-Parallelism = Literal["seq", "sequential", "rayon", "parallel", "auto"]
-Eta = Union[float, Literal["inferred"]]
-Precision = Literal["f64", "f32"]
-Cutoff = Union[float, None, Literal["inferred"]]
+Eta: TypeAlias = float | Literal["inferred"] | None
+Precision: TypeAlias = Literal["f64", "f32"]
+Cutoff: TypeAlias = float | Literal["inferred"] | None
 
 
 class BulkDeconvolution(TypedDict):
@@ -116,8 +119,8 @@ def deconvolve_spiked(
     eta: Eta = ...,
     margin: float = 1.0,
     *,
-    method: Method = ...,
-    parallelism: Parallelism = ...,
+    method: Method = "auto",
+    parallel: bool | None = False,
     cutoff: Cutoff = ...,
 ) -> DeconvolveSpikedResult: ...
 
@@ -135,10 +138,10 @@ def direct_precision_shrinkage(
 def stieltjes_transform(
     eigenvalues: np.ndarray,
     eta: Eta = ...,
-    method: Method = ...,
-    precision: Precision = ...,
+    method: Method = "blocked",
+    precision: Precision = "f64",
     cutoff: Cutoff = ...,
-    parallelism: Parallelism = ...,
+    parallel: bool | None = False,
 ) -> StieltjesTransformResult: ...
 
 
@@ -163,8 +166,8 @@ def detect_spikes_bema(
 def detect_spikes_tracy_widom(
     eigenvalues: np.ndarray,
     c: float,
-    sigma2: float | None = ...,
-    significance: float = ...,
+    sigma2: Eta = ...,
+    significance: float = 0.05,
 ) -> SpikeDetection: ...
 
 
@@ -190,6 +193,6 @@ def shrink_eigenvalues(
     eigenvalues: np.ndarray,
     c: float,
     *,
-    method: Method = ...,
-    parallel: Parallelism = ...,
+    method: Method = "auto",
+    parallel: bool | None = False,
 ) -> np.ndarray: ...
