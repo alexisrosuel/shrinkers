@@ -15,24 +15,9 @@ Run:  python scripts/demo_cleaning.py
 import time
 
 import numpy as np
+from _common import simulate_spiked
 
 import shrinkers as rk
-
-
-def simulate_spiked(p: int, n: int, spikes: list[float], seed: int = 0):
-    """Simulate X (n x p) from a spiked covariance model.
-
-    Population covariance: Sigma = I_p + sum_i (ell_i - 1) v_i v_i^T
-    with unit-norm spike directions v_i. Returns (X, Sigma, true_spikes).
-    """
-    rng = np.random.default_rng(seed)
-    Sigma = np.eye(p)
-    for ell in spikes:
-        v = rng.standard_normal(p)
-        v /= np.linalg.norm(v)
-        Sigma += (ell - 1.0) * np.outer(v, v)
-    X = rng.standard_normal((n, p)) @ np.linalg.cholesky(Sigma).T
-    return X, Sigma, np.array(spikes)
 
 
 def main():

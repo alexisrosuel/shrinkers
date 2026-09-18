@@ -14,19 +14,7 @@ benchmarks in `scripts/bench_*.py`.
 import time
 
 import numpy as np
-
-
-def generate_mp_spectrum(p, c, seed=42):
-    """Generate a Marchenko-Pastur-like eigenvalue spectrum."""
-    rng = np.random.default_rng(seed)
-    lambda_min = max(1.0 - np.sqrt(c), 0.01) ** 2
-    lambda_max = (1.0 + np.sqrt(c)) ** 2
-
-    u = rng.uniform(0, 1, p)
-    t = lambda_min + u * (lambda_max - lambda_min)
-    evals = t + rng.uniform(0, 0.1, p)
-    evals.sort()
-    return evals
+from _common import mp_spectrum, numpy_stieltjes
 
 
 def rie_shrinkage(evals: np.ndarray, c: float) -> np.ndarray:
@@ -48,11 +36,8 @@ def rie_shrinkage(evals: np.ndarray, c: float) -> np.ndarray:
     eta = 0.1 / np.sqrt(p)
     original_trace = np.sum(evals)
 
-    # Step 1: Stieltjes transform — broadcast diff into a p×p matrix
-    diff = evals[:, np.newaxis] - evals[np.newaxis, :]  # (p, p)
-    denom = diff * diff + eta * eta                      # (p, p)
-    mg_real = np.mean(diff / denom, axis=1)               # (p,)
-    mg_imag = np.mean(eta / denom, axis=1)                # (p,)
+    # Step 1: Stieltjes transform
+    mg_real, mg_imag = numpy_stieltjes(evals, eta)
 
     # Step 2: Shrinkage factor for each eigenvalue
     term_real = c * evals * mg_real
@@ -94,7 +79,7 @@ def benchmark():
 
     results = {}
     for p, c in cases:
-        evals = generate_mp_spectrum(p, c)
+        evals = mp_spectrum(p, c)
 
         # Warmup
         _ = rie_shrinkage(evals, c)
@@ -129,7 +114,7 @@ def verify_equal():
 
     print("Verifying against shrinkers...")
     for p, c in [(100, 0.5), (500, 0.5)]:
-        evals = generate_mp_spectrum(p, c)
+        evals = mp_spectrum(p, c)
         np_out = rie_shrinkage(evals, c)
 
         # Rust with method="autovec" (no cutoff, exact) should match NumPy

@@ -16,20 +16,9 @@ Run:  python scripts/bench_population.py
 import time
 
 import numpy as np
+from _common import simulate_spiked
 
 import shrinkers as rk
-
-
-def simulate_spiked(p: int, n: int, spikes: list[float], seed: int = 0):
-    """Simulate X (n x p) from a spiked covariance model."""
-    rng = np.random.default_rng(seed)
-    Sigma = np.eye(p)
-    for ell in spikes:
-        v = rng.standard_normal(p)
-        v /= np.linalg.norm(v)
-        Sigma += (ell - 1.0) * np.outer(v, v)
-    X = rng.standard_normal((n, p)) @ np.linalg.cholesky(Sigma).T
-    return X, Sigma
 
 
 def timeit(fn, *args, n_runs=5):
@@ -64,7 +53,7 @@ def main():
 
     for p, n, spikes in cases:
         gamma = p / n
-        X, Sigma = simulate_spiked(p, n, spikes, seed=1)
+        X, Sigma, _ = simulate_spiked(p, n, spikes, seed=1)
         S = X.T @ X / n
         evals = np.sort(np.linalg.eigvalsh(S))[::-1].copy()  # descending, contiguous
 

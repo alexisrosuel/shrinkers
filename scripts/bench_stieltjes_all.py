@@ -30,7 +30,7 @@ import os
 import time
 
 import numpy as np
-from _common import setup_mpl
+from _common import mp_spectrum, numpy_stieltjes, setup_mpl
 
 import shrinkers as rk
 
@@ -76,11 +76,9 @@ P_VALUES = [100, 200, 400, 800, 1000, 2000, 4000, 8000, 10000, 20000]
 #  Pure NumPy reference (exact O(p²))
 # ──────────────────────────────────────────────
 def _ref_stieltjes(ev, eta):
-    """Reference Stieltjes transform m_g(z); returns the real part (the one used
-    by the Rust pipeline, z = λ - iη). Broadcasting into a p×p matrix."""
-    diff = ev[:, np.newaxis] - ev[np.newaxis, :]  # (p, p)
-    denom = diff * diff + eta * eta
-    return np.mean(diff / denom, axis=1)
+    """Reference Stieltjes transform m_g(z); the real part is the one used by
+    the Rust pipeline (z = λ - iη)."""
+    return numpy_stieltjes(ev, eta)[0]
 
 
 def _bench_ref(ev, eta, n_runs):
@@ -90,14 +88,6 @@ def _bench_ref(ev, eta, n_runs):
         _ref_stieltjes(ev, eta)
     t1 = time.perf_counter()
     return (t1 - t0) / n_runs * 1e6
-
-
-def generate_mp_spectrum(p, c=0.5, seed=42):
-    rng = np.random.default_rng(seed)
-    lo = max(1.0 - np.sqrt(c), 0.01) ** 2
-    hi = (1.0 + np.sqrt(c)) ** 2
-    ev = lo + rng.uniform(0, 1, p) * (hi - lo) + rng.uniform(0, 0.1, p)
-    return np.sort(ev)
 
 
 def bench_one(ev, eta, method, n_runs, parallel=False, precision="f64"):
@@ -140,7 +130,7 @@ def main():
 
     print(f"{'p':>7}" + "".join(f"{m:>16}" for m in METHODS))
     for p in ps:
-        ev = generate_mp_spectrum(p)
+        ev = mp_spectrum(p)
         eta = 0.1 / np.sqrt(p)
         # Fewer samples per algo to keep the bench fast; the reference (NumPy)
         # is the slowest, so cap its runs separately.

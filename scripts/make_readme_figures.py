@@ -24,7 +24,7 @@ import sys
 import time
 
 import numpy as np
-from _common import DOCS_IMG, savefig, setup_mpl
+from _common import DOCS_IMG, numpy_stieltjes, savefig, setup_mpl
 
 import shrinkers as rk
 
@@ -145,19 +145,9 @@ def stieltjes_python_naive(lam: np.ndarray, eta: float):
 
 
 def stieltjes_numpy_chunked(lam: np.ndarray, eta: float, block: int = 128):
-    """Same arithmetic, vectorized with plain NumPy broadcasting (no scipy,
-    no FFT), chunked so the p×p intermediate never materializes."""
-    p = lam.shape[0]
-    re = np.empty(p)
-    im = np.empty(p)
-    eta2 = eta * eta
-    inv_p = 1.0 / p
-    for a in range(0, p, block):
-        d = lam[a:a + block, None] - lam[None, :]
-        inv = 1.0 / (d * d + eta2)
-        re[a:a + block] = (d * inv).sum(axis=1) * inv_p
-        im[a:a + block] = (eta * inv).sum(axis=1) * inv_p
-    return re, im
+    """Same arithmetic as `_common.numpy_stieltjes`, in the chunked form that
+    never materializes the p×p intermediate (no scipy, no FFT)."""
+    return numpy_stieltjes(lam, eta, block=block)
 
 
 def bench(fn, *args, repeats: int = 3):
