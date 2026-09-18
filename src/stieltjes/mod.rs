@@ -219,6 +219,47 @@ fn cheb_preset(method: StieltjesMethod) -> chebcode::ChebPreset {
     chebcode::ChebPreset::from_method(method).expect("method is a ChebCode variant")
 }
 
+/// Leaf capacity for the treecode when it serves **arbitrary query points**
+/// (the deconvolution-grid path) instead of the spectrum itself.
+///
+/// A preset's `leaf_cap` is tuned for the all-points case, where `nq = p`
+/// queries amortize a fine tree. On the grid path `nq` is the caller's
+/// `n_points` (200 by default, often ≪ p) and the call is
+/// **build-dominated**: measured at p = 10 000 / 50 000 the build is 81 % /
+/// 94 % of the total, and most of that build is `merge_weights`, whose cost
+/// scales as `p / leaf_cap`.
+///
+/// Raising `leaf_cap` on this path therefore *removes* work from the build —
+/// and because leaves are summed **exactly**, it simultaneously *reduces* the
+/// approximation error. This is not a speed/accuracy trade: it relaxes the
+/// tree onto a cheaper, strictly more exact representation. Only the
+/// per-query exact-leaf cost grows, and `nq` is small by construction here.
+///
+/// Cost model (`n` = interpolation order, `L` = leaf capacity):
+///
+/// ```text
+///   build ≈ p·n + 2·p·n²/L          (barycentric fills + parent merges)
+///   eval  ≈ nq·(L + n·log2(p/L))    (exact leaf + far-field panels)
+/// ```
+///
+/// Minimising over `L` gives `L* = n·√(2p/nq)`. The preset's own `leaf_cap`
+/// is used as a floor, so the all-points behaviour is untouched: at
+/// `nq = p` the formula returns `n·√2`, below every shipped preset.
+///
+/// Measured on M1 Max, p = 50 000, n = 9: preset leaf 32 → 1.02 ms at
+/// 4.1e-9 rel-L2; `L* ≈ 200` → 0.64 ms at 1.3e-9 — 1.6× faster *and* more
+/// accurate. At p = 10 000, n = 9: 0.242 ms / 3.2e-9 → 0.182 ms / 2.0e-9.
+fn grid_leaf_cap(n: usize, p: usize, nq: usize, preset_leaf: usize) -> usize {
+    /// Upper bound so a single query point can never degenerate the tree
+    /// into one full O(p) exact sweep per point.
+    const MAX_GRID_LEAF: usize = 8192;
+    if nq == 0 || p == 0 {
+        return preset_leaf;
+    }
+    let optimal = n as f64 * (2.0 * p as f64 / nq as f64).sqrt();
+    (optimal.round() as usize).clamp(preset_leaf, MAX_GRID_LEAF.max(preset_leaf))
+}
+
 /// Compute the raw Stieltjes sum at arbitrary query points (not necessarily
 /// sample eigenvalues) using the selected method.
 ///
@@ -250,6 +291,21 @@ pub fn compute_stieltjes_at_points(
     grid_size_opt: Option<usize>,
 ) -> Vec<(f64, f64)> {
     let parallel = matches!(parallelism, Parallelism::Parallel);
+
+    // Resolve the auto presets here as well as in `RmtConfig::resolve_auto`:
+    // this dispatcher is reachable directly (the Python `stieltjes_transform`
+    // binding passes the user's raw method string through the single-point
+    // path, and `spectral_deconvolution` resolves its config first), and a
+    // plain `Auto` used to fall through to the exact per-point kernel for
+    // every query instead of the measured pick. The grid redirect applies
+    // only to what an auto chose — an explicitly named method is never
+    // second-guessed.
+    let method = if crate::config::is_auto(method) {
+        let resolved = crate::config::resolve_auto_method(method, parallel, eigenvalues.len());
+        crate::config::grid_appropriate(resolved, eigenvalues.len(), query_points.len())
+    } else {
+        method
+    };
 
     // The cache-blocked write-batched kernel is the fastest exact method for
     // evaluating at arbitrary query points (it reuses the same 2-source-per-
@@ -295,6 +351,9 @@ pub fn compute_stieltjes_at_points(
         | StieltjesMethod::ChebCodeBalanced => {
             let preset = cheb_preset(method);
             let (theta, n, leaf_cap) = preset.parts();
+            // This tree serves `query_points.len()` queries, not p — relax the
+            // leaf capacity accordingly (see `grid_leaf_cap`).
+            let leaf_cap = grid_leaf_cap(n, eigenvalues.len(), query_points.len(), leaf_cap);
             let batch = chebcode::ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap);
             batch.evaluate_points(query_points, eta, parallel)
         }
@@ -436,22 +495,17 @@ pub fn compute_all_stieltjes(
     let cutoff_ratio = cutoff.ratio();
     let inv_p = 1.0 / (p as f64);
     let parallel = matches!(parallelism, Parallelism::Parallel);
-    // Data-driven presets resolve via the measured Pareto table.
-    let method = if matches!(
-        method,
-        StieltjesMethod::AccuracyAuto | StieltjesMethod::SpeedAuto
-    ) {
-        let speed = method == StieltjesMethod::SpeedAuto;
-        let rayon = matches!(parallelism, Parallelism::Parallel);
-        crate::config::pareto_autogen::pareto_pick(speed, rayon, p)
-    } else {
-        method
-    };
+    // Data-driven presets resolve via the measured Pareto table — `Auto`
+    // included. `Auto` used to be left unresolved here and fell into the
+    // `Auto` arm below, i.e. the exact O(p²) `Blocked` kernel, which made
+    // `stieltjes_transform(method="auto")` up to ~40× slower than its
+    // documented policy (see `config::resolve_auto_method`).
+    let method = crate::config::resolve_auto_method(method, parallel, p);
 
     match method {
         // Resolved above; kept only for match exhaustiveness.
-        StieltjesMethod::AccuracyAuto | StieltjesMethod::SpeedAuto => {
-            unreachable!("preset autos resolve to concrete methods before dispatch")
+        StieltjesMethod::Auto | StieltjesMethod::AccuracyAuto | StieltjesMethod::SpeedAuto => {
+            unreachable!("auto presets resolve to concrete methods before dispatch")
         }
         StieltjesMethod::Adaptive => scale_aos(
             adaptive::compute_all_stieltjes_adaptive(eigenvalues, eta, fft_grid_size, cutoff_ratio),
@@ -509,16 +563,6 @@ pub fn compute_all_stieltjes(
                 None,
                 cutoff_ratio,
             );
-            scale_soa(reals, imags, inv_p)
-        }
-        StieltjesMethod::Auto => {
-            // Auto should already be resolved upstream by rie_shrinkage.
-            // If reached here, fall back to Blocked which is the safe default.
-            let (reals, imags) = if parallel {
-                cacheblock::compute_all_stieltjes_blocked_parallel(eigenvalues, eta, None)
-            } else {
-                cacheblock::compute_all_stieltjes_blocked(eigenvalues, eta, None)
-            };
             scale_soa(reals, imags, inv_p)
         }
         StieltjesMethod::Hodlr => scale_aos(
@@ -691,6 +735,10 @@ mod tests {
     fn test_all_methods_agree() {
         let evals: Vec<f64> = (0..50).map(|i| ((i as f64 + 0.5) * 0.2).ln_1p()).collect();
         let eta = 0.05;
+        // Exact methods only: `Auto` is a *speed policy* that now really does
+        // resolve through the Pareto table (it used to leak through to the
+        // exact `Blocked` kernel), so it belongs in the accuracy-capped test
+        // below, not here.
         let methods = [
             StieltjesMethod::Naive,
             StieltjesMethod::AutoVectorized,
@@ -699,7 +747,6 @@ mod tests {
             StieltjesMethod::BlockedTiled,
             StieltjesMethod::BlockedWindowed,
             StieltjesMethod::BlockedHybrid,
-            StieltjesMethod::Auto,
         ];
 
         let reference: Vec<(f64, f64)> = evals
@@ -738,6 +785,43 @@ mod tests {
                     ref_i
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_auto_resolves_and_matches_the_resolved_method() {
+        // `Auto` must dispatch exactly as the method the Pareto policy picks,
+        // not as the exact `Blocked` fallback it used to reach. Both a size
+        // whose pick is a treecode preset and one whose pick is the FFT bank
+        // are covered.
+        for p in [2_000usize, 50_000] {
+            let mut evals = crate::stieltjes::testutil::log_spectrum(p);
+            evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+            let eta = 0.1 / (p as f64).sqrt();
+            let resolved = crate::config::resolve_auto_method(StieltjesMethod::Auto, false, p);
+            assert!(
+                !matches!(resolved, StieltjesMethod::Auto | StieltjesMethod::Blocked),
+                "p={p}: Auto resolved to {resolved:?}"
+            );
+            let auto = compute_all_stieltjes(
+                &evals,
+                eta,
+                StieltjesMethod::Auto,
+                None,
+                CutoffConfig::Disabled,
+                64,
+                Parallelism::Sequential,
+            );
+            let explicit = compute_all_stieltjes(
+                &evals,
+                eta,
+                resolved,
+                None,
+                CutoffConfig::Disabled,
+                64,
+                Parallelism::Sequential,
+            );
+            assert_eq!(auto, explicit, "p={p}: Auto != {resolved:?}");
         }
     }
 
@@ -984,6 +1068,56 @@ mod tests {
                 assert!(r.is_finite());
                 assert!(i.is_finite());
             }
+        }
+    }
+
+    #[test]
+    fn test_at_points_chebcode_grid_matches_exact() {
+        // The at-points path serves `nq` arbitrary query points (the
+        // deconvolution grid). The auto dispatch sends it to the ChebCode
+        // speed preset, whose error must stay far below the ~4e-5 floor of
+        // the whole-grid FFT family it replaced at large p.
+        let p = 8_000;
+        let mut evals = crate::stieltjes::testutil::log_spectrum(p);
+        evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let eta = 0.1 / (p as f64).sqrt();
+
+        let lo = evals[0] - 0.2 * (evals[p - 1] - evals[0]);
+        let hi = evals[p - 1] + 0.2 * (evals[p - 1] - evals[0]);
+        let nq = 200;
+        let grid: Vec<f64> = (0..nq)
+            .map(|k| lo + (hi - lo) * k as f64 / (nq as f64 - 1.0))
+            .collect();
+
+        for method in [
+            StieltjesMethod::ChebCodeFast,
+            StieltjesMethod::ChebCodeBalanced,
+        ] {
+            let exact = compute_stieltjes_at_points(
+                &grid,
+                &evals,
+                eta,
+                StieltjesMethod::Blocked,
+                None,
+                Parallelism::Sequential,
+                None,
+            );
+            let fast = compute_stieltjes_at_points(
+                &grid,
+                &evals,
+                eta,
+                method,
+                None,
+                Parallelism::Sequential,
+                None,
+            );
+            let (mut num, mut den) = (0.0_f64, 0.0_f64);
+            for k in 0..nq {
+                num += (fast[k].0 - exact[k].0).powi(2) + (fast[k].1 - exact[k].1).powi(2);
+                den += exact[k].0.powi(2) + exact[k].1.powi(2);
+            }
+            let rel = (num / den).sqrt();
+            assert!(rel < 1e-6, "{method:?} grid rel-L2 {rel:.3e}");
         }
     }
 }

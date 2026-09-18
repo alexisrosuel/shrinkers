@@ -465,18 +465,103 @@ impl RmtConfig {
         if resolved.parallelism == Parallelism::Auto {
             resolved.parallelism = Parallelism::resolve(p, resolved.stieltjes_method);
         }
-        if resolved.stieltjes_method == StieltjesMethod::Auto {
-            resolved.stieltjes_method = StieltjesMethod::resolve(p, resolved.parallelism);
-        }
-        if resolved.stieltjes_method == StieltjesMethod::AccuracyAuto {
-            let parallel_rayon = matches!(resolved.parallelism, Parallelism::Parallel);
-            resolved.stieltjes_method = pareto_autogen::pareto_pick(false, parallel_rayon, p);
-        }
-        if resolved.stieltjes_method == StieltjesMethod::SpeedAuto {
-            let parallel_rayon = matches!(resolved.parallelism, Parallelism::Parallel);
-            resolved.stieltjes_method = pareto_autogen::pareto_pick(true, parallel_rayon, p);
-        }
+        let parallel_rayon = matches!(resolved.parallelism, Parallelism::Parallel);
+        resolved.stieltjes_method =
+            resolve_auto_method(resolved.stieltjes_method, parallel_rayon, p);
         resolved
+    }
+
+    /// [`Self::resolve_auto`] for the **at-points** driver
+    /// ([`crate::stieltjes::compute_stieltjes_at_points`]), which evaluates
+    /// the transform at `nq` arbitrary query points instead of at the `p`
+    /// sample eigenvalues.
+    ///
+    /// The measured Pareto table behind `resolve_auto` is an *all-points*
+    /// table (`nq = p`). One of its large-p speed picks is the FFT family,
+    /// whose cost is a whole-grid convolution **independent of `nq`** — a
+    /// sensible trade at `nq = p`, and the wrong one on a deconvolution grid.
+    /// Measured, p = 50 000 sequential, `nq = 200`:
+    ///
+    /// | method | grid runtime | rel error |
+    /// |---|---|---|
+    /// | `Fft5` (the table pick) | 11.7 ms | ~4e-5 |
+    /// | `ChebCodeFast` | 0.64 ms | ~1e-8 |
+    ///
+    /// So the auto preset is redirected to the ChebCode speed preset when the
+    /// query count is small (`nq·4 < p`; the measured FFT/ChebCode grid
+    /// crossover sits near `nq ≈ 0.7·p`). Above that the table's pick stands.
+    ///
+    /// Only the auto presets are second-guessed: an explicit
+    /// `stieltjes_method` is always honoured as given.
+    pub fn resolve_auto_at_points(&self, p: usize, nq: usize) -> Self {
+        if !is_auto(self.stieltjes_method) {
+            return self.resolve_auto(p);
+        }
+        let resolved = self.resolve_auto(p);
+        Self {
+            stieltjes_method: grid_appropriate(resolved.stieltjes_method, p, nq),
+            ..resolved
+        }
+    }
+}
+
+/// Is `method` one of the three unresolved auto presets?
+pub(crate) const fn is_auto(method: StieltjesMethod) -> bool {
+    matches!(
+        method,
+        StieltjesMethod::Auto | StieltjesMethod::SpeedAuto | StieltjesMethod::AccuracyAuto
+    )
+}
+
+/// Resolve an auto preset to a concrete method for the **all-points**
+/// problem (`nq = p`).
+///
+/// `Auto` and `SpeedAuto` are the same policy — the fastest method whose
+/// measured error stays under the cap — and `AccuracyAuto` is the
+/// lowest-error one with ties broken by runtime. An already-concrete method
+/// is returned unchanged.
+///
+/// This is THE single resolution point: [`RmtConfig::resolve_auto`] and the
+/// Stieltjes dispatchers (`compute_all_stieltjes`,
+/// `compute_stieltjes_at_points`) all route through it, so `method="auto"`
+/// means the same thing however it is reached. It previously did not:
+/// `compute_all_stieltjes` resolved only the two explicit `*Auto` presets and
+/// silently fell back to the exact `Blocked` kernel for plain `Auto`, so the
+/// Python `stieltjes_transform(method="auto")` paid O(p²) — 102 ms at
+/// p = 20 000 instead of 4.6 ms, a ~22× miss against the documented policy.
+pub(crate) fn resolve_auto_method(
+    method: StieltjesMethod,
+    parallel: bool,
+    p: usize,
+) -> StieltjesMethod {
+    match method {
+        StieltjesMethod::Auto | StieltjesMethod::SpeedAuto => {
+            pareto_autogen::pareto_pick(true, parallel, p)
+        }
+        StieltjesMethod::AccuracyAuto => pareto_autogen::pareto_pick(false, parallel, p),
+        concrete => concrete,
+    }
+}
+
+/// Redirect a **resolved** method that pays for the whole grid to the
+/// treecode when only a few query points are needed.
+///
+/// The FFT/Adaptive/Dst families evaluate a full uniform-grid convolution
+/// whose cost ignores `nq`; `ChebCodeFast` serves exactly `nq` points. The
+/// threshold is `nq·4 < p` against a measured crossover near `nq ≈ 0.7·p`.
+/// Concrete methods are only redirected when they belong to that family, and
+/// callers apply this to *auto-resolved* methods only.
+pub(crate) fn grid_appropriate(method: StieltjesMethod, p: usize, nq: usize) -> StieltjesMethod {
+    if nq.saturating_mul(4) >= p {
+        return method;
+    }
+    match method {
+        StieltjesMethod::Fft5
+        | StieltjesMethod::Fft3
+        | StieltjesMethod::Fft2
+        | StieltjesMethod::Adaptive
+        | StieltjesMethod::Dst => StieltjesMethod::ChebCodeFast,
+        concrete => concrete,
     }
 }
 
@@ -528,6 +613,62 @@ mod tests {
         assert_eq!(cfg.parallelism, Parallelism::Sequential);
         // Method resolved based on the resolved (sequential) parallelism.
         assert_eq!(cfg.stieltjes_method, StieltjesMethod::ChebCodeBalanced);
+    }
+
+    #[test]
+    fn test_at_points_resolution_avoids_the_whole_grid_fft() {
+        // p = 50_000 sequential is the bin whose all-points speed pick is
+        // `Fft5`. On a 200-point deconvolution grid that costs the whole
+        // grid (11.7 ms) where the treecode needs 0.64 ms, so the at-points
+        // resolver must redirect it.
+        let cfg = RmtConfig::new(0.5).with_stieltjes(StieltjesMethod::Auto);
+        assert_eq!(
+            cfg.resolve_auto(50_000).stieltjes_method,
+            StieltjesMethod::Fft5,
+            "precondition: the all-points table pick is Fft5 here"
+        );
+        assert_eq!(
+            cfg.resolve_auto_at_points(50_000, 200).stieltjes_method,
+            StieltjesMethod::ChebCodeFast
+        );
+        // A grid as large as the spectrum keeps the table's pick: there the
+        // FFT is genuinely the faster method.
+        assert_eq!(
+            cfg.resolve_auto_at_points(50_000, 50_000).stieltjes_method,
+            StieltjesMethod::Fft5
+        );
+        // The same redirection applies to the explicit speed preset...
+        let speed = RmtConfig::new(0.5).with_stieltjes(StieltjesMethod::SpeedAuto);
+        assert_eq!(
+            speed.resolve_auto_at_points(50_000, 200).stieltjes_method,
+            StieltjesMethod::ChebCodeFast
+        );
+        // ...but never to a method the caller named explicitly.
+        for explicit in [
+            StieltjesMethod::Fft5,
+            StieltjesMethod::ChebCode,
+            StieltjesMethod::Blocked,
+        ] {
+            let cfg = RmtConfig::new(0.5).with_stieltjes(explicit);
+            assert_eq!(
+                cfg.resolve_auto_at_points(50_000, 200).stieltjes_method,
+                explicit
+            );
+        }
+    }
+
+    #[test]
+    fn test_at_points_resolution_leaves_small_p_alone() {
+        // Every small-p speed bin already resolves to a ChebCode preset, so
+        // the at-points resolver is a no-op there.
+        let cfg = RmtConfig::new(0.5).with_stieltjes(StieltjesMethod::Auto);
+        for p in [100usize, 1_000, 10_000, 20_000] {
+            assert_eq!(
+                cfg.resolve_auto_at_points(p, 200).stieltjes_method,
+                cfg.resolve_auto(p).stieltjes_method,
+                "p={p}"
+            );
+        }
     }
 }
 

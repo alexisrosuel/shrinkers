@@ -163,8 +163,10 @@ pub fn spectral_deconvolution(
     // Resolve Auto config based on the problem size p, then select the
     // Stieltjes method. The grid points are a uniform grid over [lo, hi] —
     // NOT the sample eigenvalues — so we evaluate the fast Stieltjes kernel
-    // at those arbitrary query points.
-    let resolved = config.resolve_auto(p);
+    // at those arbitrary query points. The `_at_points` resolver is used
+    // because the measured Pareto table is all-points-tuned: its large-p
+    // speed pick is a whole-grid FFT whose cost ignores `n_points`.
+    let resolved = config.resolve_auto_at_points(p, n_points);
     let method = resolved.stieltjes_method;
     let parallelism = resolved.parallelism;
     let cutoff_ratio = resolved.cutoff.ratio();
