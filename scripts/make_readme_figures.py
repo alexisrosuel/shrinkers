@@ -22,18 +22,14 @@ import json
 import platform
 import sys
 import time
-from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+from _common import DOCS_IMG, savefig, setup_mpl
 
 import shrinkers as rk
 
-OUT_DIR = Path("docs/img")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+plt = setup_mpl()
+OUT_DIR = DOCS_IMG
 
 C = 0.25  # concentration ratio p/n
 
@@ -111,8 +107,7 @@ def fig_cleaning() -> dict:
         fontsize=11,
     )
     fig.tight_layout()
-    fig.savefig(OUT_DIR / "cleaning_quality.png", dpi=150)
-    plt.close(fig)
+    savefig(fig, OUT_DIR / "cleaning_quality.png", dpi=150)
 
     return {
         "p": p, "c": C, "spikes": spikes,
@@ -243,11 +238,10 @@ def fig_runtime(reuse: bool = False) -> dict:
             xy=(last_full["p"], last_full["shrinkers_exact_parallel"]),
             xytext=(-120, 30), textcoords="offset points",
             fontsize=8.5, color="#333333",
-            arrowprops=dict(arrowstyle="->", color="#666666", lw=0.8))
+            arrowprops={"arrowstyle": "->", "color": "#666666", "lw": 0.8})
 
     fig.tight_layout()
-    fig.savefig(OUT_DIR / "performance.png", dpi=150)
-    plt.close(fig)
+    savefig(fig, OUT_DIR / "performance.png", dpi=150)
 
     return {"rows": rows}
 

@@ -12,18 +12,30 @@ import argparse
 import json
 import pathlib
 
-import matplotlib
+from _common import savefig, setup_mpl
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+plt = setup_mpl()
+
+# The dumps have used several tokens for the same thing over the campaigns
+# ("rayon" before, "ray"/"parallel" after). Normalising here keeps the two
+# snapshots in the same panels instead of silently drawing empty ones.
+PAR_ALIASES = {
+    "seq": "seq",
+    "sequential": "seq",
+    "ray": "rayon",
+    "rayon": "rayon",
+    "parallel": "rayon",
+}
 
 
 def load(path):
+    """Read a dump and group its rows by (normalised par, p)."""
     with open(path) as f:
         d = json.load(f)
     rows = {}
     for r in d["rows"]:
-        rows.setdefault((r["par"], r["p"]), []).append(r)
+        par = PAR_ALIASES.get(r["par"], r["par"])
+        rows.setdefault((par, r["p"]), []).append(r)
     return d, rows
 
 
@@ -49,19 +61,16 @@ def main():
     outdir = pathlib.Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    db, rb = load(args.before)
-    da, ra = load(args.after)
+    _, rb = load(args.before)
+    _, ra = load(args.after)
 
-    sizes = sorted({p for (_, p) in rb.keys()} & {p for (_, p) in ra.keys()})
-    pars = ["seq", "rayon"]  # legacy token; new dumps say "parallel"
-    colors = plt.get_cmap("tab10").colors
-    method_color = {}
-    all_methods = []
-    for (_, p), rs in list(rb.items()) + list(ra.items()):
-        for r in rs:
-            if r["method"] not in method_color:
-                method_color[r["method"]] = colors[len(method_color) % len(colors)]
-                all_methods.append(r["method"])
+    sizes = sorted({p for (_, p) in rb} & {p for (_, p) in ra})
+    # Sequential first, then the threaded mode — the two panels the README
+    # artefacts are named after (`pareto_seq.png`, `pareto_rayon.png`).
+    pars = sorted(
+        {par for (par, _) in rb} | {par for (par, _) in ra},
+        key=lambda t: (t != "seq", t),
+    )
 
     for par in pars:
         fig, axes = plt.subplots(
@@ -70,11 +79,10 @@ def main():
         if len(sizes) == 1:
             axes = [axes]
         for ax, p in zip(axes, sizes):
-            for src_rows, style, label in [
-                (rb, dict(marker="o", facecolors="none", color="#c0392b"), "before"),
-                (ra, dict(marker="o", color="#1e8449"), "after"),
+            for src_rows, style in [
+                (rb, {"marker": "o", "facecolors": "none", "color": "#c0392b"}),
+                (ra, {"marker": "o", "color": "#1e8449"}),
             ]:
-                _ = label
                 pts = src_rows.get((par, p), [])
                 for r in pts:
                     ax.scatter(
@@ -86,8 +94,7 @@ def main():
                 if st:
                     errs, mss = zip(*st)
                     ax.step(errs, mss, where="post", alpha=0.55,
-                            color=style.get("color"), linewidth=1.6)
-                _ = label
+                            color=style["color"], linewidth=1.6)
             ax.set_xscale("log")
             ax.set_yscale("log")
             ax.set_title(f"p = {p}", fontsize=11)
@@ -107,9 +114,7 @@ def main():
         )
         fig.legend(handles=handles, loc="lower right", ncol=2, fontsize=9)
         fig.tight_layout(rect=(0, 0.02, 1, 0.96))
-        out = outdir / f"pareto_{par}.png"
-        fig.savefig(out, dpi=140)
-        print(f"wrote {out}")
+        savefig(fig, outdir / f"pareto_{par}.png", dpi=140)
 
 
 if __name__ == "__main__":

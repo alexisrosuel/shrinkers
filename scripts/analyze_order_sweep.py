@@ -19,6 +19,7 @@ import math
 import sys
 from collections import defaultdict
 
+
 def fit_slope(xs, ys):
     """Least-squares slope of log(ys) vs log(xs) on the strictly-decreasing head."""
     pts = []

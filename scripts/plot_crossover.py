@@ -2,8 +2,9 @@
 """Small-p crossover chart: O(p^2) exact kernel vs ChebCode treecode.
 
 Reads docs/pareto/small_p.json (produced by
-`cargo run --release --example small_p_crossover`) and plots per-call runtime
-in microseconds, log-log, with the measured crossover region highlighted.
+`cargo run --release --example measure_small_p_crossover`) and plots per-call
+runtime in microseconds, log-log, with the measured crossover region
+highlighted.
 
 Usage: python3 scripts/plot_crossover.py [small_p.json]
 """
@@ -11,12 +12,10 @@ Usage: python3 scripts/plot_crossover.py [small_p.json]
 import json
 import sys
 
-import matplotlib
+from _common import DOCS_PARETO, savefig, setup_mpl
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-
-OUT = "docs/pareto"
+plt = setup_mpl()
+OUT = DOCS_PARETO
 
 STYLE = {
     # (method, par): (color, linestyle)
@@ -39,7 +38,7 @@ LABEL = {
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else f"{OUT}/small_p.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else str(OUT / "small_p.json")
     with open(path) as fh:
         rows = json.load(fh)["rows"]
 
@@ -72,10 +71,7 @@ def main():
     ax.grid(True, which="both", alpha=0.25)
     ax.legend(fontsize=8, ncol=2)
     fig.tight_layout()
-    out = f"{OUT}/crossover_small_p.png"
-    fig.savefig(out, dpi=140)
-    plt.close(fig)
-    print("wrote", out)
+    savefig(fig, OUT / "crossover_small_p.png", dpi=140)
 
 
 if __name__ == "__main__":

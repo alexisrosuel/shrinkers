@@ -29,13 +29,12 @@ import csv
 import os
 import time
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+from _common import setup_mpl
 
 import shrinkers as rk
+
+plt = setup_mpl()
 
 # All implementations exposed via the Python API.
 METHODS = [

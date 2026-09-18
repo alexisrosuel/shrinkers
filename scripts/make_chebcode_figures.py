@@ -12,16 +12,11 @@ All text English. Run: .pixi/envs/default/bin/python scripts/make_chebcode_figur
 
 from __future__ import annotations
 
-import os
-import sys
-
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+from _common import DOCS_IMG, savefig, setup_mpl
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "docs", "img")
+plt = setup_mpl()
+OUT = DOCS_IMG
 
 GREEN = "#2e7d32"
 ORANGE = "#ef6c00"
@@ -118,8 +113,7 @@ def fig_tree_and_traversal() -> None:
     ax.set_title("ChebCode tree: intervals per depth; '|' = Chebyshev panel nodes; "
                  "blue = exact leaves", fontsize=9)
     fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "chebcode_tree.png"), dpi=150)
-    plt.close(fig)
+    savefig(fig, OUT / "chebcode_tree.png", dpi=150)
 
     # Figure 2: one query's decisions.
     x_query = float(src.max()) + 0.35
@@ -146,8 +140,7 @@ def fig_tree_and_traversal() -> None:
                for k in ("accepted", "recursed", "leaf")]
     ax.legend(handles=handles, fontsize=8, loc="lower left", framealpha=0.9)
     fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "chebcode_traversal.png"), dpi=150)
-    plt.close(fig)
+    savefig(fig, OUT / "chebcode_traversal.png", dpi=150)
 
 
 def fig_equivalent_densities() -> None:
@@ -181,8 +174,8 @@ def fig_equivalent_densities() -> None:
 
     fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(8.4, 4.6), sharex=True,
                                    gridspec_kw={"height_ratios": [1, 1.4]})
-    ax0.stem(src, np.ones_like(src), markerfmt=",", basefmt=" ", linefmt=f"C0-")
-    ax0.stem(t, w / w.max() * 1.0, markerfmt="D", basefmt=" ", linefmt=f"C3-", )
+    ax0.stem(src, np.ones_like(src), markerfmt=",", basefmt=" ", linefmt="C0-")
+    ax0.stem(t, w / w.max() * 1.0, markerfmt="D", basefmt=" ", linefmt="C3-", )
     ax0.set_ylabel("sources / weights")
     ax0.legend(["60 sources (exact side)", "panel weights w_j (scaled)"],
                fontsize=8, loc="upper left")
@@ -197,8 +190,7 @@ def fig_equivalent_densities() -> None:
     err = np.max(np.abs(exact - approx)) / np.max(np.abs(exact))
     ax1.set_title(f"max relative deviation {err:.1e}  (well-separated panel)", fontsize=9)
     fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "chebcode_equivalent_densities.png"), dpi=150)
-    plt.close(fig)
+    savefig(fig, OUT / "chebcode_equivalent_densities.png", dpi=150)
 
 
 def fig_presets() -> None:
@@ -222,18 +214,16 @@ def fig_presets() -> None:
         ax.text(bar.get_x() + bar.get_width() / 2, e * 1.6, f"{e:.0e}",
                 ha="center", fontsize=8)
     fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "chebcode_presets.png"), dpi=150)
-    plt.close(fig)
+    savefig(fig, OUT / "chebcode_presets.png", dpi=150)
 
 
 def main() -> None:
-    os.makedirs(OUT, exist_ok=True)
     fig_tree_and_traversal()
     fig_equivalent_densities()
     fig_presets()
     print("figures written:", sorted(
-        f for f in os.listdir(OUT) if f.startswith("chebcode_")))
+        f.name for f in OUT.glob("chebcode_*.png")))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

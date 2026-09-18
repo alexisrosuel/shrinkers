@@ -13,13 +13,12 @@ Usage: python3 scripts/plot_runtime_vs_p.py [bench_after.json] [bench_before.jso
 import json
 import sys
 
-import matplotlib
+from _common import DOCS_PARETO, savefig, setup_mpl
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+plt = setup_mpl()
 
 ACC_CUT = 1e-8
-OUT = "docs/pareto"
+OUT = DOCS_PARETO
 
 
 def load_rows(paths):
@@ -50,7 +49,7 @@ def latest_per_cell(rows):
 
 
 def main():
-    paths = sys.argv[1:] or [f"{OUT}/bench_after.json"]
+    paths = sys.argv[1:] or [str(OUT / "bench_after.json")]
     rows = latest_per_cell(load_rows(paths))
     pars = sorted({r["par"] for r in rows})
     methods = sorted({r["method"] for r in rows})
@@ -61,7 +60,7 @@ def main():
     bands = {
         "all_methods": lambda m: True,
         f"err_le_{ACC_CUT:g}": lambda m: max_err(m) <= ACC_CUT,
-        f"err_le_1e-5": lambda m: max_err(m) <= 1e-5,
+        "err_le_1e-5": lambda m: max_err(m) <= 1e-5,
     }
 
     for par in pars:
@@ -82,10 +81,7 @@ def main():
         ax.grid(True, which="both", alpha=0.25)
         ax.legend(fontsize=8, ncol=2)
         fig.tight_layout()
-        out = f"{OUT}/runtime_vs_p_{par}.png"
-        fig.savefig(out, dpi=140)
-        plt.close(fig)
-        print("wrote", out)
+        savefig(fig, OUT / f"runtime_vs_p_{par}.png", dpi=140)
 
     # Grid: parallelism x accuracy band.
     n_par, n_band = len(pars), len(bands)
@@ -115,10 +111,7 @@ def main():
     handles, labels = axes[0][0].get_legend_handles_labels()
     fig.legend(handles, labels, fontsize=8, ncol=min(8, len(labels)), loc="lower center")
     fig.tight_layout(rect=[0, 0.06, 1, 1])
-    out = f"{OUT}/runtime_vs_p_grid.png"
-    fig.savefig(out, dpi=140)
-    plt.close(fig)
-    print("wrote", out)
+    savefig(fig, OUT / "runtime_vs_p_grid.png", dpi=140)
 
 
 if __name__ == "__main__":

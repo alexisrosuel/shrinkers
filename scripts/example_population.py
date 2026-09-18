@@ -21,16 +21,14 @@ Produces two figures:
 Run:  python scripts/example_population.py
 """
 
-import os
 import time
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+from _common import FIGURES, savefig, setup_mpl
 
 import shrinkers as rk
+
+plt = setup_mpl()
 
 # ──────────────────────────────────────────────
 #  Simulation helpers
@@ -137,8 +135,6 @@ N_REPEAT = 3                   # timing repetitions
 
 
 def main():
-    os.makedirs("figures", exist_ok=True)
-
     # ── Run every case × c, collect results ──
     results = []  # list of dicts
     for ci, (name, spikes, bulk_type) in enumerate(CASES):
@@ -220,9 +216,7 @@ def main():
     fig.suptitle("Population spectral reconstruction via deconvolve_spiked",
                  fontsize=13)
     fig.tight_layout(rect=[0, 0, 1, 0.97])
-    fig.savefig("figures/population_reconstruction.png", dpi=150)
-    plt.close(fig)
-    print("Saved figures/population_reconstruction.png")
+    savefig(fig, FIGURES / "population_reconstruction.png", dpi=150)
 
     # ── Figure 2: reconstruction error + timings ──
     fig, (ax_err, ax_time) = plt.subplots(1, 2, figsize=(14, 5.5))
@@ -255,9 +249,7 @@ def main():
     ax_time.legend(fontsize=7, ncol=2)
 
     fig.tight_layout()
-    fig.savefig("figures/reconstruction_error.png", dpi=150)
-    plt.close(fig)
-    print("Saved figures/reconstruction_error.png")
+    savefig(fig, FIGURES / "reconstruction_error.png", dpi=150)
 
 
 if __name__ == "__main__":
