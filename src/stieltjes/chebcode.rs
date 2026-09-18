@@ -155,40 +155,60 @@ fn fill_weights(
 
     // ℓ_j(x) = (λ_j/(x-t_j)) / (Σ_i λ_i/(x-t_i)); if x hits a node exactly,
     // that single basis evaluates to 1.
-    //
-    // Division-hoisted accumulation: v_j = λ_j/(x-t_j) is computed once
-    // (n divisions), s = Σ v_j normalizes, and the update is the multiply
-    // `w_j += v_j·(1/s)` — one extra division per POINT instead of one per
-    // (point, node). Numerically identical up to ≤1 ulp.
     let t = &tree.nodes[base..base + n];
     // `scratch` is 2n long: the first half accumulates the weights, the
     // second is the per-point barycentric scratch `v`. Sizing it from `n`
     // (rather than a fixed [f64; 64]) is what keeps n > 64 correct.
     let (w, v) = scratch.split_at_mut(n);
     w.fill(0.0);
+    // A leaf's sources each carry mass 1: the weight w_j is the number of
+    // sources whose j-th Lagrange basis contributes.
     for &x in &tree.sorted[lo_idx..hi_idx] {
-        let mut s = 0.0;
-        let mut hit = usize::MAX;
-        for (j, vj) in v.iter_mut().enumerate().take(n) {
-            let d = x - t[j];
-            if d == 0.0 {
-                hit = j;
-                break;
-            }
-            let q = lam[j] / d;
-            *vj = q;
-            s += q;
-        }
-        if hit != usize::MAX {
-            w[hit] += 1.0;
-            continue;
-        }
-        let inv_s = 1.0 / s;
-        for (wj, &vj) in w.iter_mut().zip(v.iter()).take(n) {
-            *wj += vj * inv_s;
-        }
+        barycentric_row(x, t, lam, w, v, 1.0);
     }
     tree.w[base..base + n].copy_from_slice(w);
+}
+
+/// One barycentric row update: accumulate the Lagrange basis at `x` into `w`,
+/// scaled by `mass`.
+///
+/// `t[j]` are the panel's Chebyshev nodes, `lam[j]` the shared barycentric
+/// weights, `v` a caller-owned `n`-sized scratch (no allocation here). The
+/// two callers differ only in `mass`: a leaf passes `1.0` for every source it
+/// owns ([`fill_weights`]), a parent passes each child's weight `w_t`
+/// ([`merge_weights`]).
+///
+/// Division-hoisted: `v_j = λ_j/(x-t_j)` is computed once (n divisions),
+/// `s = Σ v_j` normalizes, and the update is `w_j += mass·v_j·(1/s)` — one
+/// extra division per POINT instead of one per (point, node). If `x` hits a
+/// node exactly, the whole mass goes to that single basis. With `mass = 1.0`
+/// this is bit-identical to the inlined form it replaces (`1.0 * v_j == v_j`).
+#[inline(always)]
+fn barycentric_row(x: f64, t: &[f64], lam: &[f64], w: &mut [f64], v: &mut [f64], mass: f64) {
+    let n = t.len();
+    debug_assert_eq!(lam.len(), n);
+    debug_assert!(w.len() >= n && v.len() >= n);
+
+    let mut s = 0.0;
+    let mut hit = usize::MAX;
+    for (j, vj) in v.iter_mut().enumerate().take(n) {
+        let d = x - t[j];
+        if d == 0.0 {
+            hit = j;
+            break;
+        }
+        let q = lam[j] / d;
+        *vj = q;
+        s += q;
+    }
+    if hit != usize::MAX {
+        w[hit] += mass;
+        return;
+    }
+    let inv_s = 1.0 / s;
+    for (wj, &vj) in w.iter_mut().zip(v.iter()).take(n) {
+        *wj += mass * vj * inv_s;
+    }
 }
 
 fn build_cheb(
@@ -280,26 +300,7 @@ fn merge_weights(
             if m == 0.0 {
                 continue;
             }
-            let mut s = 0.0;
-            let mut hit = usize::MAX;
-            for (j, vj) in v.iter_mut().enumerate().take(n) {
-                let d = x - t[j];
-                if d == 0.0 {
-                    hit = j;
-                    break;
-                }
-                let q = lam[j] / d;
-                *vj = q;
-                s += q;
-            }
-            if hit != usize::MAX {
-                w[hit] += m;
-                continue;
-            }
-            let inv_s = 1.0 / s;
-            for (wj, &vj) in w.iter_mut().zip(v.iter()).take(n) {
-                *wj += m * vj * inv_s;
-            }
+            barycentric_row(x, t, lam, w, v, m);
         }
     }
     tree.w[base_p..base_p + n].copy_from_slice(w);
