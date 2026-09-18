@@ -69,16 +69,13 @@ impl<'a, 'py> FromPyObject<'a, 'py> for FloatOrVec {
 
     fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         if let Ok(v) = ob.extract::<f64>() {
-            return Ok(FloatOrVec::Scalar(v));
+            return Ok(FloatOrVec::Scalar(checked_lambda_hat(v)?));
         }
         let vec: Vec<f64> = ob
             .extract::<Vec<f64>>()
             .map_err(|_| PyValueError::new_err("expected a float or a 1-D array of floats"))?;
-        require_finite(&vec, "lambda_hat")?;
-        if vec.iter().any(|&v| v <= 0.0) {
-            return Err(PyValueError::new_err(
-                "lambda_hat must be positive (sample spikes cannot be ≤ 0)",
-            ));
+        for &v in &vec {
+            checked_lambda_hat(v)?;
         }
         Ok(FloatOrVec::Vector(vec))
     }
@@ -145,6 +142,41 @@ fn require_finite(eigenvalues: &[f64], what: &str) -> PyResult<()> {
     Ok(())
 }
 
+/// Require a strictly positive, finite scalar and return it unchanged.
+///
+/// Single definition point for the `"<what> must be a positive finite
+/// number"` contract shared by `eta`, `cutoff`, `margin` and `sigma2`.
+fn require_positive_finite(value: f64, what: &str) -> PyResult<f64> {
+    if !(value.is_finite() && value > 0.0) {
+        return Err(PyValueError::new_err(format!(
+            "{what} must be a positive finite number, got {value}"
+        )));
+    }
+    Ok(value)
+}
+
+/// A sample spike must be finite and strictly positive — the scalar and the
+/// array branch of [`FloatOrVec`] enforce the same contract.
+fn checked_lambda_hat(x: f64) -> PyResult<f64> {
+    if !x.is_finite() {
+        return Err(PyValueError::new_err(
+            "lambda_hat must be finite (found NaN or infinity)",
+        ));
+    }
+    if x <= 0.0 {
+        return Err(PyValueError::new_err(
+            "lambda_hat must be positive (sample spikes cannot be ≤ 0)",
+        ));
+    }
+    Ok(x)
+}
+
+/// Sort an already-validated (finite) spectrum ascending.
+fn sorted_ascending(mut values: Vec<f64>) -> Vec<f64> {
+    values.sort_by(|a, b| a.partial_cmp(b).expect("validated finite"));
+    values
+}
+
 /// Copy a 1-D read-only array into an owned `Vec<f64>`, rejecting
 /// non-contiguous inputs (the kernels operate on flat slices).
 fn owned_f64_vec(array: PyReadonlyArray1<'_, f64>, what: &str) -> PyResult<Vec<f64>> {
@@ -154,32 +186,46 @@ fn owned_f64_vec(array: PyReadonlyArray1<'_, f64>, what: &str) -> PyResult<Vec<f
         .map_err(|_| PyValueError::new_err(format!("{what} must be contiguous")))
 }
 
+/// The shared prologue of every entry point taking a covariance spectrum:
+/// copy, clamp tiny negative round-off, and require `0 < c <= 1`.
+fn owned_positive_spectrum(array: PyReadonlyArray1<'_, f64>, c: f64) -> PyResult<Vec<f64>> {
+    let mut ev = owned_f64_vec(array, "eigenvalues")?;
+    sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
+    require_concentration(c)?;
+    Ok(ev)
+}
+
+/// The shared prologue of the `stieltjes_transform*` entry points: copy a
+/// finite, non-empty spectrum and resolve its `eta`.
+fn owned_spectrum_and_eta(
+    array: PyReadonlyArray1<'_, f64>,
+    eta: InferredF64,
+) -> PyResult<(Vec<f64>, f64)> {
+    let ev = owned_f64_vec(array, "eigenvalues")?;
+    require_finite(&ev, "eigenvalues")?;
+    if ev.is_empty() {
+        return Err(PyValueError::new_err("eigenvalues must be non-empty"));
+    }
+    let eta = validated_eta(eta, ev.len())?;
+    Ok((ev, eta))
+}
+
 /// Resolve the `eta` argument: explicit float, or the crate-wide default
 /// η = 0.1/√p for the sentinel `"inferred"`. Validates positivity.
 fn validated_eta(eta: InferredF64, p: usize) -> PyResult<f64> {
     let v = eta
         .value()
         .unwrap_or_else(|| crate::stieltjes::default_eta(p));
-    if !(v.is_finite() && v > 0.0) {
-        return Err(PyValueError::new_err(format!(
-            "eta must be a positive finite number, got {v}"
-        )));
-    }
-    Ok(v)
+    require_positive_finite(v, "eta")
 }
 
 /// Build the cutoff configuration from the Python-facing optional ratio,
 /// validating positivity when enabled.
 fn validated_cutoff(cutoff: InferredF64) -> PyResult<CutoffConfig> {
     Ok(match cutoff.value() {
-        Some(ratio) => {
-            if !(ratio.is_finite() && ratio > 0.0) {
-                return Err(PyValueError::new_err(format!(
-                    "cutoff ratio must be a positive finite number, got {ratio}"
-                )));
-            }
-            CutoffConfig::Enabled { ratio }
-        }
+        Some(ratio) => CutoffConfig::Enabled {
+            ratio: require_positive_finite(ratio, "cutoff ratio")?,
+        },
         None => CutoffConfig::Disabled,
     })
 }
@@ -236,7 +282,6 @@ fn parse_method(method: &str) -> PyResult<StieltjesMethod> {
         "chebcode" | "chebyshev" => StieltjesMethod::ChebCode,
         "chebcode_fast" | "chebf" => StieltjesMethod::ChebCodeFast,
         "chebcode_xtreme" | "chebx" => StieltjesMethod::ChebCodeXtreme,
-        "chebcode_balanced" | "chebb" => StieltjesMethod::ChebCodeBalanced,
         "chebcode_balanced" | "chebb" => StieltjesMethod::ChebCodeBalanced,
         "ewald" => StieltjesMethod::Ewald,
         "dst" => StieltjesMethod::Dst,
@@ -333,25 +378,27 @@ fn deconvolve_spiked_py<'py>(
     parallel: Option<bool>,
     cutoff: InferredF64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    sanitize_positive_spectrum(&mut ev_vec, "eigenvalues")?;
-    require_concentration(c)?;
+    let ev_vec = owned_positive_spectrum(eigenvalues, c)?;
     if n_points == 0 {
         return Err(PyValueError::new_err("n_points must be >= 1"));
     }
 
-    // Validate margin early (BEMA multiplies the fitted edge by max(1, m)).
-    if !margin.is_finite() || margin <= 0.0 {
-        return Err(PyValueError::new_err(format!(
-            "margin must be a positive finite number, got {margin}"
-        )));
-    }
+    // BEMA multiplies the fitted edge by max(1, m); reject nonsense early.
+    require_positive_finite(margin, "margin")?;
+
+    // Validate an EXPLICIT η here (consistently with the other Stieltjes entry
+    // points) but pass the sentinel through: the downstream default is
+    // η = 0.1/√p_bulk, i.e. computed after the spikes are removed, which is
+    // not the same as 0.1/√p for a spiked spectrum.
+    let eta_val = match eta.value() {
+        Some(v) => Some(require_positive_finite(v, "eta")?),
+        None => None,
+    };
 
     let config = config_from_kwargs(c, method, parallel, cutoff)?;
 
     // Heavy computation runs without the GIL.
-    let result =
-        py.detach(|| deconvolve_spiked(&ev_vec, c, n_points, eta.value(), margin, &config));
+    let result = py.detach(|| deconvolve_spiked(&ev_vec, c, n_points, eta_val, margin, &config));
 
     let dict = pyo3::types::PyDict::new(py);
     dict.set_item("k", result.k)?;
@@ -415,9 +462,7 @@ fn direct_precision_shrinkage_py<'py>(
     eigenvalues: PyReadonlyArray1<'py, f64>,
     c: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    sanitize_positive_spectrum(&mut ev_vec, "eigenvalues")?;
-    require_concentration(c)?;
+    let ev_vec = owned_positive_spectrum(eigenvalues, c)?;
 
     let config = RmtConfig::new(c);
     let result = py.detach(|| direct_precision_shrinkage(&ev_vec, &config));
@@ -466,6 +511,18 @@ fn clean_correlation_matrix_py<'py>(
             ));
         }
     }
+    // `symmetric_eigh` reads and updates both triangles, so a non-symmetric
+    // input would silently produce a wrong eigensystem.
+    let tol = 1e-12 * corr.iter().fold(1.0_f64, |acc, &v| acc.max(v.abs()));
+    for i in 0..rows {
+        for j in (i + 1)..rows {
+            if (corr[[i, j]] - corr[[j, i]]).abs() > tol {
+                return Err(PyValueError::new_err(
+                    "correlation matrix must be symmetric",
+                ));
+            }
+        }
+    }
     require_concentration(c)?;
 
     let config = RmtConfig::new(c);
@@ -507,13 +564,7 @@ fn stieltjes_transform_with_deriv_py<'py>(
     eigenvalues: PyReadonlyArray1<'py, f64>,
     eta: InferredF64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    require_finite(&ev_vec, "eigenvalues")?;
-    let p = ev_vec.len();
-    if p == 0 {
-        return Err(PyValueError::new_err("eigenvalues must be non-empty"));
-    }
-    let eta_val = validated_eta(eta, p)?;
+    let (ev_vec, eta_val) = owned_spectrum_and_eta(eigenvalues, eta)?;
     let (vals, derivs) =
         py.detach(|| crate::stieltjes::compute_all_stieltjes_with_deriv(&ev_vec, eta_val));
     let dict = pyo3::types::PyDict::new(py);
@@ -543,13 +594,7 @@ fn stieltjes_transform_py<'py>(
     cutoff: InferredF64,
     parallel: Option<bool>,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let ev_vec = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    require_finite(&ev_vec, "eigenvalues")?;
-    let p = ev_vec.len();
-    if p == 0 {
-        return Err(PyValueError::new_err("eigenvalues must be non-empty"));
-    }
-    let eta_val = validated_eta(eta, p)?;
+    let (ev_vec, eta_val) = owned_spectrum_and_eta(eigenvalues, eta)?;
 
     let st_method = parse_method(method)?;
     let par = parse_parallel(parallel);
@@ -613,10 +658,8 @@ fn detect_spikes_bema_py<'py>(
     c: f64,
     margin: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
-    require_concentration(c)?;
-    ev.sort_by(|a, b| a.partial_cmp(b).expect("validated finite"));
+    let ev = sorted_ascending(owned_positive_spectrum(eigenvalues, c)?);
+    require_positive_finite(margin, "margin")?;
 
     let det = py.detach(|| spiked::detect_spikes_bema(&ev, c, margin));
 
@@ -652,9 +695,7 @@ fn detect_spikes_tracy_widom_py<'py>(
     sigma2: InferredF64,
     significance: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
-    require_concentration(c)?;
+    let ev = sorted_ascending(owned_positive_spectrum(eigenvalues, c)?);
     let sigma2 = sigma2.value();
     if !(significance.is_finite() && significance > 0.0 && significance < 1.0) {
         return Err(PyValueError::new_err(format!(
@@ -662,13 +703,8 @@ fn detect_spikes_tracy_widom_py<'py>(
         )));
     }
     if let Some(s2) = sigma2 {
-        if !(s2.is_finite() && s2 > 0.0) {
-            return Err(PyValueError::new_err(format!(
-                "sigma2 must be a positive finite number, got {s2}"
-            )));
-        }
+        require_positive_finite(s2, "sigma2")?;
     }
-    ev.sort_by(|a, b| a.partial_cmp(b).expect("validated finite"));
 
     let det = py.detach(|| spiked::detect_spikes_tracy_widom(&ev, c, sigma2, significance));
 
@@ -689,11 +725,7 @@ fn detect_spikes_tracy_widom_py<'py>(
 #[pyo3(name = "inverse_bbp", signature = (lambda_hat, c, sigma2 = 1.0))]
 fn inverse_bbp_py(lambda_hat: FloatOrVec, c: f64, sigma2: f64) -> PyResult<Py<PyAny>> {
     require_concentration(c)?;
-    if !(sigma2.is_finite() && sigma2 > 0.0) {
-        return Err(PyValueError::new_err(format!(
-            "sigma2 must be a positive finite number, got {sigma2}"
-        )));
-    }
+    require_positive_finite(sigma2, "sigma2")?;
     Ok(lambda_hat.map(|x| spiked::inverse_bbp(x, c, sigma2)))
 }
 
@@ -712,9 +744,8 @@ fn analyze_spikes_py<'py>(
     c: f64,
     margin: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
-    require_concentration(c)?;
+    let ev = owned_positive_spectrum(eigenvalues, c)?;
+    require_positive_finite(margin, "margin")?;
 
     let config = RmtConfig::new(c);
     let res = py.detach(|| spiked::analyze_spikes(&ev, c, &config, margin));
@@ -750,9 +781,8 @@ fn estimate_population_eigenvalues_py<'py>(
     c: f64,
     margin: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
-    require_concentration(c)?;
+    let ev = owned_positive_spectrum(eigenvalues, c)?;
+    require_positive_finite(margin, "margin")?;
 
     let config = RmtConfig::new(c);
     let res = py.detach(|| estimate_population_eigenvalues(&ev, c, margin, &config));
@@ -778,9 +808,7 @@ fn ledoit_wolf_shrinkage_py<'py>(
     eigenvalues: PyReadonlyArray1<'py, f64>,
     c: f64,
 ) -> PyResult<Py<PyAny>> {
-    let mut ev = owned_f64_vec(eigenvalues, "eigenvalues")?;
-    sanitize_positive_spectrum(&mut ev, "eigenvalues")?;
-    require_concentration(c)?;
+    let ev = owned_positive_spectrum(eigenvalues, c)?;
 
     let config = RmtConfig::new(c);
     let result = py.detach(|| spiked::ledoit_wolf_shrinkage(&ev, &config));

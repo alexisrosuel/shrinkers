@@ -237,13 +237,68 @@ class TestStieltjesTransform:
             rk.stieltjes_transform(sample_spectrum(50), eta=-0.1)
 
     def test_bad_parallel_type_raises(self):
-        with pytest.raises(Exception):
+        # `parallel` is Option<bool> at the boundary, so a string is a
+        # TypeError from the argument parser (not a ValueError).
+        with pytest.raises(TypeError):
             rk.stieltjes_transform(sample_spectrum(50), parallel="yes")
 
     def test_non_contiguous_raises(self):
         evals = sample_spectrum(20)[::2]  # strided view
         with pytest.raises(ValueError, match="contiguous"):
             rk.stieltjes_transform(evals)
+
+
+# ──────────────────────────────────────────────
+#  Boundary validation
+# ──────────────────────────────────────────────
+
+class TestBoundaryValidation:
+    """Every entry point enforces the same input contract."""
+
+    @pytest.mark.parametrize("bad", [0.0, -0.1, float("nan"), float("inf")])
+    def test_deconvolve_spiked_rejects_bad_eta(self, bad):
+        with pytest.raises(ValueError, match="eta"):
+            rk.deconvolve_spiked(spiked_spectrum(), c=0.25, eta=bad)
+
+    def test_inferred_eta_is_the_bulk_default(self):
+        # The sentinel must resolve on the BULK length (spikes removed), not
+        # on the full spectrum: passing the sentinel and an explicit None must
+        # agree, and both must differ from an eta pinned to 0.1/sqrt(p_full).
+        ev = spiked_spectrum()
+        sentinel = rk.deconvolve_spiked(ev, c=0.25, n_points=40, eta="inferred")
+        none = rk.deconvolve_spiked(ev, c=0.25, n_points=40, eta=None)
+        np.testing.assert_array_equal(sentinel["bulk"]["density"], none["bulk"]["density"])
+
+    @pytest.mark.parametrize("margin", [0.0, -1.0, float("nan")])
+    def test_margin_rejected_everywhere(self, margin):
+        ev = spiked_spectrum()
+        with pytest.raises(ValueError, match="margin"):
+            rk.detect_spikes_bema(ev, c=0.25, margin=margin)
+        with pytest.raises(ValueError, match="margin"):
+            rk.analyze_spikes(ev, c=0.25, margin=margin)
+        with pytest.raises(ValueError, match="margin"):
+            rk.estimate_population_eigenvalues(ev, c=0.25, margin=margin)
+        with pytest.raises(ValueError, match="margin"):
+            rk.deconvolve_spiked(ev, c=0.25, n_points=20, margin=margin)
+
+    def test_inverse_bbp_validates_scalars_too(self):
+        # The scalar branch used to bypass the finiteness/positivity checks
+        # that the array branch enforced.
+        with pytest.raises(ValueError, match="lambda_hat"):
+            rk.inverse_bbp(-1.0, c=0.25)
+        with pytest.raises(ValueError, match="lambda_hat"):
+            rk.inverse_bbp(float("nan"), c=0.25)
+
+    def test_tracy_widom_rejects_bad_sigma2(self):
+        with pytest.raises(ValueError, match="sigma2"):
+            rk.detect_spikes_tracy_widom(spiked_spectrum(), c=0.25, sigma2=-1.0)
+
+    def test_clean_correlation_rejects_asymmetric(self):
+        asym = np.array([[1.0, 0.5], [0.1, 1.0]])
+        with pytest.raises(ValueError, match="symmetric"):
+            rk.clean_correlation_matrix(asym, c=0.25)
+        sym = np.array([[1.0, 0.5], [0.5, 1.0]])
+        assert rk.clean_correlation_matrix(sym, c=0.25)["covariance"].shape == (2, 2)
 
 
 # ──────────────────────────────────────────────
