@@ -45,6 +45,35 @@
 use super::simd::F64x2;
 use rayon::prelude::*;
 
+/// Chunk size for parallel query evaluation.
+///
+/// 256-query blocks: measured plateau between 64..1024 at p=50k on M1 Max;
+/// large enough to amortize scheduling, small enough for load balance across
+/// heterogeneous P/E cores. Each task reuses one traversal stack across the
+/// block, and adjacent (sorted) values traverse nearly identical paths, so
+/// per-task cache warmth is high.
+const EVAL_CHUNK: usize = 256;
+
+/// Evaluate one tree at many query points, in parallel chunks.
+///
+/// Shared by `compute_all_stieltjes_chebcode_impl` and
+/// [`ChebCodeBatch::evaluate_points`]; the output order matches `points`.
+fn eval_points_parallel(tree: &FlatChebTree, points: &[f64], eta: f64) -> Vec<(f64, f64)> {
+    let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
+    points
+        .par_chunks(EVAL_CHUNK)
+        .map(|chunk| {
+            let mut stack = Vec::with_capacity(64);
+            let mut out = Vec::with_capacity(chunk.len());
+            for &x in chunk {
+                out.push(tree.contribution(x, eta, &mut stack));
+            }
+            out
+        })
+        .collect_into_vec(&mut parts);
+    parts.into_iter().flatten().collect()
+}
+
 /// Flat, structure-of-arrays Chebyshev tree.
 ///
 /// Node `i` has bounds `[lo[i], hi[i]]`, eigenvalue index range
@@ -132,10 +161,11 @@ fn fill_weights(
     // `w_j += v_j·(1/s)` — one extra division per POINT instead of one per
     // (point, node). Numerically identical up to ≤1 ulp.
     let t = &tree.nodes[base..base + n];
-    let w = &mut scratch[..n];
+    // `scratch` is 2n long: the first half accumulates the weights, the
+    // second is the per-point barycentric scratch `v`. Sizing it from `n`
+    // (rather than a fixed [f64; 64]) is what keeps n > 64 correct.
+    let (w, v) = scratch.split_at_mut(n);
     w.fill(0.0);
-    let mut v = [0.0f64; 64];
-    debug_assert!(tree.n <= v.len());
     for &x in &tree.sorted[lo_idx..hi_idx] {
         let mut s = 0.0;
         let mut hit = usize::MAX;
@@ -236,9 +266,9 @@ fn merge_weights(
         }
     }
     let t = &tree.nodes[base_p..base_p + n];
-    let w = &mut scratch[..n];
+    // Same 2n scratch split as `fill_weights` (n-sized, so any n is correct).
+    let (w, v) = scratch.split_at_mut(n);
     w.fill(0.0);
-    let mut v = [0.0f64; 64];
 
     let l_child = tree.left[idx] as usize;
     let r_child = tree.right[idx] as usize;
@@ -296,9 +326,11 @@ impl FlatChebTree {
         };
         // Shared per-build data: Chebyshev nodes on [-1,1] (the per-node
         // positions are affine rescalings) and one scratch buffer reused by
-        // every fill_weights call — no per-node allocations.
+        // every fill_weights/merge_weights call — no per-node allocations.
+        // `2 * n`: n weights + n barycentric terms.
+        assert!(n >= 2, "ChebCode needs at least 2 Chebyshev nodes, got {n}");
         let sm1 = cheb_nodes_m1(n);
-        let mut scratch = vec![0.0; n];
+        let mut scratch = vec![0.0; 2 * n];
         build_cheb(
             &mut tree,
             &sm1,
@@ -640,31 +672,7 @@ pub fn compute_all_stieltjes_chebcode_impl(
     let tree = FlatChebTree::build(sorted, n, theta, leaf_cap);
 
     if parallel {
-        // Chunked queries: each task reuses one stack buffer across a block
-        // of consecutive queries (adjacent sorted values traverse nearly
-        // identical paths, so per-task cache warmth is high) and avoids
-        // rayon's per-item scheduling overhead.
-        // 256-query blocks: measured plateau between 64..1024 at p=50k on
-        // M1 Max; large enough to amortize scheduling, small enough for
-        // load balance across heterogeneous P/E cores.
-        let chunk = 256usize;
-        let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
-        eigenvalues
-            .par_chunks(chunk)
-            .map(|chunk| {
-                let mut stack = Vec::with_capacity(64);
-                let mut out = Vec::with_capacity(chunk.len());
-                for &lambda_i in chunk {
-                    out.push(tree.contribution(lambda_i, eta, &mut stack));
-                }
-                out
-            })
-            .collect_into_vec(&mut parts);
-        let mut flat: Vec<(f64, f64)> = Vec::with_capacity(p);
-        for part in parts {
-            flat.extend(part);
-        }
-        flat
+        eval_points_parallel(&tree, eigenvalues, eta)
     } else {
         let mut stack = Vec::with_capacity(64);
         let mut result = Vec::with_capacity(p);
@@ -687,7 +695,7 @@ pub fn chebcode_tree_for_bench(eigenvalues: &[f64], preset: ChebPreset) -> ChebC
 ///
 /// The Chebyshev tree depends only on the sorted spectrum, the interpolation
 /// order and the opening angle — not on η — so one build serves any number
-/// of evaluations. Beyond skipping repeated builds, [`Self::evaluate_par`]
+/// of evaluations. Beyond skipping repeated builds, [`Self::evaluate_many`]
 /// parallelizes ACROSS the η values with the tree shared read-only, which is
 /// the dominant win when a RIE workflow sweeps many γ (each γ fixes one η).
 pub struct ChebCodeBatch {
@@ -744,24 +752,7 @@ impl ChebCodeBatch {
                 .map(|&x| self.tree.contribution(x, eta, &mut stack))
                 .collect();
         }
-        use rayon::prelude::*;
-        let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
-        points
-            .par_chunks(256)
-            .map(|chunk| {
-                let mut stack = Vec::with_capacity(64);
-                let mut out = Vec::with_capacity(chunk.len());
-                for &x in chunk {
-                    out.push(self.tree.contribution(x, eta, &mut stack));
-                }
-                out
-            })
-            .collect_into_vec(&mut parts);
-        let mut flat: Vec<(f64, f64)> = Vec::with_capacity(points.len());
-        for part in parts {
-            flat.extend(part);
-        }
-        flat
+        eval_points_parallel(&self.tree, points, eta)
     }
 
     /// Evaluate all sums for one η.
@@ -895,6 +886,28 @@ mod tests {
             }
             assert!(max_r < 1e-2, "p={p} real err too large: {max_r}");
             assert!(max_i < 1e-2, "p={p} imag err too large: {max_i}");
+        }
+    }
+
+    #[test]
+    fn chebcode_supports_node_count_above_legacy_scratch() {
+        // Regression: the barycentric scratch used to be a fixed [f64; 64]
+        // guarded only by a debug_assert, so n > 64 silently summed just the
+        // first 64 Chebyshev nodes in release builds.
+        let p = 500;
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
+        let eta = 0.1 / (p as f64).sqrt();
+        let exact = crate::stieltjes::testutil::exact_stieltjes(&evals, eta);
+
+        for n in [64usize, 65, 96] {
+            let got = compute_all_stieltjes_chebcode_impl(&evals, eta, 0.5, n, 32, false);
+            let (mut num, mut den) = (0.0f64, 0.0f64);
+            for i in 0..p {
+                num += (got[i].0 - exact[i].0).powi(2) + (got[i].1 - exact[i].1).powi(2);
+                den += exact[i].0.powi(2) + exact[i].1.powi(2);
+            }
+            let rel = (num / den).sqrt();
+            assert!(rel < 1e-6, "n={n} rel-L2 {rel:.3e}");
         }
     }
 
