@@ -6,68 +6,13 @@
 //! "after" (working tree) states.
 //!
 //! Usage: cargo run --release --example measure_pareto_frontier -- after|before
+
+#[path = "../benches/support/mod.rs"]
+mod support;
+
 use shrinkers::config::{CutoffConfig, Parallelism, StieltjesMethod};
 use shrinkers::stieltjes;
-use std::time::Instant;
-
-struct Lcg(u64);
-impl Iterator for Lcg {
-    type Item = f64;
-    fn next(&mut self) -> Option<f64> {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        Some((self.0 >> 11) as f64 / (1u64 << 53) as f64)
-    }
-}
-
-/// MP-like spectrum (c=0.5 bulk + two spikes) — representative deconv input.
-fn spectrum(p: usize) -> Vec<f64> {
-    let c: f64 = 0.5;
-    let lo = (1.0 - c.sqrt()).powi(2);
-    let hi = (1.0 + c.sqrt()).powi(2);
-    let mut v: Vec<f64> = Lcg(42)
-        .take(p.saturating_sub(2))
-        .map(|x| lo + x * (hi - lo))
-        .collect();
-    while v.len() < p - 2 {
-        v.push(lo + Lcg(7).next().unwrap() * (hi - lo));
-    }
-    v.truncate(p - 2);
-    v.push(hi * 2.3);
-    v.push(lo * 0.35);
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v
-}
-
-fn median(xs: &mut [f64]) -> f64 {
-    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    xs[xs.len() / 2]
-}
-
-fn bench<F: FnMut()>(mut f: F) -> f64 {
-    f(); // warmup + correctness of closure
-    let probe = {
-        let st = Instant::now();
-        f();
-        st.elapsed().as_secs_f64() * 1e3
-    };
-    let reps = if probe < 2.0 {
-        15
-    } else if probe < 20.0 {
-        7
-    } else {
-        3
-    };
-    let mut ts = Vec::with_capacity(reps);
-    for _ in 0..reps {
-        let st = Instant::now();
-        f();
-        ts.push(st.elapsed().as_secs_f64() * 1e3);
-    }
-    median(&mut ts)
-}
+use support::{bench_ms, harness_spectrum, rel_l2, rel_l2_scaled};
 
 const P_SIZES: &[usize] = &[1000, 2000, 5000, 10000, 20000, 50000];
 
@@ -128,7 +73,7 @@ fn main() {
 
     let mut first = true;
     for &p in P_SIZES {
-        let evs = spectrum(p);
+        let evs = harness_spectrum(p);
         // Benchmark convention (NOT the library default 0.1/sqrt(p)) — see
         // the Conventions list in src/stieltjes/mod.rs before changing.
         let eta = 1.0 / (p as f64).sqrt();
@@ -149,7 +94,7 @@ fn main() {
         let mut extra_rows: Vec<ExtraRow> = Vec::new();
         for &(par_name, par) in &[("seq", false), ("parallel", true)] {
             let mut res = Vec::new();
-            let ms = bench(|| {
+            let ms = bench_ms(|| {
                 res = stieltjes::compute_all_stieltjes_hodlr_impl(
                     &evs,
                     eta,
@@ -169,17 +114,11 @@ fn main() {
                 ("parallel", Parallelism::Parallel),
             ] {
                 let mut res = Vec::new();
-                let ms = bench(|| {
+                let ms = bench_ms(|| {
                     res =
                         stieltjes::compute_all_stieltjes(&evs, eta, method, None, cutoff, 32, par);
                 });
-                let num: f64 = res
-                    .iter()
-                    .zip(refr.iter())
-                    .map(|((gr, gi), (rr, ri))| (gr - rr).powi(2) + (gi - ri).powi(2))
-                    .sum();
-                let den: f64 = refr.iter().map(|(rr, ri)| rr * rr + ri * ri).sum();
-                let err = (num / den).sqrt();
+                let err = rel_l2(&res, &refr);
                 eprintln!("  done {} {} p={}", name, par_name, p);
                 let comma = if first { "" } else { "," };
                 first = false;
@@ -192,15 +131,7 @@ fn main() {
 
         for (par_name, ms_rand, res) in extra_rows {
             // The raw-sum impl skips the dispatcher's 1/p scaling.
-            let inv_p = 1.0 / p as f64;
-            let scaled: Vec<(f64, f64)> = res.iter().map(|(a, b)| (a * inv_p, b * inv_p)).collect();
-            let num: f64 = scaled
-                .iter()
-                .zip(refr.iter())
-                .map(|((gr, gi), (rr, ri))| (gr - rr).powi(2) + (gi - ri).powi(2))
-                .sum();
-            let den: f64 = refr.iter().map(|(rr, ri)| rr * rr + ri * ri).sum();
-            let err = (num / den).sqrt();
+            let err = rel_l2_scaled(&res, &refr, p);
             eprintln!("  done hodlr_rand {} p={}", par_name, p);
             let comma = if first { "" } else { "," };
             first = false;

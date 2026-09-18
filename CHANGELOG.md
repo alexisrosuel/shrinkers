@@ -141,7 +141,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   broken by runtime) instead of a hard-coded threshold. **Both presets no
   longer override the user's parallelism choice** — Sequential and Rayon
   have independent table columns. Regenerate after re-benchmarking with
-  `cargo run --release --example pareto_data -- after > docs/pareto/bench_after.json`
+  `cargo run --release --example measure_pareto_frontier -- after > docs/pareto/bench_after.json`
   then `python3 scripts/build_pareto_table.py docs/pareto/bench_after.json`.
 - **Pareto-frontier plots**: `scripts/plot_pareto.py` renders before/after
   frontiers (`docs/pareto/pareto_{seq,rayon}.png`) from two JSON dumps.

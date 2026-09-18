@@ -3,7 +3,7 @@
 //! padding. Dumps JSON lines on stdout for `scripts/analyze_order_sweep.py`.
 //!
 //! Usage:
-//!   cargo run --release --example order_sweep > docs/pareto/order_sweep.jsonl
+//!   cargo run --release --example measure_fft_order_sweep > docs/pareto/order_sweep.jsonl
 //!
 //! Two experiments, both against the exact O(p²) sequential reference:
 //!   A. "grid"  — error & runtime vs forced grid size m, one series per
@@ -13,79 +13,12 @@
 //!                (pad = pad_mult·η) at a grid large enough that the
 //!                transfer error is negligible (reveals how the periodization
 //!                floor scales with the image-pole distance).
+#[path = "../benches/support/mod.rs"]
+mod support;
+
 use shrinkers::config::{CutoffConfig, Parallelism, StieltjesMethod};
 use shrinkers::stieltjes::fft5::{Fft5Options, Order};
-use std::time::Instant;
-
-struct Lcg(u64);
-impl Iterator for Lcg {
-    type Item = f64;
-    fn next(&mut self) -> Option<f64> {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        Some((self.0 >> 11) as f64 / (1u64 << 53) as f64)
-    }
-}
-
-/// MP-like spectrum (c=0.5 bulk + two spikes) — same recipe as measure_pareto_frontier.
-fn spectrum(p: usize) -> Vec<f64> {
-    let c: f64 = 0.5;
-    let lo = (1.0 - c.sqrt()).powi(2);
-    let hi = (1.0 + c.sqrt()).powi(2);
-    let mut v: Vec<f64> = Lcg(42)
-        .take(p.saturating_sub(2))
-        .map(|x| lo + x * (hi - lo))
-        .collect();
-    while v.len() < p - 2 {
-        v.push(lo + Lcg(7).next().unwrap() * (hi - lo));
-    }
-    v.truncate(p - 2);
-    v.push(hi * 2.3);
-    v.push(lo * 0.35);
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v
-}
-
-fn median(xs: &mut [f64]) -> f64 {
-    xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    xs[xs.len() / 2]
-}
-
-fn bench<F: FnMut()>(mut f: F) -> f64 {
-    f(); // warmup
-    let probe = {
-        let st = Instant::now();
-        f();
-        st.elapsed().as_secs_f64() * 1e3
-    };
-    let reps = if probe < 2.0 {
-        15
-    } else if probe < 20.0 {
-        7
-    } else {
-        3
-    };
-    let mut ts = Vec::with_capacity(reps);
-    for _ in 0..reps {
-        let st = Instant::now();
-        f();
-        ts.push(st.elapsed().as_secs_f64() * 1e3);
-    }
-    median(&mut ts)
-}
-
-fn rel_l2(res: &[(f64, f64)], refr: &[(f64, f64)], p: f64) -> f64 {
-    // fft5 returns raw sums; the exact reference is averaged over p.
-    let num: f64 = res
-        .iter()
-        .zip(refr.iter())
-        .map(|((gr, gi), (rr, ri))| (gr / p - rr).powi(2) + (gi / p - ri).powi(2))
-        .sum();
-    let den: f64 = refr.iter().map(|(rr, ri)| rr * rr + ri * ri).sum();
-    (num / den).sqrt()
-}
+use support::{bench_ms, harness_spectrum, rel_l2_scaled};
 
 const ORDER_NAMES: &[(&str, Order)] = &[
     ("linear", Order::Linear),
@@ -105,7 +38,7 @@ const PAD_MULTS: &[f64] = &[250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
 fn main() {
     eprintln!("# experiment A: grid sweep");
     for &p in &[1000usize, 5000, 20000] {
-        let evs = spectrum(p);
+        let evs = harness_spectrum(p);
         let eta = 1.0 / (p as f64).sqrt();
 
         // Exact reference (sequential tiled kernel).
@@ -126,7 +59,7 @@ fn main() {
                 ..Fft5Options::default()
             };
             let mut res = Vec::new();
-            let ms = bench(|| {
+            let ms = bench_ms(|| {
                 res = shrinkers::stieltjes::fft5::compute_all_stieltjes_fft5_with_options(
                     &evs, eta, &opts,
                 )
@@ -136,7 +69,7 @@ fn main() {
                 p,
                 oname,
                 ms,
-                rel_l2(&res, &refr, evs.len() as f64)
+                rel_l2_scaled(&res, &refr, evs.len())
             );
             eprintln!("  done {} auto p={}", oname, p);
 
@@ -150,7 +83,7 @@ fn main() {
                     ..Fft5Options::default()
                 };
                 let mut res = Vec::new();
-                let ms = bench(|| {
+                let ms = bench_ms(|| {
                     res = shrinkers::stieltjes::fft5::compute_all_stieltjes_fft5_with_options(
                         &evs, eta, &opts,
                     )
@@ -161,7 +94,7 @@ fn main() {
                     oname,
                     m,
                     ms,
-                    rel_l2(&res, &refr, evs.len() as f64)
+                    rel_l2_scaled(&res, &refr, evs.len())
                 );
                 eprintln!("  done {} m={} p={}", oname, m, p);
             }
@@ -170,7 +103,7 @@ fn main() {
 
     eprintln!("# experiment B: padding sweep (floor vs image-pole distance)");
     for &p in &[5000usize] {
-        let evs = spectrum(p);
+        let evs = harness_spectrum(p);
         let eta = 1.0 / (p as f64).sqrt();
         let refr = shrinkers::stieltjes::compute_all_stieltjes(
             &evs,
@@ -190,7 +123,7 @@ fn main() {
                     ..Fft5Options::default()
                 };
                 let mut res = Vec::new();
-                let ms = bench(|| {
+                let ms = bench_ms(|| {
                     res = shrinkers::stieltjes::fft5::compute_all_stieltjes_fft5_with_options(
                         &evs, eta, &opts,
                     )
@@ -201,7 +134,7 @@ fn main() {
                     oname,
                     mult,
                     ms,
-                    rel_l2(&res, &refr, evs.len() as f64)
+                    rel_l2_scaled(&res, &refr, evs.len())
                 );
                 eprintln!("  done pad×{} {} p={}", mult, oname, p);
             }

@@ -11,38 +11,14 @@
 //! paying for itself compared to the plain quadratic sum?
 //!
 //! Usage: cargo run --release --example measure_small_p_crossover > docs/pareto/small_p.json
+
+#[path = "../benches/support/mod.rs"]
+mod support;
+
 use shrinkers::config::{CutoffConfig, Parallelism, StieltjesMethod};
 use shrinkers::stieltjes;
 use std::time::Instant;
-
-struct Lcg(u64);
-impl Iterator for Lcg {
-    type Item = f64;
-    fn next(&mut self) -> Option<f64> {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        Some((self.0 >> 11) as f64 / (1u64 << 53) as f64)
-    }
-}
-
-/// Same spectrum shape as `measure_pareto_frontier.rs` (MP c=0.5 bulk + two spikes) but
-/// total-count safe down to p=1, where the spike bookkeeping would underflow.
-fn spectrum(p: usize) -> Vec<f64> {
-    let c: f64 = 0.5;
-    let lo = (1.0 - c.sqrt()).powi(2);
-    let hi = (1.0 + c.sqrt()).powi(2);
-    if p < 3 {
-        return Lcg(42).take(p).map(|x| lo + x * (hi - lo)).collect();
-    }
-    let bulk: Vec<f64> = Lcg(42).take(p - 2).map(|x| lo + x * (hi - lo)).collect();
-    let mut v = bulk;
-    v.push(hi * 2.3);
-    v.push(lo * 0.35);
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v
-}
+use support::{harness_spectrum, median, rel_l2};
 
 /// Per-call time in microseconds, noise-resistant at sub-10us scale:
 /// calibrate an in-batch repetition count so one batch runs ~5 ms, then take
@@ -72,8 +48,7 @@ fn bench_us<F: FnMut()>(mut f: F) -> f64 {
         }
         samples.push(st.elapsed().as_secs_f64() * 1e6 / target as f64);
     }
-    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    samples[samples.len() / 2]
+    median(&mut samples)
 }
 
 const P_SIZES: &[usize] = &[
@@ -140,7 +115,7 @@ fn main() {
 
     let mut first = true;
     for &p in P_SIZES {
-        let evs = spectrum(p);
+        let evs = harness_spectrum(p);
         let eta = 1.0 / (p as f64).sqrt();
 
         let refr = stieltjes::compute_all_stieltjes(
@@ -174,13 +149,7 @@ fn main() {
                 32,
                 parallelism,
             );
-            let num: f64 = res
-                .iter()
-                .zip(refr.iter())
-                .map(|((gr, gi), (rr, ri))| (gr - rr).powi(2) + (gi - ri).powi(2))
-                .sum();
-            let den: f64 = refr.iter().map(|(rr, ri)| rr * rr + ri * ri).sum();
-            let err = (num / den).sqrt();
+            let err = rel_l2(&res, &refr);
             eprintln!("  done {} {} p={}", name, par_name, p);
             let comma = if first { "" } else { "," };
             first = false;

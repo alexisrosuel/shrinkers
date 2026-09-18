@@ -6,25 +6,19 @@
 //! binary's (see the profiling playbook in CHANGELOG).
 //!
 //! Usage: cargo run --release --example profile_hot_loop
+
+#[path = "../benches/support/mod.rs"]
+mod support;
+
 use shrinkers::stieltjes::{ChebPreset, chebcode_tree_for_bench};
+use support::Lcg;
 
-struct Lcg(u64);
-impl Iterator for Lcg {
-    type Item = f64;
-    fn next(&mut self) -> Option<f64> {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        Some((self.0 >> 11) as f64 / (1u64 << 53) as f64)
-    }
-}
-
+/// Pure MP-like bulk (no outliers): stays on the treecode's hot path.
 fn spectrum(p: usize) -> Vec<f64> {
     let c: f64 = 0.5;
     let lo = (1.0 - c.sqrt()).powi(2);
     let hi = (1.0 + c.sqrt()).powi(2);
-    let mut v: Vec<f64> = Lcg(42).take(p).map(|x| lo + x * (hi - lo)).collect();
+    let mut v: Vec<f64> = Lcg::new(42).take(p).map(|x| lo + x * (hi - lo)).collect();
     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
     v
 }
