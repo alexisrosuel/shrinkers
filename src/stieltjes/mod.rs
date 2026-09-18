@@ -824,9 +824,16 @@ mod tests {
     fn test_tiled_parallel_matches_sequential() {
         // The Rayon-tiled kernel (disjoint output chunks) must reproduce the
         // sequential tiled kernel up to FP summation order.
+        //
+        // The p values MUST include sizes that are not a multiple of 4: the
+        // tiled hot body unrolls sources 4 at a time and finishes with a
+        // 1-3 source remainder loop, and that remainder used to index the
+        // global spectrum instead of the chunk-local target window, so the
+        // parallel path was silently wrong for p % 4 != 0. Sizes below
+        // PAR_TILED_MIN_P take the per-row parallel kernel instead.
         use crate::config::CutoffConfig;
 
-        for p in [300, 4000] {
+        for p in [300, 4000, 2001, 2002, 2003, 4001] {
             let mut evals = crate::stieltjes::testutil::log_spectrum(p);
             evals.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
             let eta = 0.1 / (p as f64).sqrt();

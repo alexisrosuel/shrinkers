@@ -1344,7 +1344,9 @@ fn tiled_one_block_cutoff<T: CauchyFloat>(
     while j < p {
         let lambda_j = eigenvalues[j];
         for k in block_start..block_end {
-            let diff = eigenvalues[k] - lambda_j;
+            // `targets`, not `eigenvalues`: the parallel kernel passes a
+            // sub-slice of the spectrum as the target window.
+            let diff = targets[k] - lambda_j;
             if diff.abs() <= cut {
                 let inv_denom = diff.mul_add(diff, eta_sq).recip();
                 out_r[k] = diff.mul_add(inv_denom, out_r[k]);
@@ -1538,7 +1540,9 @@ fn tiled_one_block_no_cutoff<T: CauchyFloat>(
     while j < p {
         let lambda_j = eigenvalues[j];
         for k in block_start..block_end {
-            let diff = eigenvalues[k] - lambda_j;
+            // `targets`, not `eigenvalues`: the parallel kernel passes a
+            // sub-slice of the spectrum as the target window.
+            let diff = targets[k] - lambda_j;
             let inv_denom = diff.mul_add(diff, eta_sq).recip();
             out_r[k] = diff.mul_add(inv_denom, out_r[k]);
             out_i[k] = eta.mul_add(inv_denom, out_i[k]);
