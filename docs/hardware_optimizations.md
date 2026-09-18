@@ -31,7 +31,7 @@ a full complex division:
 One divide per term is the floor; everything around it keeps the two FP
 pipes busy.
 
-### Symmetric sweep: evaluate each pair once (`symmetric.rs`)
+### Symmetric sweep: evaluate each pair once (`cacheblock.rs`)
 
 The kernel's antisymmetry `K(b,a) = −conj(K(a,b))` halves the work:
 rows are produced in pairs, computing the upper triangle and mirroring.
@@ -45,6 +45,18 @@ arrays):
   non-aliasing through iterators over separately-borrowed rows);
 * outputs are written through **SoA sinks** (`col_update` trait), keeping
   real and imaginary planes contiguous for the consumer loops.
+
+Each visited pair accumulates **four** partial sums — `rr`/`ri` for the
+target row and `cr`/`ci` for the mirrored column — so the accumulation
+arithmetic dominates the body. It is written as four explicit `mul_add`
+calls (`rr = d.mul_add(inv, rr)`, `cr = (-d).mul_add(inv, cr)`,
+`ri = eta.mul_add(inv, ri)`, `ci = eta.mul_add(inv, ci)`) rather than as
+`w = d·inv; v = η·inv` plus four separate adds: that is 6 FP ops per pair
+(`FSUB + FFMA + FDIV + 4 FFMA`) instead of 9, and at ~92 % of the FP issue
+rate the saving is the runtime — interleaved before/after **1.15–1.16×** at
+p = 10 000 / 25 000 / 50 000. `mul_add` is a true fused primitive in Rust,
+so the contraction does not depend on the `fp-contract` codegen policy, and
+each fused accumulation carries one rounding instead of two.
 
 This path is branchless after dispatch: `use_cutoff` selects one of two
 tight monomorphic loop bodies up front, so the hot loop never tests a
@@ -77,6 +89,22 @@ dense SoA streams win it back. The dispatch table encodes this crossover.
   on small p): writing `(re, im)` interleaved from a symmetric loop stops
   the auto-vectorizer cold; the sequential symmetric path stays scalar by
   design while the asymmetric blocked paths auto-vectorize cleanly.
+* **Register-resident target tiles in the *parallel* exact body**: the
+  output-partitioned `tiled_one_block_no_cutoff` accumulates into `out_r[i]`
+  / `out_i[i]` (two read-modify-writes per pair) inside a 32-row block that
+  stays in L1. Moving the four target rows into registers and flushing once
+  per source sweep removes those writes but forces the source array to be
+  re-streamed once per 4-row tile instead of once per 32-row block:
+  p = 10 000 Rayon 4.94 → 5.79 ms, p = 50 000 119.5 → 137 ms. Reverted.
+* **A parallel symmetric kernel**: splitting the strict upper triangle into
+  folded, exactly-balanced row strips and reducing per-worker mirror planes
+  halves both the pairs and the divisions, yet the worker-local sweep ran
+  ~1.6× slower per pair than the sequential sink sweep at one thread
+  (25.2 → 39.7 ms at p = 10 000) and never beat the full-square parallel
+  kernel at any thread count (10 threads, p = 50 000: 133 vs 116 ms).
+  Collapsing the mirror planes onto the owner planes and using a single
+  strip changed nothing, so the penalty lives in the sweep's two-stream
+  write pattern, not in the reduction. Reverted.
 
 ## ChebCode* treecodes (`src/stieltjes/chebcode.rs`, `simd.rs`)
 
@@ -125,10 +153,25 @@ only doubles live registers.
 
 * `fill_weights` computes `v_j = β_j/(x_s − t_j)` once per (source, node)
   and normalizes with a single extra division per source (≤1 ulp change).
+  The shared `mass·(1/s)` factor is hoisted out of the node loop and applied
+  with one fused `w_j = m.mul_add(v_j, w_j)` per node instead of
+  `mass · v_j · inv_s` + add.
 * `merge_weights` composes a parent's weights from its children's
-  (O(n²) per child) instead of rescanning all parent sources — the build
-  ends at 10–11 % of end-to-end runtime (`examples/measure_build_share.rs`)
-  rather than dominating it.
+  (O(n²) per child) instead of rescanning all parent sources — on the
+  **all-points** path the build ends at 10–11 % of end-to-end runtime
+  (`examples/measure_build_share.rs`) rather than dominating it.
+* **The build dominates whenever the tree serves few queries.** At
+  `nq = 200` (the deconvolution grid) the build is 81 % / 94 % of the call
+  at p = 10 000 / 50 000, and most of it is `merge_weights`
+  (cost ∝ `p / leaf_cap`). `compute_stieltjes_at_points` therefore sizes
+  the leaf from the query count (`L* = n·√(2p/nq)`, floored at the preset
+  value) — a bigger leaf removes merge work *and* leaves more sources in
+  the exactly-summed leaves, so it is faster **and** more accurate.
+  Interleaved before/after, nq = 200, `chebcode_fast`: **1.37×** at
+  p = 10 000 (0.250 → 0.183 ms), **1.45×** at p = 25 000, **1.60×** at
+  p = 50 000 (1.017 → 0.636 ms, 4.1e-9 → 1.3e-9 rel-L2);
+  `chebcode_balanced` **1.77×** at p = 50 000.
+  The all-points path is untouched (`L* = n√2` there, below every preset).
 
 ### Memory layout and parallelism
 

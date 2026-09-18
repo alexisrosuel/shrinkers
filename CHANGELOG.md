@@ -3,6 +3,139 @@
 All notable changes to **shrinkers** are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+Performance round on the exact kernel, the deconvolution grid path and the
+treecode build. All numbers are interleaved before/after medians on the same
+Apple M1 Max, MP-like spectra, `mp_spectrum(p, c=0.25)`, η = 0.1/√p,
+reproduced by `scripts/bench_ab.py` driving two binaries built from the same
+harness (`examples/measure_runtime_audit.rs compare <p>`) — one from HEAD,
+one from this revision. Machine load was shared by construction (the driver
+alternates builds), so the ratios are the meaningful quantity.
+
+| metric | p | before | after | speedup |
+|---|---|---|---|---|
+| `auto` all-points, seq | 10 000 | 29.47 ms | 2.75 ms | **10.7×** |
+| `auto` all-points, seq | 20 000 | 117.8 ms | 5.68 ms | **20.7×** |
+| `auto` all-points, seq | 50 000 | 737.4 ms | 12.58 ms | **58.6×** |
+| exact all-points, seq (`blocked`) | 10 000 | 29.53 ms | 25.65 ms | **1.15×** |
+| exact all-points, seq | 20 000 | 117.8 ms | 101.9 ms | **1.16×** |
+| exact all-points, seq | 50 000 | 737.2 ms | 639.1 ms | **1.15×** |
+| exact all-points, Rayon | 10 000 | 5.25 ms | 5.26 ms | 1.00× |
+| exact all-points, Rayon | 50 000 | 122.8 ms | 121.7 ms | 1.01× |
+| grid `chebcode_fast`, nq = 200 | 10 000 | 0.256 ms | 0.186 ms | **1.37×** |
+| grid `chebcode_fast`, nq = 200 | 20 000 | 0.462 ms | 0.313 ms | **1.48×** |
+| grid `chebcode_fast`, nq = 200 | 50 000 | 1.034 ms | 0.638 ms | **1.62×** |
+| grid `chebcode_balanced`, nq = 200 | 10 000 | 0.323 ms | 0.214 ms | **1.51×** |
+| grid `chebcode_balanced`, nq = 200 | 50 000 | 1.344 ms | 0.748 ms | **1.80×** |
+| `deconvolve_spiked` default (`auto`) | 10 000 | 0.345 ms | 0.244 ms | **1.42×** |
+| `deconvolve_spiked` default | 20 000 | 0.524 ms | 0.368 ms | **1.43×** |
+| `deconvolve_spiked` default | 50 000 | 11.86 ms | 0.779 ms | **15.2×** |
+| grid exact (`blocked`, control) | 50 000 | 4.157 ms | 4.182 ms | 0.99× |
+| exact all-points Rayon (control) | 20 000 | 20.34 ms | 19.18 ms | 1.06× |
+
+The `auto` rows are the dispatcher fix below — the single biggest win, and it
+lands on the `stieltjes_transform` default-adjacent path. The `blocked` rows
+are the fused-accumulation win. The Rayon rows are flat on purpose: the
+parallel exact kernel was already fully fused and still runs its own
+output-partitioned full-square body. The `grid.blocked` row is the control —
+that kernel was not touched.
+
+### Fixed
+- **`Auto` was not resolved by the Stieltjes dispatchers.**
+  `StieltjesMethod::Auto` is documented as the speed policy that resolves
+  through the measured Pareto table (`config.rs`: "`Auto` is the **speed**
+  policy"; `docs/internals.md`: "Auto-selects fastest by p"), and
+  `RmtConfig::resolve_auto` did resolve it — but `compute_all_stieltjes` and
+  `compute_stieltjes_at_points` only resolved the two explicit `*Auto`
+  presets and let plain `Auto` fall into a defensive arm that runs the exact
+  O(p²) `Blocked` kernel. The Python `stieltjes_transform(method="auto")`
+  binding calls `compute_all_stieltjes` directly, so `method="auto"` was
+  silently exact: **102 ms at p = 20 000 instead of 4.6 ms**, against
+  `method="speed_auto"` which resolved correctly.
+  Resolution now lives in one place, `config::resolve_auto_method`, used by
+  `RmtConfig::resolve_auto` *and* both dispatchers; the dead `Auto` arm is
+  gone. Interleaved before/after: **10.7×** (p = 10 000), **20.7×**
+  (p = 20 000), **58.6×** (p = 50 000); Python-level p = 20 000:
+  102.4 → 4.6 ms.
+  *Behaviour note*: `method="auto"` now returns the treecode preset's
+  ~1e-8-class result rather than a machine-precision exact one. That is what
+  the `Auto` contract says, and the exact path remains available and is
+  still the default for `stieltjes_transform` (`method="blocked"`) and
+  `accuracy_auto`. Regression-tested by
+  `test_auto_resolves_and_matches_the_resolved_method`.
+- **The deconvolution grid inherited an all-points dispatch decision.**
+  `RmtConfig::resolve_auto` consults the measured Pareto table, which is an
+  *all-points* table (`nq = p`); its large-p speed pick is `Fft5`, whose cost
+  is a whole-grid convolution **independent of the query count**. On the
+  `n_points = 200` deconvolution grid used by `deconvolve_spiked` /
+  `spectral_deconvolution` (the Python default, `method="auto"`, sequential)
+  that spent 11.9 ms at p = 50 000 where `ChebCodeFast` needs 0.64 ms — and
+  the FFT bank is ~4e-5 accurate against the treecode's ~1e-8.
+  New `RmtConfig::resolve_auto_at_points(p, nq)` redirects the auto presets
+  to the ChebCode speed preset when `nq·4 < p` (the measured FFT/treecode
+  grid crossover is near `nq ≈ 0.7·p`); above that the table's pick stands.
+  Explicit `stieltjes_method` values are never second-guessed.
+  `deconvolve_spiked` default path, sequential: p = 20 000 **1.43×**,
+  p = 50 000 **15.2×** (11.86 → 0.78 ms), at ~3 orders of magnitude *better*
+  accuracy.
+  The Pareto table itself is deliberately left untouched: the exact family is
+  never the speed pick in any bin (it wins the accuracy column on error, not
+  runtime), so making it 15 % faster cannot change a bin.
+
+### Changed
+- **ChebCode leaf capacity now depends on the query count.** A preset's
+  `leaf_cap` is tuned for `nq = p`; on the grid path `nq` is `n_points`, the
+  call is build-dominated (measured 81 % / 94 % of the total at p = 10 000 /
+  50 000) and most of that build is `merge_weights`, whose cost scales as
+  `p / leaf_cap`. `compute_stieltjes_at_points` now sizes the leaf from the
+  cost model `L* = n·√(2p/nq)`, floored at the preset's own `leaf_cap` so the
+  all-points behaviour is untouched. Because leaves are summed **exactly**,
+  the relaxed tree is also *more* accurate, not less: p = 50 000, nq = 200,
+  `chebcode_fast` 4.1e-9 → 1.3e-9 rel-L2; p = 10 000 3.2e-9 → 2.0e-9.
+
+### Performance
+- **Exact symmetric sweep: 9 → 6 FP ops per visited pair.** The sequential
+  `Blocked`/`BlockedTiled` hot loop wrote each accumulation as
+  `w = d·inv; rr += w; cr -= w` and `v = η·inv; ri += v; ci += v` — two FMULs
+  and four FADDs/FSUBs per pair. Rewriting each as one explicit `mul_add`
+  (`rr = d.mul_add(inv, rr)`, `cr = (-d).mul_add(inv, cr)`,
+  `ri = eta.mul_add(inv, ri)`, `ci = eta.mul_add(inv, ci)`) removes the two
+  temporaries and fuses the additions, leaving
+  `FSUB + FFMA + FDIV + 4 FFMA`. The kernel already ran at ~92 % of the
+  machine's FP issue rate, so op count converts directly into runtime:
+  **1.15–1.16×** end-to-end at p = 10 000 / 25 000 / 50 000. `mul_add` is a
+  true fused primitive in Rust, so the contraction does not depend on the
+  `fp-contract` codegen policy, and fusing makes every accumulation strictly
+  more accurate (one rounding instead of two). The same treatment was applied
+  to the treecode's barycentric row update (`mass·(1/s)` hoisted, one
+  `mul_add` per node).
+- `figures/stieltjes_*.png` and `figures/stieltjes_data.csv` regenerated with
+  `scripts/bench_stieltjes_all.py` against the new build.
+
+### Measured negatives (kept on purpose)
+- **Register-resident target tiles in the parallel `tiled_one_block_no_cutoff`
+  body: slower.** Accumulating a 4-row target tile in registers removes the
+  two output read-modify-writes per pair, but it also forces the source array
+  to be re-streamed once per 4-row tile instead of once per 32-row block:
+  p = 10 000 Rayon 4.94 → 5.79 ms, p = 50 000 119.5 → 137 ms. Reverted.
+- **A parallel *symmetric* exact kernel: slower per pair.** Splitting the
+  strict upper triangle into folded row strips (`[k·c,(k+1)·c)` plus
+  `[p−(k+1)·c, p−k·c)`, exactly balanced) and reducing per-worker mirror
+  planes halves the pairs *and* the divisions, yet the worker-local sweep
+  measured ~1.6× slower per pair than the sequential `SoaSink` sweep even at
+  one thread (p = 10 000: 25.2 ms sequential vs 39.7 ms for the same schedule
+  through the mirror sink), and never beat the output-partitioned full-square
+  kernel at any thread count (10 threads: 133 vs 116 ms at p = 50 000).
+  Collapsing the mirror planes onto the owner planes and running a single
+  strip changed nothing, so the cost is in the sweep's two-stream write
+  pattern rather than in the reduction. Reverted; the parallel exact path
+  keeps `compute_all_stieltjes_blocked_tiled_parallel`.
+- **PGO remains unavailable offline.** rustc emits raw profile format v10;
+  the only `llvm-profdata` on the box (Command Line Tools) reads v8, and
+  `rustup component add llvm-tools-preview` fails to download. Same blocker
+  as the 0.1.1 round.
+
 ## [0.1.1] — 2026-08-26
 
 ### Added

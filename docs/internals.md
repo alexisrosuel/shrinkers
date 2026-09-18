@@ -112,19 +112,26 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 | `Hodlr` | O(r² p log p) | Hierarchical low-rank (ACA / RandNLA modes) | tol-driven (ACA tol 1e-9 → ~7e-10 measured) |
 | `Ewald` | O(p·k + M log M) | Near/far splitting + coarse FFT | User-controllable |
 | `Dst` | O(p log p) | Alias for the `Adaptive` composition (shared FFT grid) | ~4e-5 rel |
-| `Auto` | — | Auto-selects fastest by p | — |
+| `Auto` | — | Speed policy: the Pareto table pick for p (alias of `speed_auto`) | — |
 
 > **Notes.** `Dst` delegates to the same FFT grid as `Adaptive`/`Fft5`
 > (identical math, fewer transforms). `Ewald` is dominated by `ChebCode` on
 > both axes (faster *and* more accurate) and is kept for reference only.
 > With a far-field cutoff enabled, the exact `Blocked` family routes to the
 > windowed kernels: identical included terms, O(p·k) instead of O(p²).
-> Presets are data-driven: `Strategy::Speed` / `Strategy::Accuracy` resolve
-> through a measured Pareto table (`src/config/pareto_autogen.rs`,
+> Presets are data-driven: `Auto`, `Strategy::Speed` and `Strategy::Accuracy`
+> resolve through a measured Pareto table (`src/config/pareto_autogen.rs`,
 > regenerate via `examples/measure_pareto_frontier.rs` +
 > `scripts/build_pareto_table.py`)
 > with independent columns for Sequential/Rayon; the user's parallelism
-> choice is respected. NUFFT-based evaluation was investigated and rejected —
+> choice is respected. `Auto` and `speed_auto` are the same policy; the
+> resolution lives in `config::resolve_auto_method` and both Stieltjes
+> dispatchers route through it, so `method="auto"` means the same thing
+> whether it enters through `RmtConfig` or through
+> `compute_all_stieltjes` (it previously did not — see *`Auto` is a policy*
+> under Performance). The at-points driver adds one more step,
+> `config::grid_appropriate`, which keeps the whole-grid FFT banks off a
+> small query set. NUFFT-based evaluation was investigated and rejected —
 > uniform grids cannot suppress the Cauchy kernel's algebraic wrap-around
 > images (see CHANGELOG); local approximation wins the accuracy frontier.
 >
@@ -147,17 +154,81 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 
 ## Performance
 
-### Core Stieltjes kernel (raw, Criterion, Apple M-series)
+### Interleaved before/after (this round)
+
+Two binaries from the same harness, one built from HEAD and one from the
+current revision, run alternately by `scripts/bench_ab.py` (3 rounds after a
+warm-up, per-key median), `mp_spectrum(p, c=0.25)`, η = 0.1/√p:
+
+```bash
+scripts/bench_ab.py /tmp/audit_before /tmp/audit_after 10000 25000 50000
+```
+
+| metric | p | before | after | speedup |
+|---|---|---|---|---|
+| `auto` all-points, seq | 10 000 | 29.47 ms | 2.75 ms | **10.7×** |
+| `auto` all-points, seq | 20 000 | 117.8 ms | 5.68 ms | **20.7×** |
+| `auto` all-points, seq | 50 000 | 737.4 ms | 12.58 ms | **58.6×** |
+| exact all-points, seq (`blocked`) | 10 000 | 29.53 ms | 25.65 ms | **1.15×** |
+| exact all-points, seq | 20 000 | 117.8 ms | 101.9 ms | **1.16×** |
+| exact all-points, seq | 50 000 | 737.2 ms | 639.1 ms | **1.15×** |
+| exact all-points, Rayon | 10 000 | 5.25 ms | 5.26 ms | 1.00× |
+| exact all-points, Rayon | 50 000 | 122.8 ms | 121.7 ms | 1.01× |
+| grid `chebcode_fast`, nq = 200 | 10 000 | 0.256 ms | 0.186 ms | **1.37×** |
+| grid `chebcode_fast`, nq = 200 | 20 000 | 0.462 ms | 0.313 ms | **1.48×** |
+| grid `chebcode_fast`, nq = 200 | 50 000 | 1.034 ms | 0.638 ms | **1.62×** |
+| grid `chebcode_balanced`, nq = 200 | 10 000 | 0.323 ms | 0.214 ms | **1.51×** |
+| grid `chebcode_balanced`, nq = 200 | 50 000 | 1.344 ms | 0.748 ms | **1.80×** |
+| `deconvolve_spiked` default (`auto`) | 10 000 | 0.345 ms | 0.244 ms | **1.42×** |
+| `deconvolve_spiked` default | 20 000 | 0.524 ms | 0.368 ms | **1.43×** |
+| `deconvolve_spiked` default | 50 000 | 11.86 ms | 0.779 ms | **15.2×** |
+| grid exact (`blocked`, control) | 50 000 | 4.157 ms | 4.182 ms | 0.99× |
+
+The `auto` rows are the `Auto`-resolution fix (§ *Auto is a policy* below) and
+are the reason `figures/stieltjes_best.png` now shows the `auto` line on the
+frontier instead of on top of `blocked`. The `blocked` rows are the
+fused-accumulation win. The Rayon rows are flat on purpose: the parallel
+exact kernel was already fully fused and still runs its own
+output-partitioned full-square body. The `grid.blocked` row is the control —
+that kernel was not touched.
+
+### `Auto` is a policy, and it must resolve everywhere
+
+`StieltjesMethod::Auto` is documented as the speed policy resolved through
+the measured Pareto table. `RmtConfig::resolve_auto` did that; the two
+Stieltjes dispatchers did not — they resolved only the explicit
+`SpeedAuto`/`AccuracyAuto` presets and let plain `Auto` fall into a defensive
+arm that runs the exact O(p²) `Blocked` kernel. Because the Python
+`stieltjes_transform` binding calls `compute_all_stieltjes` directly,
+`method="auto"` was silently exact: 102 ms at p = 20 000 where
+`method="speed_auto"` took 4.6 ms.
+
+Resolution now lives in exactly one place,
+`config::resolve_auto_method(method, parallel, p)`, called by
+`RmtConfig::resolve_auto` and by both dispatchers, with
+`config::grid_appropriate(method, p, nq)` owning the at-points redirect. The
+dead `Auto` arm is gone and `compute_all_stieltjes` `unreachable!()`s on any
+unresolved auto, so the fallback can never come back.
+
+### Core Stieltjes kernel (raw, Apple M-series)
 
 The direct-sum kernel is the hot path. Hardware optimizations — cache tiling
 (output-block-outer), FMA fusion on the real part, eta-hoisting of the
-imaginary part, and unrolled inner loops — have made the exact `BlockedTiled`
-kernel the fastest exact method:
+imaginary part, unrolled inner loops, and (this round) **one fused `mul_add`
+per accumulation instead of an FMUL plus an FADD** — have made the exact
+`BlockedTiled` kernel the fastest exact method. The last item is worth
+**1.15–1.16×** on its own: the pair body now issues
+`FSUB + FFMA + FDIV + 4 FFMA`, and the kernel runs at ~92 % of the machine's
+FP issue rate, so op count converts directly into runtime:
 
-| p | `tiled_auto` (auto block size) |
-|---|-------------------------------|
-| 1000 | **293 µs** |
-| 10000 | **29.3 ms** |
+| p | `tiled_auto` (auto block size) | before fused accumulations |
+|---|-------------------------------|----------------------------|
+| 1000 | **252 µs** | 306 µs |
+| 10000 | **25.2 ms** | 29.2 ms |
+| 50000 | **637 ms** | 734 ms |
+
+(Single-binary medians, `mp_spectrum`, η = 0.1/√p, sequential,
+`examples/measure_runtime_audit.rs allpts`.)
 
 ### Stieltjes method frontier (bench_one, Apple M1 Max, MP spectra, η=1/√p)
 
@@ -171,19 +242,39 @@ round; the ChebCode default is now θ=0.5, n=11, leaf=32):
 | `ChebCodeXtreme` (θ.25 n11 L16) | ~6e-13 | 24.7 ms | **5.26 ms** |
 | `Hodlr` (ACA, tol 1e-9) | ~7e-10 | 140 ms | 64 ms |
 | `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 1.9 s | 0.86 s |
-| `BlockedTiled` (exact) | 0 | 736 ms | ~125 ms |
+| `BlockedTiled` (exact) | 0 | ~640 ms | ~114 ms |
 
 Among methods with usable accuracy (rel err ≤ 1e-6), `chebcode_fast`
 holds the runtime minimum at every size under Rayon, and only at
 p ≤ 2000 under Rayon does the exact `blocked_tiled` come within ~20 %
-of the fastest point. Sequentially `chebcode_fast` also holds the
-minimum: an earlier single-session sweep had suggested `fft5` might
-edge it out at large p, but an interleaved re-measure (15 reps,
-alternating order) reversed that — 15.1 ms vs 22.5 ms at p=50 000 —
-so every speed-intent bin now resolves to `ChebCodeFast`. The FFT
-grid additionally carries ~4 orders of magnitude more error
-(~4e-5 vs ~1e-8), which is why it is no longer dispatched by the
-presets.
+of the fastest point. Sequentially the picture splits at p ≈ 20 000: below
+that `chebcode_fast` holds the minimum, above it the whole-grid `fft5`
+edges it out on the **all-points** problem — re-measured as an interleaved
+A/B (13 rounds, alternating order, `examples/measure_runtime_audit.rs ab`):
+p = 20 000: 5.94 vs 5.74 ms (tie); p = 50 000: **12.3 vs 15.8 ms**;
+p = 100 000: **26.2 vs 33.9 ms**. That is why the largest Pareto speed bin
+resolves to `fft5` sequentially. The FFT bank is also ~4 orders of
+magnitude less accurate there (~4e-5 vs ~1e-8), which is the price of the
+25 %; and because its cost is a whole-grid convolution it is the *wrong*
+choice for a small query set — see the at-points dispatch note below.
+
+### The at-points (deconvolution grid) path is dispatched separately
+
+`compute_stieltjes_at_points` evaluates at `nq` arbitrary query points
+rather than at the `p` sample eigenvalues. The Pareto table is an
+all-points table, so the large-p `fft5` pick would charge the whole grid
+for a 200-point deconvolution: `RmtConfig::resolve_auto_at_points`
+redirects the auto presets to `ChebCodeFast` when `nq·4 < p` (measured
+crossover ≈ `0.7·p`). It also sizes the treecode's `leaf_cap` from the
+query count (`L* = n·√(2p/nq)`, floored at the preset value), since the
+build dominates there and a coarser tree is both cheaper to build and
+*more* accurate (leaves are summed exactly). Interleaved before/after,
+nq = 200: `chebcode_fast` **1.37×** (p = 10 000), **1.45×** (p = 25 000),
+**1.60×** (p = 50 000); `chebcode_balanced` **1.77×** at p = 50 000;
+`deconvolve_spiked` — which combines both effects — **1.42×** at
+p = 10 000, **13.3×** at p = 25 000 and **15.4×** at p = 50 000
+(12.13 → 0.79 ms). Accuracy improves at the same time: rel-L2 on the grid
+goes 4.1e-9 → 1.3e-9 (p = 50 000) and 3.2e-9 → 2.0e-9 (p = 10 000).
 
 ### Against the PyData baseline (p=50 000)
 

@@ -84,6 +84,14 @@ spiked covariance model. It orchestrates the full pipeline:
   `"chebcode_xtreme"` (alias `"chebx"`; ~6e-13), `"hodlr"`, `"ewald"`,
   `"dst"`, `"speed_auto"` (alias `"speed"`), `"accuracy_auto"`
   (alias `"accuracy"`), or `"auto"`.
+  `"auto"` is the **speed policy**, not an exact fallback: it resolves
+  through the same measured Pareto table as `"speed_auto"` (identical pick)
+  and is therefore approximate — ~1e-8 near the ChebCode presets, ~4e-5
+  where the table picks the FFT bank at large p. For a machine-precision
+  result ask for `"blocked"` (the `stieltjes_transform` default) or
+  `"blocked_tiled"`, or for `"accuracy_auto"`. On the deconvolution grid a
+  whole-grid FFT pick is additionally re-routed to the treecode, which
+  serves exactly the `n_points` queries.
 - `parallel` — keyword-only, `bool | None`, default `False`.
   `True` enables multi-core execution, `False` forces single-threaded,
   `None` lets the library decide from the problem size. The threading

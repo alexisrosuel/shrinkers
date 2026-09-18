@@ -76,14 +76,17 @@ holds the raw measurements.
 **3 · It uses every core you give it.** The exact kernel is data-parallel
 across cache blocks — flip one argument (`parallel=True`) and the
 same call spreads over your cores with no reduction step and no false
-sharing. Measured on the 8-core machine above (fresh sweep,
-`docs/pareto/bench_after.json`):
+sharing. Measured with `examples/measure_runtime_audit.rs readme_par <p>`
+(recorded `harness_spectrum`, η = 1/√p, median of 11):
 
 | p | exact, 1 thread | exact, all cores | gain |
 |---|---|---|---|
-| 10 000 | 38.6 ms | 6.4 ms | **×6.0** |
-| 50 000 | 0.94 s | 0.16 s | **×5.9** |
+| 10 000 | 25.5 ms | 4.9 ms | **×5.2** |
+| 50 000 | 638 ms | 117 ms | **×5.4** |
 
+The all-cores times are unchanged by the current round; the *ratios* moved
+down only because the single-thread kernel got 15 % faster (interleaved
+before/after in [docs/internals.md](docs/internals.md)).
 ChebCodeFast scales too (×3.3–4.5). Note also that the NumPy baseline in figure 2
 is itself single-core — even pinned to one thread, shrinkers still wins
 by roughly an order of magnitude (9.1× at p≈5000).
@@ -94,7 +97,10 @@ by roughly an order of magnitude (9.1× at p≈5000).
   inverse-BBP spike debiasing → El Karoui bulk deconvolution;
 - Stieltjes-transform methods spanning the whole speed/accuracy frontier —
   machine-precision exact kernels, ChebCode treecodes (~1e-8 … ~6e-13),
-  HODLR — plus data-driven `speed_auto` / `accuracy_auto` picks;
+  HODLR — plus data-driven `speed_auto` / `accuracy_auto` picks, with
+  `auto` = the measured speed policy (same Pareto table, resolved in one
+  place for every entry point, and on the deconvolution grid the treecode is
+  sized to the number of query points it actually serves);
 - correlation-matrix cleaning with eigenvector-overlap correction, direct
   precision-matrix shrinkage, Tracy–Widom spike detection;
 - Rust API + PyO3 bindings with the GIL released during computation;
