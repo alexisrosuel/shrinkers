@@ -31,6 +31,11 @@ Their outputs feed `scripts/` plots and the numbers recorded under
 - `measure_eta_sweep.rs` — η regularization study (bias, stability,
   runtime); analyzed in `docs/eta_choice.md`.
 - `ab_quick_timing.rs` — quick single-method A/B timing from the CLI.
+- `measure_hotloop_ab.rs` — guarded A/B harness for the cache-blocked hot
+  loops and the ChebCode tree build: `--checksum` proves two builds produce
+  bit-identical output, the default mode times them case by case. Build it
+  from both revisions and alternate the two binaries; the `tiled_*` /
+  `at_points_*` / `cheb_*` cases are the ones a kernel refactor can move.
 - `profile_hot_loop.rs` — infinite loop for `sample`-based profilers
   (prints its PID first; kill it when done).
 

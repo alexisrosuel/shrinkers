@@ -188,10 +188,11 @@ pub(crate) fn compute_stieltjes_blocked_at_points(
     let mut imags = vec![0.0_f64; nq];
 
     // Branch hoisting: dispatch once on whether the far-field cutoff is
-    // enabled. Each branch runs a dedicated inner loop with NO per-iteration
-    // `use_cutoff` check — the compiler emits a single tight loop body.
+    // enabled, into two monomorphizations of one body. `!CUT` is a
+    // compile-time constant, so the exact instantiation carries no
+    // `use_cutoff` check and no `abs` of the difference at all.
     if cutoff.is_some() {
-        at_points_inner_loop(
+        at_points_inner_loop::<true>(
             query_points,
             eigenvalues,
             &mut reals,
@@ -202,7 +203,7 @@ pub(crate) fn compute_stieltjes_blocked_at_points(
             cut_dist,
         );
     } else {
-        at_points_inner_loop_no_cutoff(
+        at_points_inner_loop::<false>(
             query_points,
             eigenvalues,
             &mut reals,
@@ -210,6 +211,7 @@ pub(crate) fn compute_stieltjes_blocked_at_points(
             bs,
             eta,
             eta_sq,
+            cut_dist, // INFINITY here; the exact monomorphization never reads it
         );
     }
 
@@ -221,13 +223,17 @@ pub(crate) fn compute_stieltjes_blocked_at_points(
     (reals, imags)
 }
 
-/// Inner loop of the query-point kernel with the far-field cutoff enabled.
+/// Inner loop of the query-point kernel.
 ///
-/// `cut` is the cutoff distance (already `cutoff_ratio * eta`); terms with
-/// `|q-λⱼ| > cut` are skipped.
+/// `CUT = true` skips terms with `|q-λⱼ| > cut` (`cut` is the cutoff distance,
+/// already `cutoff_ratio * eta`); `CUT = false` computes every term. One body
+/// serves both because `!CUT` is a compile-time constant, so the exact
+/// monomorphization folds every guard to `true` and keeps neither the
+/// comparison nor the `abs` of the difference. Measured neutral at p=4k/20k
+/// (A/B interleaved, checksums bit-identical).
 #[inline(always)]
 #[allow(clippy::too_many_arguments)] // hot inner loop; grouping args would hurt perf
-fn at_points_inner_loop(
+fn at_points_inner_loop<const CUT: bool>(
     query_points: &[f64],
     eigenvalues: &[f64],
     reals: &mut [f64],
@@ -271,25 +277,25 @@ fn at_points_inner_loop(
                 let a10 = if d10 < 0.0 { -d10 } else { d10 };
                 let a20 = if d20 < 0.0 { -d20 } else { d20 };
                 let a30 = if d30 < 0.0 { -d30 } else { d30 };
-                if a00 <= cut {
+                if !CUT || a00 <= cut {
                     let denom = d00.mul_add(d00, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i] = d00.mul_add(inv, reals[i]);
                     imags[i] += inv;
                 }
-                if a10 <= cut {
+                if !CUT || a10 <= cut {
                     let denom = d10.mul_add(d10, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 1] = d10.mul_add(inv, reals[i + 1]);
                     imags[i + 1] += inv;
                 }
-                if a20 <= cut {
+                if !CUT || a20 <= cut {
                     let denom = d20.mul_add(d20, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 2] = d20.mul_add(inv, reals[i + 2]);
                     imags[i + 2] += inv;
                 }
-                if a30 <= cut {
+                if !CUT || a30 <= cut {
                     let denom = d30.mul_add(d30, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 3] = d30.mul_add(inv, reals[i + 3]);
@@ -304,25 +310,25 @@ fn at_points_inner_loop(
                 let a11 = if d11 < 0.0 { -d11 } else { d11 };
                 let a21 = if d21 < 0.0 { -d21 } else { d21 };
                 let a31 = if d31 < 0.0 { -d31 } else { d31 };
-                if a01 <= cut {
+                if !CUT || a01 <= cut {
                     let denom = d01.mul_add(d01, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i] = d01.mul_add(inv, reals[i]);
                     imags[i] += inv;
                 }
-                if a11 <= cut {
+                if !CUT || a11 <= cut {
                     let denom = d11.mul_add(d11, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 1] = d11.mul_add(inv, reals[i + 1]);
                     imags[i + 1] += inv;
                 }
-                if a21 <= cut {
+                if !CUT || a21 <= cut {
                     let denom = d21.mul_add(d21, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 2] = d21.mul_add(inv, reals[i + 2]);
                     imags[i + 2] += inv;
                 }
-                if a31 <= cut {
+                if !CUT || a31 <= cut {
                     let denom = d31.mul_add(d31, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 3] = d31.mul_add(inv, reals[i + 3]);
@@ -340,7 +346,7 @@ fn at_points_inner_loop(
                 } else {
                     qi - lj0
                 };
-                if abs_diff0 <= cut {
+                if !CUT || abs_diff0 <= cut {
                     let diff = qi - lj0;
                     let denom = diff.mul_add(diff, eta_sq);
                     let inv_denom = 1.0 / denom;
@@ -352,7 +358,7 @@ fn at_points_inner_loop(
                 } else {
                     qi - lj1
                 };
-                if abs_diff1 <= cut {
+                if !CUT || abs_diff1 <= cut {
                     let diff = qi - lj1;
                     let denom = diff.mul_add(diff, eta_sq);
                     let inv_denom = 1.0 / denom;
@@ -387,25 +393,25 @@ fn at_points_inner_loop(
                 let a1 = if d1 < 0.0 { -d1 } else { d1 };
                 let a2 = if d2 < 0.0 { -d2 } else { d2 };
                 let a3 = if d3 < 0.0 { -d3 } else { d3 };
-                if a0 <= cut {
+                if !CUT || a0 <= cut {
                     let denom = d0.mul_add(d0, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i] = d0.mul_add(inv, reals[i]);
                     imags[i] += inv;
                 }
-                if a1 <= cut {
+                if !CUT || a1 <= cut {
                     let denom = d1.mul_add(d1, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 1] = d1.mul_add(inv, reals[i + 1]);
                     imags[i + 1] += inv;
                 }
-                if a2 <= cut {
+                if !CUT || a2 <= cut {
                     let denom = d2.mul_add(d2, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 2] = d2.mul_add(inv, reals[i + 2]);
                     imags[i + 2] += inv;
                 }
-                if a3 <= cut {
+                if !CUT || a3 <= cut {
                     let denom = d3.mul_add(d3, eta_sq);
                     let inv = 1.0 / denom;
                     reals[i + 3] = d3.mul_add(inv, reals[i + 3]);
@@ -418,174 +424,12 @@ fn at_points_inner_loop(
             while i < block_end {
                 let diff = query_points[i] - lambda_j;
                 let abs_diff = if diff < 0.0 { -diff } else { diff };
-                if abs_diff <= cut {
+                if !CUT || abs_diff <= cut {
                     let denom = diff.mul_add(diff, eta_sq);
                     let inv_denom = 1.0 / denom;
                     reals[i] = diff.mul_add(inv_denom, reals[i]);
                     imags[i] += inv_denom;
                 }
-                i += 1;
-            }
-        }
-    }
-}
-
-/// Inner loop of the query-point kernel with the far-field cutoff disabled.
-///
-/// Computes every term exactly (no branch, no skip). This is a separate
-/// function so the hot loop body has no `use_cutoff` branch at all.
-#[inline(always)]
-fn at_points_inner_loop_no_cutoff(
-    query_points: &[f64],
-    eigenvalues: &[f64],
-    reals: &mut [f64],
-    imags: &mut [f64],
-    bs: usize,
-    _eta: f64,
-    eta_sq: f64,
-) {
-    let nq = query_points.len();
-    let p = eigenvalues.len();
-
-    // Outer loop: iterate over source eigenvalues in pairs to halve write
-    // traffic to reals[]/imags[].
-    let mut j = 0;
-    while j + 2 <= p {
-        let lj0 = eigenvalues[j];
-        let lj1 = eigenvalues[j + 1];
-
-        // Inner loop: cache-blocked over target query points
-        for block_start in (0..nq).step_by(bs) {
-            let block_end = (block_start + bs).min(nq);
-
-            // Unrolled inner loop over the block (4× unrolling)
-            let mut i = block_start;
-            while i + 4 <= block_end {
-                let q0 = query_points[i];
-                let q1 = query_points[i + 1];
-                let q2 = query_points[i + 2];
-                let q3 = query_points[i + 3];
-
-                // λⱼ₀
-                let d00 = q0 - lj0;
-                let denom00 = d00.mul_add(d00, eta_sq);
-                let inv00 = 1.0 / denom00;
-                reals[i] = d00.mul_add(inv00, reals[i]);
-                imags[i] += inv00;
-
-                let d10 = q1 - lj0;
-                let denom10 = d10.mul_add(d10, eta_sq);
-                let inv10 = 1.0 / denom10;
-                reals[i + 1] = d10.mul_add(inv10, reals[i + 1]);
-                imags[i + 1] += inv10;
-
-                let d20 = q2 - lj0;
-                let denom20 = d20.mul_add(d20, eta_sq);
-                let inv20 = 1.0 / denom20;
-                reals[i + 2] = d20.mul_add(inv20, reals[i + 2]);
-                imags[i + 2] += inv20;
-
-                let d30 = q3 - lj0;
-                let denom30 = d30.mul_add(d30, eta_sq);
-                let inv30 = 1.0 / denom30;
-                reals[i + 3] = d30.mul_add(inv30, reals[i + 3]);
-                imags[i + 3] += inv30;
-
-                // λⱼ₁
-                let d01 = q0 - lj1;
-                let denom01 = d01.mul_add(d01, eta_sq);
-                let inv01 = 1.0 / denom01;
-                reals[i] = d01.mul_add(inv01, reals[i]);
-                imags[i] += inv01;
-
-                let d11 = q1 - lj1;
-                let denom11 = d11.mul_add(d11, eta_sq);
-                let inv11 = 1.0 / denom11;
-                reals[i + 1] = d11.mul_add(inv11, reals[i + 1]);
-                imags[i + 1] += inv11;
-
-                let d21 = q2 - lj1;
-                let denom21 = d21.mul_add(d21, eta_sq);
-                let inv21 = 1.0 / denom21;
-                reals[i + 2] = d21.mul_add(inv21, reals[i + 2]);
-                imags[i + 2] += inv21;
-
-                let d31 = q3 - lj1;
-                let denom31 = d31.mul_add(d31, eta_sq);
-                let inv31 = 1.0 / denom31;
-                reals[i + 3] = d31.mul_add(inv31, reals[i + 3]);
-                imags[i + 3] += inv31;
-
-                i += 4;
-            }
-
-            // Remainder (non-unrolled) — process both λⱼ₀ and λⱼ₁
-            while i < block_end {
-                let qi = query_points[i];
-                let diff0 = qi - lj0;
-                let denom0 = diff0.mul_add(diff0, eta_sq);
-                let inv0 = 1.0 / denom0;
-                reals[i] = diff0.mul_add(inv0, reals[i]);
-                imags[i] += inv0;
-
-                let diff1 = qi - lj1;
-                let denom1 = diff1.mul_add(diff1, eta_sq);
-                let inv1 = 1.0 / denom1;
-                reals[i] = diff1.mul_add(inv1, reals[i]);
-                imags[i] += inv1;
-                i += 1;
-            }
-        }
-
-        j += 2;
-    }
-
-    // Handle odd p (one remaining λⱼ)
-    if j < p {
-        let lambda_j = eigenvalues[j];
-        for block_start in (0..nq).step_by(bs) {
-            let block_end = (block_start + bs).min(nq);
-
-            let mut i = block_start;
-            while i + 4 <= block_end {
-                let q0 = query_points[i];
-                let q1 = query_points[i + 1];
-                let q2 = query_points[i + 2];
-                let q3 = query_points[i + 3];
-
-                let d0 = q0 - lambda_j;
-                let denom0 = d0.mul_add(d0, eta_sq);
-                let inv0 = 1.0 / denom0;
-                reals[i] = d0.mul_add(inv0, reals[i]);
-                imags[i] += inv0;
-
-                let d1 = q1 - lambda_j;
-                let denom1 = d1.mul_add(d1, eta_sq);
-                let inv1 = 1.0 / denom1;
-                reals[i + 1] = d1.mul_add(inv1, reals[i + 1]);
-                imags[i + 1] += inv1;
-
-                let d2 = q2 - lambda_j;
-                let denom2 = d2.mul_add(d2, eta_sq);
-                let inv2 = 1.0 / denom2;
-                reals[i + 2] = d2.mul_add(inv2, reals[i + 2]);
-                imags[i + 2] += inv2;
-
-                let d3 = q3 - lambda_j;
-                let denom3 = d3.mul_add(d3, eta_sq);
-                let inv3 = 1.0 / denom3;
-                reals[i + 3] = d3.mul_add(inv3, reals[i + 3]);
-                imags[i + 3] += inv3;
-
-                i += 4;
-            }
-
-            while i < block_end {
-                let diff = query_points[i] - lambda_j;
-                let denom = diff.mul_add(diff, eta_sq);
-                let inv_denom = 1.0 / denom;
-                reals[i] = diff.mul_add(inv_denom, reals[i]);
-                imags[i] += inv_denom;
                 i += 1;
             }
         }
@@ -1140,6 +984,23 @@ fn tiled_span_cutoff<T: CauchyFloat>(
 /// monomorphizations inline (`#[inline(always)]` throughout) to the same
 /// machine code the former hand-duplicated f64/f32 copies produced, so the
 /// duplication cost ~450 lines for zero codegen benefit.
+///
+/// # Why the cutoff / no-cutoff pair is NOT merged the same way
+///
+/// The two `tiled_one_block_*` bodies (≈150 lines each) differ only by the
+/// `if |λᵢ-λⱼ| <= cut` guard, so a `const CUT: bool` parameter with
+/// `if !CUT || d.abs() <= cut` looks like the same free unification. It is
+/// not: measured with an interleaved A/B (7-11 rounds per side, min-of-rounds
+/// estimator, checksums bit-identical) it costs the **cutoff**
+/// monomorphization 2.2-2.4% at p=4k and p=20k, reproducibly, even though
+/// `!CUT` folds to a constant. The same `!CUT ||` technique applied to
+/// `at_points_inner_loop` (below) is neutral (±0.75%), so this is specific to
+/// these two bodies rather than intrinsic to the trick.
+///
+/// The duplication is therefore kept deliberately: the exact kernel is the
+/// hot path of the O(p²) family and a 2% cost is not worth ~150 lines.
+/// `targets[k]` (not `eigenvalues[k]`) in the 1-3 source remainder loop is
+/// required in BOTH copies — see the parallel-kernel comment below.
 trait CauchyFloat:
     Copy
     + PartialOrd
