@@ -350,11 +350,12 @@ pub fn compute_stieltjes_at_points(
         | StieltjesMethod::ChebCodeXtreme
         | StieltjesMethod::ChebCodeBalanced => {
             let preset = cheb_preset(method);
-            let (theta, n, leaf_cap) = preset.parts();
+            let (theta, n, leaf_cap, fast_recip) = preset.parts_prec();
             // This tree serves `query_points.len()` queries, not p — relax the
             // leaf capacity accordingly (see `grid_leaf_cap`).
             let leaf_cap = grid_leaf_cap(n, eigenvalues.len(), query_points.len(), leaf_cap);
-            let batch = chebcode::ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap);
+            let batch =
+                chebcode::ChebCodeBatch::build_prec(eigenvalues, theta, n, leaf_cap, fast_recip);
             batch.evaluate_points(query_points, eta, parallel)
         }
         _ => {
@@ -1117,7 +1118,15 @@ mod tests {
                 den += exact[k].0.powi(2) + exact[k].1.powi(2);
             }
             let rel = (num / den).sqrt();
-            assert!(rel < 1e-6, "{method:?} grid rel-L2 {rel:.3e}");
+            // ChebCodeFast is now the relaxed-accuracy speed preset
+            // (~1e-3-class error budget), ChebCodeBalanced keeps the
+            // accuracy-grade operating point.
+            let tol = if method == StieltjesMethod::ChebCodeFast {
+                1e-3
+            } else {
+                1e-6
+            };
+            assert!(rel < tol, "{method:?} grid rel-L2 {rel:.3e}");
         }
     }
 }

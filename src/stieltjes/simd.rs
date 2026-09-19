@@ -192,6 +192,30 @@ impl F64x2 {
         }
     }
 
+    /// One-refinement-step reciprocal: `FRECPE` + a single `FRECPS`/mul
+    /// Newton step, i.e. ~17 significant bits (~7.6e-6 relative).
+    ///
+    /// Cheaper than [`Self::recip`] by four vector ops per pair, which is
+    /// ~30% of the whole far-field term body. Used by the ChebCode far field,
+    /// where the interpolation error is already ~1e-8..1e-4, so a 1e-5-class
+    /// reciprocal is free at the preset's operating accuracy. Never use it
+    /// for exact kernels or near-singular leaf terms.
+    #[inline(always)]
+    pub(crate) fn recip_fast(self) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            Self(unsafe {
+                use std::arch::aarch64::*;
+                let e = vrecpeq_f64(self.0);
+                vmulq_f64(e, vrecpsq_f64(self.0, e))
+            })
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            Self([1.0 / self.0[0], 1.0 / self.0[1]])
+        }
+    }
+
     /// Sum of both lanes.
     #[inline(always)]
     pub(crate) fn hsum(self) -> f64 {

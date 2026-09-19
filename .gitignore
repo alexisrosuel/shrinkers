@@ -31,3 +31,6 @@ venv/
 .pytest_cache/
 .cache/
 
+
+# scratch worktrees for perf exploration
+.wt/

@@ -101,6 +101,9 @@ struct FlatChebTree {
     n: usize,
     /// squared opening-angle parameter
     theta_sq: f64,
+    /// Use the 17-bit `recip_fast` in the far-field terms (speed presets
+    /// only). The accuracy presets need the full 53-bit reciprocal.
+    fast_recip: bool,
 }
 
 /// Second-kind Chebyshev nodes on [-1,1]: s_j = cos(jπ/(n-1)), j=0..n-1.
@@ -310,7 +313,7 @@ fn merge_weights(
 }
 
 impl FlatChebTree {
-    fn build(sorted: &[f64], n: usize, theta: f64, leaf_cap: usize) -> Self {
+    fn build(sorted: &[f64], n: usize, theta: f64, leaf_cap: usize, fast_recip: bool) -> Self {
         // Barycentric weights depend only on `n`; they are consumed during
         // the build, so they live outside the (hot) query struct.
         let lam = barycentric_weights_m1(n);
@@ -327,6 +330,7 @@ impl FlatChebTree {
             right: Vec::with_capacity(2 * sorted.len()),
             n,
             theta_sq: theta * theta,
+            fast_recip,
         };
         // Shared per-build data: Chebyshev nodes on [-1,1] (the per-node
         // positions are affine rescalings) and one scratch buffer reused by
@@ -431,9 +435,24 @@ impl FlatChebTree {
                 let eta2v = F64x2::splat(eta * eta);
                 let (mut afr, mut afi) = (F64x2::zero(), F64x2::zero());
                 let mut j = 0;
+                // Measured negative: splitting the accumulation across two
+                // independent F64x2 accumulator pairs (4-node unroll) is
+                // SLOWER (p=50k seq 9.22 -> 9.87 ms) — the panel's n/2 FMAs
+                // are not the critical path, and the extra live registers
+                // cost more than the shortened chain. Keep one pair.
                 while j + 2 <= n {
                     let d = zv - F64x2::load(ts, j);
-                    let inv = eta2v.fma(d, d).recip();
+                    let den = eta2v.fma(d, d);
+                    // Speed presets take the 17-bit reciprocal (1 Newton
+                    // step, ~8e-6 rel) — 4 vector ops cheaper per node pair.
+                    // Accuracy presets keep the full 53-bit `recip`, which is
+                    // what lets ChebCodeXtreme reach its ~1e-12 class. The
+                    // branch is loop-invariant (hoisted by LLVM).
+                    let inv = if self.fast_recip {
+                        den.recip_fast()
+                    } else {
+                        den.recip()
+                    };
                     let wj = F64x2::load(ws, j);
                     afr = afr.fma(wj * d, inv);
                     afi = afi.fma(wj * etav, inv);
@@ -533,7 +552,13 @@ impl FlatChebTree {
                     let dj = F64x2::splat(lambda_i - ts[j]);
                     let wj = F64x2::splat(ws[j]);
                     let den = eta2_v.fma(dj, dj);
-                    let inv = den.recip();
+                    // Same far-field reciprocal policy as `contribution` so
+                    // the single-η and two-lane paths stay in lockstep.
+                    let inv = if self.fast_recip {
+                        den.recip_fast()
+                    } else {
+                        den.recip()
+                    };
                     acc_re = acc_re.fma(wj.mul(dj), inv);
                     acc_im = acc_im.fma(wj.mul(eta_v), inv);
                 }
@@ -570,6 +595,11 @@ pub struct ChebPreset {
     pub n: usize,
     /// Maximum sources per leaf (leaves are summed exactly).
     pub leaf_cap: usize,
+    /// Use the 17-bit `recip_fast` in the far-field terms. Set on the speed
+    /// presets only: it buys ~1.2x on the far field for a ~1.4e-6 relative
+    /// error floor, which is invisible at the speed presets' own error but
+    /// would cap the accuracy presets (`ChebCodeXtreme` targets ~1e-12).
+    pub fast_recip: bool,
 }
 
 impl ChebPreset {
@@ -579,13 +609,16 @@ impl ChebPreset {
         theta: 0.5,
         n: 11,
         leaf_cap: 32,
+        fast_recip: false,
     };
-    /// Speed preset (`"chebcode_fast"` / `"chebf"`): ~1e-8 error class at
-    /// the lowest measured runtime of the family.
+    /// Speed preset (`"chebcode_fast"` / `"chebf"`): the fastest measured
+    /// operating point of the family within a ~1e-3 relative-L2 budget
+    /// (theta 1.0, n 6, leaf 32, relaxed reciprocal).
     pub const FAST: Self = Self {
-        theta: 0.5,
-        n: 9,
+        theta: 1.0,
+        n: 6,
         leaf_cap: 32,
+        fast_recip: true,
     };
     /// Precision preset (`"chebcode_xtreme"` / `"chebx"`): ~1e-12 class
     /// without paying the full exact O(p²).
@@ -593,19 +626,26 @@ impl ChebPreset {
         theta: 0.25,
         n: 11,
         leaf_cap: 16,
+        fast_recip: false,
     };
     /// Balanced preset (`"chebcode_balanced"` / `"chebb"`): ~3e-10 error at
-    /// FAST+~6% runtime — sits between FAST (~1e-8) and XTREME (~1e-12),
-    /// dominating neither.
+    /// roughly the FAST price — measured round-2 operating point.
     pub const BALANCED: Self = Self {
         theta: 0.55,
         n: 11,
         leaf_cap: 32,
+        fast_recip: false,
     };
 
     #[inline]
     pub const fn parts(self) -> (f64, usize, usize) {
         (self.theta, self.n, self.leaf_cap)
+    }
+
+    /// `parts()` plus the reciprocal policy.
+    #[inline]
+    pub const fn parts_prec(self) -> (f64, usize, usize, bool) {
+        (self.theta, self.n, self.leaf_cap, self.fast_recip)
     }
 
     /// The preset attached to a `ChebCode*` dispatch variant, or `None` for
@@ -643,8 +683,8 @@ pub(crate) fn compute_all_stieltjes_chebcode_preset(
     preset: ChebPreset,
     parallel: bool,
 ) -> Vec<(f64, f64)> {
-    let (theta, n, leaf) = preset.parts();
-    compute_all_stieltjes_chebcode_impl(eigenvalues, eta, theta, n, leaf, parallel)
+    let (theta, n, leaf, fast_recip) = preset.parts_prec();
+    compute_all_stieltjes_chebcode_impl_prec(eigenvalues, eta, theta, n, leaf, parallel, fast_recip)
 }
 
 /// Chebyshev treecode with explicit opening-angle `theta`, node count `n`,
@@ -665,6 +705,22 @@ pub fn compute_all_stieltjes_chebcode_impl(
     leaf_cap: usize,
     parallel: bool,
 ) -> Vec<(f64, f64)> {
+    compute_all_stieltjes_chebcode_impl_prec(
+        eigenvalues, eta, theta, n, leaf_cap, parallel, false,
+    )
+}
+
+/// [`compute_all_stieltjes_chebcode_impl`] with the far-field reciprocal
+/// policy made explicit (`fast_recip = true` = 17-bit `recip_fast`).
+pub fn compute_all_stieltjes_chebcode_impl_prec(
+    eigenvalues: &[f64],
+    eta: f64,
+    theta: f64,
+    n: usize,
+    leaf_cap: usize,
+    parallel: bool,
+    fast_recip: bool,
+) -> Vec<(f64, f64)> {
     let p = eigenvalues.len();
     if p == 0 {
         return Vec::new();
@@ -683,7 +739,7 @@ pub fn compute_all_stieltjes_chebcode_impl(
         &sorted_buf
     };
 
-    let tree = FlatChebTree::build(sorted, n, theta, leaf_cap);
+    let tree = FlatChebTree::build(sorted, n, theta, leaf_cap, fast_recip);
 
     if parallel {
         eval_points_parallel(&tree, eigenvalues, eta)
@@ -701,8 +757,7 @@ pub fn compute_all_stieltjes_chebcode_impl(
 /// Build just the tree at an explicit preset — benchmarking helper exposing
 /// the build/eval split.
 pub fn chebcode_tree_for_bench(eigenvalues: &[f64], preset: ChebPreset) -> ChebCodeBatch {
-    let (theta, n, leaf_cap) = preset.parts();
-    ChebCodeBatch::build(eigenvalues, theta, n, leaf_cap)
+    ChebCodeBatch::build_preset(eigenvalues, preset)
 }
 
 /// Amortized multi-η driver for ChebCode (γ-sweeps).
@@ -720,17 +775,28 @@ pub struct ChebCodeBatch {
 impl ChebCodeBatch {
     /// Build the tree once at an explicit [`ChebPreset`].
     pub fn build_preset(eigenvalues: &[f64], preset: ChebPreset) -> Self {
-        let (theta, n, leaf_cap) = preset.parts();
-        Self::build(eigenvalues, theta, n, leaf_cap)
+        let (theta, n, leaf_cap, fast_recip) = preset.parts_prec();
+        Self::build_prec(eigenvalues, theta, n, leaf_cap, fast_recip)
     }
 
     /// Build the tree once. Results of every [`Self::evaluate`] call are
-    /// indexed like `eigenvalues`.
+    /// indexed like `eigenvalues`. Full-precision far-field reciprocal.
     pub fn build(eigenvalues: &[f64], theta: f64, n: usize, leaf_cap: usize) -> Self {
+        Self::build_prec(eigenvalues, theta, n, leaf_cap, false)
+    }
+
+    /// [`Self::build`] with an explicit far-field reciprocal policy.
+    pub fn build_prec(
+        eigenvalues: &[f64],
+        theta: f64,
+        n: usize,
+        leaf_cap: usize,
+        fast_recip: bool,
+    ) -> Self {
         let already_sorted = crate::stieltjes::is_sorted_ascending(eigenvalues);
         if already_sorted {
             return Self {
-                tree: FlatChebTree::build(eigenvalues, n, theta, leaf_cap),
+                tree: FlatChebTree::build(eigenvalues, n, theta, leaf_cap, fast_recip),
                 perm: None,
             };
         }
@@ -745,7 +811,7 @@ impl ChebCodeBatch {
         // Scatter: row s of an evaluation is the s-th smallest eigenvalue,
         // which came from original index idx[s].
         Self {
-            tree: FlatChebTree::build(&sorted_buf, n, theta, leaf_cap),
+            tree: FlatChebTree::build(&sorted_buf, n, theta, leaf_cap, fast_recip),
             perm: Some(idx),
         }
     }

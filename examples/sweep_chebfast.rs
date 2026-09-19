@@ -12,10 +12,15 @@ use std::time::Instant;
 use support::{median, mp_spectrum};
 
 fn main() {
-    let ps: Vec<usize> = std::env::args()
-        .skip(1)
-        .filter_map(|s| s.parse().ok())
-        .collect();
+    let mut ps: Vec<usize> = Vec::new();
+    let mut eta_scale = 1.0f64;
+    for a in std::env::args().skip(1) {
+        if let Some(v) = a.strip_prefix("eta=") {
+            eta_scale = v.parse().unwrap();
+        } else if let Ok(v) = a.parse() {
+            ps.push(v);
+        }
+    }
     let ps = if ps.is_empty() {
         vec![10_000, 50_000]
     } else {
@@ -28,7 +33,7 @@ fn main() {
 
     for &p in &ps {
         let lam = mp_spectrum(p, 0.25, p as u64);
-        let eta = 1.0 / (p as f64).sqrt();
+        let eta = eta_scale / (p as f64).sqrt();
         let exact = compute_all_stieltjes(
             &lam,
             eta,
@@ -81,7 +86,7 @@ fn main() {
         }
         rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
-        println!("== p={p}  FAST baseline {base:.3} ms ==");
+        println!("== p={p}  eta={eta:.3e}  FAST baseline {base:.3} ms ==");
         println!(
             "{:>8} {:>10} {:>6} {:>3} {:>5}  {:>7}",
             "ms", "err", "theta", "n", "leaf", "vs base"
