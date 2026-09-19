@@ -211,6 +211,7 @@ fn fill_weights(
 /// extra division per POINT instead of one per (point, node). If `x` hits a
 /// node exactly, the whole mass goes to that single basis. With `mass = 1.0`
 /// this is bit-identical to the inlined form it replaces (`1.0 * v_j == v_j`).
+///
 #[inline(always)]
 fn barycentric_row(x: f64, t: &[f64], lam: &[f64], w: &mut [f64], v: &mut [f64], mass: f64) {
     let n = t.len();
@@ -233,9 +234,9 @@ fn barycentric_row(x: f64, t: &[f64], lam: &[f64], w: &mut [f64], v: &mut [f64],
         w[hit] += mass;
         return;
     }
-    // `mass·(1/s)` is common to every node: hoisting it turns the original
-    // `w_j += mass · v_j · inv_s` (FMUL + FMUL + FADD) into one hoisted FMUL
-    // plus a single fused `mul_add` per node — one fewer rounding step too.
+    // `mass*(1/s)` is common to every node: hoisting it turns the original
+    // `w_j += mass * v_j * inv_s` (FMUL + FMUL + FADD) into one hoisted FMUL
+    // plus a single fused `mul_add` per node - one fewer rounding step too.
     let m = mass * (1.0 / s);
     for (wj, &vj) in w.iter_mut().zip(v.iter()).take(n) {
         *wj = m.mul_add(vj, *wj);

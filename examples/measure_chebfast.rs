@@ -82,7 +82,12 @@ fn main() {
         .unwrap_or(50_000);
     let c = 0.25;
     let evs = mp_spectrum(p, c, 7);
-    let eta = eta_for(p);
+    // Optional `eta=SCALE` argument (η = SCALE/√p); default 1.0.
+    let eta_scale: f64 = std::env::args()
+        .find_map(|a| a.strip_prefix("eta=").and_then(|v| v.parse().ok()))
+        .unwrap_or(1.0);
+    let eta = eta_scale / (p as f64).sqrt();
+    let _ = eta_for;
     let mut preset = ChebPreset::FAST;
     if let Some(theta) = std::env::args().nth(3).and_then(|s| s.parse::<f64>().ok()) {
         preset.theta = theta;
@@ -241,16 +246,30 @@ fn main() {
             });
             println!("chebf.eval.par.p{p}\t{t:.4}");
 
+            // Shipped path: the public dispatcher resolves ChebCodeFast to the
+            // preset (f32 far field included), then scales by 1/p.
             let t = bench(reps, || {
-                let _ = compute_all_stieltjes_chebcode_impl(
-                    &evs, eta, preset.theta, preset.n, preset.leaf_cap, false,
+                let _ = compute_all_stieltjes(
+                    &evs,
+                    eta,
+                    StieltjesMethod::ChebCodeFast,
+                    None,
+                    CutoffConfig::Disabled,
+                    64,
+                    Parallelism::Sequential,
                 );
             });
             println!("chebf.all.seq.p{p}\t{t:.4}");
 
             let t = bench(reps, || {
-                let _ = compute_all_stieltjes_chebcode_impl(
-                    &evs, eta, preset.theta, preset.n, preset.leaf_cap, true,
+                let _ = compute_all_stieltjes(
+                    &evs,
+                    eta,
+                    StieltjesMethod::ChebCodeFast,
+                    None,
+                    CutoffConfig::Disabled,
+                    64,
+                    Parallelism::Parallel,
                 );
             });
             println!("chebf.all.par.p{p}\t{t:.4}");
