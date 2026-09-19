@@ -42,8 +42,25 @@
 //! - Per-query iterative walk with a reusable stack. Optional Rayon
 //!   parallelism over the independent query points.
 
-use super::simd::F64x2;
+use super::simd::{F32x4, F64x2};
 use rayon::prelude::*;
+
+/// Arithmetic precision of the FAR-FIELD only.
+///
+/// Leaves (exact near-field sums), the traversal distance test and every
+/// returned accumulator stay f64 in both modes — only the well-separated
+/// Chebyshev dot product `Σ_j w_j/(z−t_j)` switches to f32 in
+/// [`FastMode::F32`]. The far field is an interpolation already carrying
+/// ~1e-8 relative error at the FAST preset, so f32's ~1e-6 per-term rounding
+/// is a small addition — measured in `RESULT.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FastMode {
+    /// Bit-identical to the historical f64 path.
+    #[default]
+    F64,
+    /// Four-lane f32 far field (AArch64 NEON), f64 elsewhere.
+    F32,
+}
 
 /// Chunk size for parallel query evaluation.
 ///
@@ -58,7 +75,12 @@ const EVAL_CHUNK: usize = 256;
 ///
 /// Shared by `compute_all_stieltjes_chebcode_impl` and
 /// [`ChebCodeBatch::evaluate_points`]; the output order matches `points`.
-fn eval_points_parallel(tree: &FlatChebTree, points: &[f64], eta: f64) -> Vec<(f64, f64)> {
+/// `FAST_F32` selects the far-field arithmetic (see [`FastMode`]).
+fn eval_points_parallel<const FAST_F32: bool>(
+    tree: &FlatChebTree,
+    points: &[f64],
+    eta: f64,
+) -> Vec<(f64, f64)> {
     let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
     points
         .par_chunks(EVAL_CHUNK)
@@ -66,7 +88,7 @@ fn eval_points_parallel(tree: &FlatChebTree, points: &[f64], eta: f64) -> Vec<(f
             let mut stack = Vec::with_capacity(64);
             let mut out = Vec::with_capacity(chunk.len());
             for &x in chunk {
-                out.push(tree.contribution(x, eta, &mut stack));
+                out.push(tree.contribution_mode::<FAST_F32>(x, eta, &mut stack));
             }
             out
         })
@@ -95,6 +117,12 @@ struct FlatChebTree {
     nodes: Vec<f64>,
     /// Flattened source weights: `w[node*n + j]`.
     w: Vec<f64>,
+    /// f32 copies of `nodes` / `w` for the [`FastMode::F32`] far field.
+    ///
+    /// Same layout and length; built once alongside the f64 arrays so the
+    /// f64 traversal is untouched and both modes share one tree.
+    nodes_f32: Vec<f32>,
+    w_f32: Vec<f32>,
     left: Vec<i32>,
     right: Vec<i32>,
     /// number of Chebyshev nodes per interval (degree+1)
@@ -323,6 +351,8 @@ impl FlatChebTree {
             hw_sq: Vec::with_capacity(2 * sorted.len()),
             nodes: Vec::with_capacity(2 * sorted.len() * n),
             w: Vec::with_capacity(2 * sorted.len() * n),
+            nodes_f32: Vec::new(),
+            w_f32: Vec::new(),
             left: Vec::with_capacity(2 * sorted.len()),
             right: Vec::with_capacity(2 * sorted.len()),
             n,
@@ -344,6 +374,11 @@ impl FlatChebTree {
             sorted.len(),
             leaf_cap,
         );
+        // f32 mirror of the flattened nodes/weights for `FastMode::F32`.
+        // One extra pass over the (small) panel arrays; the f64 arrays are
+        // unchanged, so the f64 path stays bit-identical.
+        tree.nodes_f32 = tree.nodes.iter().map(|&x| x as f32).collect();
+        tree.w_f32 = tree.w.iter().map(|&x| x as f32).collect();
         tree
     }
 
@@ -351,6 +386,26 @@ impl FlatChebTree {
     /// walk. Returns (real, imag) raw sums (not scaled by 1/p).
     #[inline]
     fn contribution(&self, lambda_i: f64, eta: f64, stack: &mut Vec<i32>) -> (f64, f64) {
+        self.contribution_mode::<false>(lambda_i, eta, stack)
+    }
+
+    /// [`Self::contribution`] with the four-lane f32 far field
+    /// ([`FastMode::F32`]). Leaves, traversal and accumulators are unchanged.
+    #[inline]
+    fn contribution_f32(&self, lambda_i: f64, eta: f64, stack: &mut Vec<i32>) -> (f64, f64) {
+        self.contribution_mode::<true>(lambda_i, eta, stack)
+    }
+
+    /// Shared traversal; `FAST_F32` selects the far-field arithmetic width.
+    /// Monomorphized, so the `false` instantiation compiles to exactly the
+    /// historical f64 code (same operations, same order → bit-identical).
+    #[inline]
+    fn contribution_mode<const FAST_F32: bool>(
+        &self,
+        lambda_i: f64,
+        eta: f64,
+        stack: &mut Vec<i32>,
+    ) -> (f64, f64) {
         let n = self.n;
         stack.clear();
         stack.push(0);
@@ -421,35 +476,80 @@ impl FlatChebTree {
                 // near-field loop — same conditioning, unconditional
                 // stability.
                 let nbase = ni * n;
-                // Vectorized across the panel's nodes (pairs of lanes): the
-                // refined reciprocal keeps the loop on pipelined mul/add —
-                // AArch64 has no FP64 vector divide (see stieltjes::simd).
-                let ts = &self.nodes[nbase..nbase + n];
-                let ws = &self.w[nbase..nbase + n];
-                let zv = F64x2::splat(lambda_i);
-                let etav = F64x2::splat(eta);
-                let eta2v = F64x2::splat(eta * eta);
-                let (mut afr, mut afi) = (F64x2::zero(), F64x2::zero());
-                let mut j = 0;
-                while j + 2 <= n {
-                    let d = zv - F64x2::load(ts, j);
-                    let inv = eta2v.fma(d, d).recip();
-                    let wj = F64x2::load(ws, j);
-                    afr = afr.fma(wj * d, inv);
-                    afi = afi.fma(wj * etav, inv);
-                    j += 2;
-                }
-                let mut fr = afr.hsum();
-                let mut fi = afi.hsum();
-                while j < n {
-                    // Scalar tail (n is typically odd).
-                    let dj = lambda_i - ts[j];
-                    let inv = 1.0 / (dj * dj + eta * eta);
-                    let wj = ws[j];
-                    fr += wj * dj * inv;
-                    fi += wj * eta * inv;
-                    j += 1;
-                }
+                // Vectorized across the panel's nodes. The f64 path uses
+                // 2-lane F64x2 (AArch64 has no FP64 vector divide — see
+                // stieltjes::simd); the f32 path uses 4-lane F32x4, which is
+                // 2x the lane count and a cheaper refined reciprocal, at the
+                // cost of f32 rounding inside an already-approximate
+                // far-field term.
+                let (fr, fi) = if FAST_F32 {
+                    let ts = &self.nodes_f32[nbase..nbase + n];
+                    let ws = &self.w_f32[nbase..nbase + n];
+                    let lam = lambda_i as f32;
+                    let e32 = eta as f32;
+                    let zv = F32x4::splat(lam);
+                    let etav = F32x4::splat(e32);
+                    let eta2v = F32x4::splat(e32 * e32);
+                    let (mut afr, mut afi) = (F32x4::zero(), F32x4::zero());
+                    let mut j = 0;
+                    while j + 4 <= n {
+                        let d = zv - F32x4::load(ts, j);
+                        let inv = eta2v.fma(d, d).recip();
+                        let wj = F32x4::load(ws, j);
+                        afr = afr.fma(wj * d, inv);
+                        afi = afi.fma(wj * etav, inv);
+                        j += 4;
+                    }
+                    // n not a multiple of 4: pack the remaining nodes into
+                    // ONE more 4-lane op with zero weights in the dead lanes
+                    // (measured faster than a scalar `1.0f32/x` tail, whose
+                    // hardware divide does not pipeline like FRECPE).
+                    if j < n {
+                        let mut dt = [0.0f32; 4];
+                        let mut wt = [0.0f32; 4];
+                        for k in 0..(n - j) {
+                            dt[k] = lam - ts[j + k];
+                            wt[k] = ws[j + k];
+                        }
+                        let d = F32x4::from_array(dt);
+                        let inv = eta2v.fma(d, d).recip();
+                        let wj = F32x4::from_array(wt);
+                        afr = afr.fma(wj * d, inv);
+                        afi = afi.fma(wj * etav, inv);
+                    }
+                    // Accumulate the f32 lanes into f64 scalars (never f32).
+                    let fr = afr.hsum() as f64;
+                    let fi = afi.hsum() as f64;
+                    (fr, fi)
+                } else {
+                    let ts = &self.nodes[nbase..nbase + n];
+                    let ws = &self.w[nbase..nbase + n];
+                    let zv = F64x2::splat(lambda_i);
+                    let etav = F64x2::splat(eta);
+                    let eta2v = F64x2::splat(eta * eta);
+                    let (mut afr, mut afi) = (F64x2::zero(), F64x2::zero());
+                    let mut j = 0;
+                    while j + 2 <= n {
+                        let d = zv - F64x2::load(ts, j);
+                        let inv = eta2v.fma(d, d).recip();
+                        let wj = F64x2::load(ws, j);
+                        afr = afr.fma(wj * d, inv);
+                        afi = afi.fma(wj * etav, inv);
+                        j += 2;
+                    }
+                    let mut fr = afr.hsum();
+                    let mut fi = afi.hsum();
+                    while j < n {
+                        // Scalar tail (n is typically odd).
+                        let dj = lambda_i - ts[j];
+                        let inv = 1.0 / (dj * dj + eta * eta);
+                        let wj = ws[j];
+                        fr += wj * dj * inv;
+                        fi += wj * eta * inv;
+                        j += 1;
+                    }
+                    (fr, fi)
+                };
                 re += fr;
                 im += fi;
             } else {
@@ -665,6 +765,36 @@ pub fn compute_all_stieltjes_chebcode_impl(
     leaf_cap: usize,
     parallel: bool,
 ) -> Vec<(f64, f64)> {
+    compute_all_stieltjes_chebcode_impl_mode::<false>(eigenvalues, eta, theta, n, leaf_cap, parallel)
+}
+
+/// [`compute_all_stieltjes_chebcode_impl`] with the four-lane **f32
+/// far-field** ([`FastMode::F32`]) and everything else f64.
+///
+/// Same arguments and same return contract (raw sums). The tree is built
+/// exactly as in the f64 entry point and the f32 node/weight mirror is
+/// derived from it, so the two entry points differ ONLY in the far-field
+/// arithmetic — which is what makes them A/B-able from one binary.
+pub fn compute_all_stieltjes_chebcode_impl_f32(
+    eigenvalues: &[f64],
+    eta: f64,
+    theta: f64,
+    n: usize,
+    leaf_cap: usize,
+    parallel: bool,
+) -> Vec<(f64, f64)> {
+    compute_all_stieltjes_chebcode_impl_mode::<true>(eigenvalues, eta, theta, n, leaf_cap, parallel)
+}
+
+/// Shared implementation for both [`FastMode`]s; see the wrappers above.
+fn compute_all_stieltjes_chebcode_impl_mode<const FAST_F32: bool>(
+    eigenvalues: &[f64],
+    eta: f64,
+    theta: f64,
+    n: usize,
+    leaf_cap: usize,
+    parallel: bool,
+) -> Vec<(f64, f64)> {
     let p = eigenvalues.len();
     if p == 0 {
         return Vec::new();
@@ -686,12 +816,12 @@ pub fn compute_all_stieltjes_chebcode_impl(
     let tree = FlatChebTree::build(sorted, n, theta, leaf_cap);
 
     if parallel {
-        eval_points_parallel(&tree, eigenvalues, eta)
+        eval_points_parallel::<FAST_F32>(&tree, eigenvalues, eta)
     } else {
         let mut stack = Vec::with_capacity(64);
         let mut result = Vec::with_capacity(p);
         for &lambda_i in eigenvalues {
-            let (re, im) = tree.contribution(lambda_i, eta, &mut stack);
+            let (re, im) = tree.contribution_mode::<FAST_F32>(lambda_i, eta, &mut stack);
             result.push((re, im));
         }
         result
@@ -756,27 +886,62 @@ impl ChebCodeBatch {
         self.tree.contribution(x, eta, &mut stack)
     }
 
+    /// [`Self::evaluate_point`] with the four-lane f32 far field.
+    pub fn evaluate_point_f32(&self, x: f64, eta: f64) -> (f64, f64) {
+        let mut stack = Vec::with_capacity(64);
+        self.tree.contribution_f32(x, eta, &mut stack)
+    }
+
     /// Evaluate the sum at ARBITRARY query points (e.g. a deconvolution
     /// grid), one tree serving them all. Chunked Rayon optional.
     pub fn evaluate_points(&self, points: &[f64], eta: f64, parallel: bool) -> Vec<(f64, f64)> {
-        if !parallel {
-            let mut stack = Vec::with_capacity(64);
-            return points
-                .iter()
-                .map(|&x| self.tree.contribution(x, eta, &mut stack))
-                .collect();
+        self.evaluate_points_mode(points, eta, parallel, FastMode::F64)
+    }
+
+    /// [`Self::evaluate_points`] with an explicit [`FastMode`].
+    pub fn evaluate_points_mode(
+        &self,
+        points: &[f64],
+        eta: f64,
+        parallel: bool,
+        mode: FastMode,
+    ) -> Vec<(f64, f64)> {
+        match (mode, parallel) {
+            (FastMode::F64, false) => {
+                let mut stack = Vec::with_capacity(64);
+                points
+                    .iter()
+                    .map(|&x| self.tree.contribution(x, eta, &mut stack))
+                    .collect()
+            }
+            (FastMode::F32, false) => {
+                let mut stack = Vec::with_capacity(64);
+                points
+                    .iter()
+                    .map(|&x| self.tree.contribution_f32(x, eta, &mut stack))
+                    .collect()
+            }
+            (FastMode::F64, true) => eval_points_parallel::<false>(&self.tree, points, eta),
+            (FastMode::F32, true) => eval_points_parallel::<true>(&self.tree, points, eta),
         }
-        eval_points_parallel(&self.tree, points, eta)
     }
 
     /// Evaluate all sums for one η.
     pub fn evaluate(&self, eta: f64) -> Vec<(f64, f64)> {
+        self.evaluate_mode(eta, FastMode::F64)
+    }
+
+    /// [`Self::evaluate`] with an explicit [`FastMode`].
+    pub fn evaluate_mode(&self, eta: f64, mode: FastMode) -> Vec<(f64, f64)> {
         let mut stack = Vec::with_capacity(64);
         let flat: Vec<(f64, f64)> = self
             .tree
             .sorted
             .iter()
-            .map(|&x| self.tree.contribution(x, eta, &mut stack))
+            .map(|&x| match mode {
+                FastMode::F64 => self.tree.contribution(x, eta, &mut stack),
+                FastMode::F32 => self.tree.contribution_f32(x, eta, &mut stack),
+            })
             .collect();
         match &self.perm {
             None => flat,
@@ -942,6 +1107,32 @@ mod tests {
                 par[i].0,
                 par[i].1
             );
+        }
+    }
+
+    #[test]
+    fn chebcode_f32_far_field_tracks_f64() {
+        // The f32 path differs from f64 ONLY in the far field; leaves and the
+        // traversal are shared. Its deviation from f64 must stay inside the
+        // documented relaxed budget, and both must remain near the exact sum.
+        let p = 4000;
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
+        let eta = 0.1 / (p as f64).sqrt();
+        let a = compute_all_stieltjes_chebcode_impl(&evals, eta, 0.5, 9, 32, false);
+        let b = compute_all_stieltjes_chebcode_impl_f32(&evals, eta, 0.5, 9, 32, false);
+        let mut num = 0.0f64;
+        let mut den = 0.0f64;
+        for (x, y) in a.iter().zip(b.iter()) {
+            num += (x.0 - y.0).powi(2) + (x.1 - y.1).powi(2);
+            den += x.0.powi(2) + x.1.powi(2);
+        }
+        let rel = (num / den).sqrt();
+        assert!(rel < 1e-4, "f32 vs f64 rel-L2 {rel:.3e}");
+
+        // Parallel f32 must be bit-identical to sequential f32 (same kernel).
+        let bp = compute_all_stieltjes_chebcode_impl_f32(&evals, eta, 0.5, 9, 32, true);
+        for i in 0..p {
+            assert_eq!(b[i], bp[i], "seq/par f32 mismatch at {i}");
         }
     }
 
