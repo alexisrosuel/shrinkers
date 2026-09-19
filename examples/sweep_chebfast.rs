@@ -100,9 +100,7 @@ fn main() {
         // Best preset at each accuracy budget.
         println!("-- best per budget --");
         for budget in [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-8] {
-            if let Some((ms, err, theta, n, leaf)) =
-                rows.iter().find(|r| r.1 <= budget)
-            {
+            if let Some((ms, err, theta, n, leaf)) = rows.iter().find(|r| r.1 <= budget) {
                 println!(
                     "  err<={budget:.0e}: {ms:.3} ms ({:.2}x) err={err:.2e} theta={theta:.2} n={n} leaf={leaf}",
                     base / ms

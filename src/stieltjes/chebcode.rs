@@ -294,6 +294,7 @@ fn barycentric_row(x: f64, t: &[f64], lam: &[f64], w: &mut [f64], v: &mut [f64],
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_cheb(
     tree: &mut FlatChebTree,
     sm1: &[f64],
@@ -844,7 +845,14 @@ pub fn compute_all_stieltjes_chebcode_impl(
     leaf_cap: usize,
     parallel: bool,
 ) -> Vec<(f64, f64)> {
-    compute_all_stieltjes_chebcode_impl_mode::<false>(eigenvalues, eta, theta, n, leaf_cap, parallel)
+    compute_all_stieltjes_chebcode_impl_mode::<false>(
+        eigenvalues,
+        eta,
+        theta,
+        n,
+        leaf_cap,
+        parallel,
+    )
 }
 
 /// [`compute_all_stieltjes_chebcode_impl`] with the four-lane **f32

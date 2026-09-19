@@ -137,19 +137,25 @@ Per query: O(log p) levels × O(accepted panels × n) far-field work +
 O(leaf_cap) near-field work. With θ = 0.5 roughly half the angular
 neighborhood is accepted at each level, giving the observed
 O((p + Q)·log p)-class scaling and the measured runtimes in
-`docs/pareto/bench_after.json` (ChebCodeFast: 2.3 ms at p = 10⁴ sequential,
-12–13 ms at p = 5×10⁴).
+`docs/pareto/bench_after.json` (ChebCodeFast after the `[Unreleased]`
+retune: 0.9 ms at p = 10⁴ sequential, 5.1 ms at p = 5×10⁴ end-to-end).
 
 ## Presets
 
 | method | θ | n | leaf_cap | error class | note |
 |---|---|---|---|---|---|
 | `chebcode` | 0.50 | 11 | 32 | ~5e-10 | dispatch default preset |
-| `chebcode_fast` (`chebf`) | 0.50 | 9 | 32 | ~1e-8 | fastest; owns most speed bins |
+| `chebcode_fast` (`chebf`) | 1.00 | 8 | 32 | ~1e-5 (f32 far field) | fastest at every size; owns every speed bin |
 | `chebcode_balanced` (`chebb`) | 0.55 | 11 | 32 | ~3e-10 | FAST+6 % runtime |
 | `chebcode_xtreme` (`chebx`) | 0.25 | 11 | 16 | ~1e-12/13 | precision niche |
 
 ![Measured preset accuracy classes](img/chebcode_presets.png)
+
+> The `chebcode_fast` point below was moved again in the `[Unreleased]`
+> round (θ 1.0, n 8, four-lane f32 far field): it now sits at a ~1e-5 error
+> class and owns every speed bin. The parameter-sensitivity notes that
+> follow were measured against the previous (θ 0.5, n 9) point and are kept
+> as the record that produced `chebcode_balanced`.
 
 Parameter sensitivity, measured with
 `examples/measure_cheb_sweep.rs` (interleaved A/B, error vs the exact

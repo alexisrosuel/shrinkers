@@ -57,7 +57,7 @@ fn time<F: FnMut()>(mut f: F) -> f64 {
 /// Interleaved A/B: alternating order across `rounds` (>=7 recommended), so
 /// drift in machine load hits both arms roughly equally. Warmup excludes the
 /// first touch of each arm. Returns (median_a_ms, median_b_ms).
-fn interleaved<FA: FnMut() -> (), FB: FnMut() -> ()>(rounds: usize, mut a: FA, mut b: FB) -> (f64, f64) {
+fn interleaved<FA: FnMut(), FB: FnMut()>(rounds: usize, mut a: FA, mut b: FB) -> (f64, f64) {
     a();
     b();
     let mut ta = Vec::with_capacity(rounds);
@@ -92,7 +92,10 @@ fn main() {
     if let Some(theta) = std::env::args().nth(3).and_then(|s| s.parse::<f64>().ok()) {
         preset.theta = theta;
     }
-    if let Some(n) = std::env::args().nth(4).and_then(|s| s.parse::<usize>().ok()) {
+    if let Some(n) = std::env::args()
+        .nth(4)
+        .and_then(|s| s.parse::<usize>().ok())
+    {
         preset.n = n;
     }
 
@@ -111,20 +114,57 @@ fn main() {
             // `compute_all_stieltjes` already returns the 1/p-scaled transform;
             // the impl path returns raw sums.
             let inv_p = 1.0 / p as f64;
-            let got = compute_all_stieltjes_chebcode_impl(&evs, eta, preset.theta, preset.n, preset.leaf_cap, false);
-            let scaled: Vec<(f64, f64)> = got.iter().map(|&(r, i)| (r * inv_p, i * inv_p)).collect();
+            let got = compute_all_stieltjes_chebcode_impl(
+                &evs,
+                eta,
+                preset.theta,
+                preset.n,
+                preset.leaf_cap,
+                false,
+            );
+            let scaled: Vec<(f64, f64)> =
+                got.iter().map(|&(r, i)| (r * inv_p, i * inv_p)).collect();
             println!("chebf.rel_l2.p{p}\t{:.6e}", rel_l2(&scaled, &exact));
-            let gotp = compute_all_stieltjes_chebcode_impl(&evs, eta, preset.theta, preset.n, preset.leaf_cap, true);
-            let scaledp: Vec<(f64, f64)> = gotp.iter().map(|&(r, i)| (r * inv_p, i * inv_p)).collect();
+            let gotp = compute_all_stieltjes_chebcode_impl(
+                &evs,
+                eta,
+                preset.theta,
+                preset.n,
+                preset.leaf_cap,
+                true,
+            );
+            let scaledp: Vec<(f64, f64)> =
+                gotp.iter().map(|&(r, i)| (r * inv_p, i * inv_p)).collect();
             println!("chebf.rel_l2_par.p{p}\t{:.6e}", rel_l2(&scaledp, &exact));
 
             // f32 far-field path, same reference and scaling.
-            let got32 = compute_all_stieltjes_chebcode_impl_f32(&evs, eta, preset.theta, preset.n, preset.leaf_cap, false);
-            let scaled32: Vec<(f64, f64)> = got32.iter().map(|&(r, i)| (r * inv_p, i * inv_p)).collect();
+            let got32 = compute_all_stieltjes_chebcode_impl_f32(
+                &evs,
+                eta,
+                preset.theta,
+                preset.n,
+                preset.leaf_cap,
+                false,
+            );
+            let scaled32: Vec<(f64, f64)> =
+                got32.iter().map(|&(r, i)| (r * inv_p, i * inv_p)).collect();
             println!("chebf.rel_l2_f32.p{p}\t{:.6e}", rel_l2(&scaled32, &exact));
-            let got32p = compute_all_stieltjes_chebcode_impl_f32(&evs, eta, preset.theta, preset.n, preset.leaf_cap, true);
-            let scaled32p: Vec<(f64, f64)> = got32p.iter().map(|&(r, i)| (r * inv_p, i * inv_p)).collect();
-            println!("chebf.rel_l2_f32_par.p{p}\t{:.6e}", rel_l2(&scaled32p, &exact));
+            let got32p = compute_all_stieltjes_chebcode_impl_f32(
+                &evs,
+                eta,
+                preset.theta,
+                preset.n,
+                preset.leaf_cap,
+                true,
+            );
+            let scaled32p: Vec<(f64, f64)> = got32p
+                .iter()
+                .map(|&(r, i)| (r * inv_p, i * inv_p))
+                .collect();
+            println!(
+                "chebf.rel_l2_f32_par.p{p}\t{:.6e}",
+                rel_l2(&scaled32p, &exact)
+            );
         }
         "build" => {
             let t = bench(15, || {
@@ -167,12 +207,22 @@ fn main() {
                 7,
                 || {
                     let _ = compute_all_stieltjes_chebcode_impl(
-                        &evs, eta, preset.theta, preset.n, preset.leaf_cap, false,
+                        &evs,
+                        eta,
+                        preset.theta,
+                        preset.n,
+                        preset.leaf_cap,
+                        false,
                     );
                 },
                 || {
                     let _ = compute_all_stieltjes_chebcode_impl_f32(
-                        &evs, eta, preset.theta, preset.n, preset.leaf_cap, false,
+                        &evs,
+                        eta,
+                        preset.theta,
+                        preset.n,
+                        preset.leaf_cap,
+                        false,
                     );
                 },
             );
@@ -183,12 +233,22 @@ fn main() {
                 7,
                 || {
                     let _ = compute_all_stieltjes_chebcode_impl(
-                        &evs, eta, preset.theta, preset.n, preset.leaf_cap, true,
+                        &evs,
+                        eta,
+                        preset.theta,
+                        preset.n,
+                        preset.leaf_cap,
+                        true,
                     );
                 },
                 || {
                     let _ = compute_all_stieltjes_chebcode_impl_f32(
-                        &evs, eta, preset.theta, preset.n, preset.leaf_cap, true,
+                        &evs,
+                        eta,
+                        preset.theta,
+                        preset.n,
+                        preset.leaf_cap,
+                        true,
                     );
                 },
             );

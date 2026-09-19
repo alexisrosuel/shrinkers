@@ -36,7 +36,11 @@ fn main() {
             ps.push(v);
         }
     }
-    let ps = if ps.is_empty() { vec![10_000, 50_000] } else { ps };
+    let ps = if ps.is_empty() {
+        vec![10_000, 50_000]
+    } else {
+        ps
+    };
     let leaves = [8usize, 12, 16, 24, 32, 48, 64, 96, 128, 256];
 
     for &p in &ps {

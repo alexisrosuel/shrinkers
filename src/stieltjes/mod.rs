@@ -354,8 +354,7 @@ pub fn compute_stieltjes_at_points(
             // This tree serves `query_points.len()` queries, not p — relax the
             // leaf capacity accordingly (see `grid_leaf_cap`).
             let leaf_cap = grid_leaf_cap(n, eigenvalues.len(), query_points.len(), leaf_cap);
-            let batch =
-                chebcode::ChebCodeBatch::build_mode(eigenvalues, theta, n, leaf_cap, mode);
+            let batch = chebcode::ChebCodeBatch::build_mode(eigenvalues, theta, n, leaf_cap, mode);
             batch.evaluate_points(query_points, eta, parallel)
         }
         _ => {
