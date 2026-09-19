@@ -186,9 +186,98 @@ only doubles live registers.
   transfer, compresses each cross-block level once instead of twice
   (p = 20 k seq: −41 %; see CHANGELOG 0.1.x).
 
+### Four-lane f32 far field (`F32x4`, `chebcode_fast` round)
+
+The far-field dot product is already an interpolation (~1e-5 at the speed
+preset), so its arithmetic does not need 53 bits. AArch64 gives **4 f32 lanes**
+per NEON register against 2 for f64, and an f32 refined reciprocal
+(`vrecpeq_f32` + two `vrecpsq_f32`) needs no scalar divide. `F32x4` mirrors
+`F64x2` (same safe-abstraction policy, all `unsafe` still only in `simd.rs`),
+and the tree keeps an `nodes_f32`/`w_f32` mirror of the flat panel arrays so
+one build serves both arithmetics.
+
+Only the well-separated far field is f32: traversal, the distance test, the
+leaf exact sums and the returned accumulators stay f64, and each panel's four
+lanes are reduced into an f64 scalar. Measured **~1.30x** on the far field at
+a ~6e-7 relative-error floor. `n` must be a multiple of 4 to see it (n = 4 →
+1.10x, n = 6 = 4 + masked tail → 0.99x, n = 8 → 1.33-1.37x), which is why the
+speed preset uses n = 8; a non-multiple-of-4 tail is packed into one masked
+4-lane op with zero weights rather than a scalar `1.0f32/x` loop, whose
+hardware divide does not pipeline like the estimate. The accuracy presets
+(`chebcode`, `chebcode_balanced`, `chebcode_xtreme`) keep the f64 path — a
+17-bit `F64x2::recip_fast` (one Newton step) did measure +1.19-1.24x on the
+f64 far field with a ~1.4e-6 floor, but it would cap `chebcode_xtreme`'s
+~1e-12 class, so it survives only as a measurement reference.
+
+`eval_points_parallel` writes into one preallocated output through
+`par_chunks_mut`, and the traversal stack is a fixed inline
+`TraversalStack` whose depth bound is *guaranteed* by the builder
+(`MAX_TREE_DEPTH`, a deeper node becomes an oversized exact leaf) — together
+1.04-1.07x on Rayon at p = 50 000 with seq CPU exactly neutral.
+
+### ChebCodeFast round: what did NOT work (measured negatives)
+
+Six ideas were implemented, measured against the shipped point with the same
+harnesses, and reverted. They are recorded here (and in the `[Unreleased]`
+CHANGELOG round) so they are not re-attempted.
+
+* **k-ary tree (k = 4, 8)** — generalizing the binary tree to k children
+  (flat `children[]`, k-way split, k-way `merge_weights`, k-aware traversal)
+  is **1.1-2.0x SLOWER** at equal accuracy (p = 50 000 seq: k=2 13.10 ms,
+  k=4 16.65, k=8 21.55). The hypothesis — `log_k` fewer levels means fewer
+  accepted panels — is false because accepted panels *per level* are O(k),
+  not O(1): an instrumented traversal counted ~178/246/221 far-field terms
+  per query for k = 2/4/8 at p = 10 000. Worse, the shallow k = 8 tree dumps
+  the near field into exact leaf sums (17 → 40 → **458** leaf sources per
+  query). Re-tuning `leaf_cap` to 8/16 never reached parity. Keep the binary
+  tree. (k = 2 was kept bit-identical throughout, FNV fingerprint
+  `ba33dff5492e5540`.)
+* **Packed AoS `Node`** (one 32 B cache line per visit instead of five SoA
+  arrays): **+2.6 % sequential CPU**, wall `eval.seq` 0.93-0.96x. The
+  metadata arrays are traversed nearly sequentially, so the SoA layout
+  already prefetches well, while AoS adds address arithmetic and a
+  `sub`+`mul` on the acceptance branch.
+* **Even-`n` zero-weight padding** (remove the odd-`n` scalar tail by
+  appending a zero-weight node): **+3.3 % sequential CPU**; grid CPU exactly
+  unchanged (0.280 s → 0.280 s over fixed work). The padded lane still pays a
+  full refined reciprocal and the flat arrays grow from stride 9 to 10.
+  Wall-clock "grid wins" seen under load (up to 1.17x) were contention
+  artifacts. Moot now: the speed preset uses n = 8.
+* **Two-accumulator far-field unroll** (two independent `F64x2` accumulator
+  pairs, to halve the serial FMA chain): p = 50 000 sequential
+  9.22 → 9.87 ms. The n/2 FMAs were never the critical path; the extra live
+  registers cost more than the shortened chain.
+* **Two-lane refined-reciprocal `barycentric_row`** (vectorize the build's
+  `β_j/(x−t_j)` with `F64x2::recip`): **~20 % SLOWER** than the scalar `fdiv`
+  (p = 50 000 build 0.84 → 1.03 ms; `fills-only` 0.38 → 0.47 ms). The build's
+  `n`-loop is short, so the reciprocal's serial 7-op latency chain plus the
+  extra loads/stores beats any throughput gain. Per-lane `d == 0` checks made
+  it worse still (two lane extractions per pair); the exact-node hit is
+  instead detected by one post-loop `s.is_finite()` test. The build stays
+  scalar.
+* **Parallel tree build** — two variants, both gated on `parallel = true` and
+  p ≥ 2000: (a) structural DFS + parallel leaf projections + per-depth
+  parallel merges, (b) leaf-only parallel projections with serial reverse
+  merges. Both **0.63-0.93x** end-to-end (`all.par`). At p = 50 000 the whole
+  build is ~0.8 ms, while a Rayon level barrier plus per-level buffer
+  allocation and serial scatter costs more than that — the tree is deep
+  (≈ 11 levels) and each level is small. The build stays serial, and that is
+  what caps `all.par` at ~1.4-1.8x.
+
 ## Methodology note
 
 Every optimization above survived an interleaved A/B measurement before
 shipping; the ones listed as negatives were measured too and documented
 rather than deleted. Reproduce with the `examples/measure_*.rs` harnesses
 (median ≥9 interleaved repetitions unless stated otherwise).
+
+**Load caveat.** Several of these decisions were taken while other workstreams
+were benchmarking on the same 10-core machine (load average 8-12), where wall
+clock swung by up to 2.7x. Wall-clock A/B ratios from interleaved (ABBA) runs
+are still usable, but *accept/reject decisions on sub-5 % effects* were taken
+on contention-independent evidence: a fixed-work loop wrapped in
+`/usr/bin/time -l`, comparing **user CPU seconds** (noise floor ±0.4-1.2 %).
+Six of the negatives above (node packing, padding, the accumulator unroll) are
+exactly the kind of small effect that wall clock alone would have
+mis-attributed — a reminder to reach for CPU time when the expected delta is
+a few percent.

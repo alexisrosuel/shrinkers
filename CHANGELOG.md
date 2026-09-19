@@ -66,7 +66,9 @@ against the exact `blocked` pipeline (`examples/validate_fast_preset.rs`).
 The deconvolution grid is dispatched to `ChebCodeFast` only when
 `nq·4 < p`, so the f32 far field never sees a near-singular query set.
 
-**Measured negatives (kept on purpose, all reverted)**
+**Measured negatives (kept on purpose, all reverted — full detail with the
+per-experiment numbers lives in
+[docs/hardware_optimizations.md](docs/hardware_optimizations.md#chebcodefast-round-what-did-not-work-measured-negatives))**
 - **k-ary tree** (k = 4, 8): 1.1–2.0x SLOWER end to end, at equal accuracy.
   Accepted panels per level are O(k), not O(1), which cancels the `log_k`
   shallower tree; and the shallow k = 8 tree dumps the near field into exact
