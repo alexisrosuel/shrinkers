@@ -350,12 +350,12 @@ pub fn compute_stieltjes_at_points(
         | StieltjesMethod::ChebCodeXtreme
         | StieltjesMethod::ChebCodeBalanced => {
             let preset = cheb_preset(method);
-            let (theta, n, leaf_cap, fast_recip) = preset.parts_prec();
+            let (theta, n, leaf_cap, mode) = preset.parts_mode();
             // This tree serves `query_points.len()` queries, not p — relax the
             // leaf capacity accordingly (see `grid_leaf_cap`).
             let leaf_cap = grid_leaf_cap(n, eigenvalues.len(), query_points.len(), leaf_cap);
             let batch =
-                chebcode::ChebCodeBatch::build_prec(eigenvalues, theta, n, leaf_cap, fast_recip);
+                chebcode::ChebCodeBatch::build_mode(eigenvalues, theta, n, leaf_cap, mode);
             batch.evaluate_points(query_points, eta, parallel)
         }
         _ => {
