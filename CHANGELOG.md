@@ -5,6 +5,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### ChebCodeFast: relaxed operating point + 4-lane f32 far field
+
+`chebcode_fast` was re-optimized end to end, with accuracy explicitly traded
+for speed (the preset's contract moves from a ~1e-8 to a ~1e-5 relative-L2
+class; `chebcode`, `chebcode_balanced` and `chebcode_xtreme` keep the
+accuracy-grade f64 paths unchanged).
+
+Interleaved A/B, same harness (`examples/measure_chebfast.rs compare`),
+p = 10 000 / 50 000, MP spectrum c = 0.25, η = 1/√p, Apple M1 Max, quiet
+machine. `all.*` is the public dispatcher (build + evaluation + 1/p scaling):
+
+| metric | p | before | after | speedup |
+|---|---|---|---|---|
+| `eval.seq` | 10 000 | 1.879 ms | 0.753 ms | **2.49x** |
+| `eval.seq` | 50 000 | 10.391 ms | 4.288 ms | **2.42x** |
+| `eval.par` | 10 000 | 0.430 ms | 0.191 ms | **2.25x** |
+| `eval.par` | 50 000 | 1.914 ms | 0.694 ms | **2.76x** |
+| `all.seq` | 10 000 | 2.100 ms | 0.953 ms | **2.20x** |
+| `all.seq` | 50 000 | 11.131 ms | 5.148 ms | **2.16x** |
+| `all.par` | 50 000 | 2.549 ms | 1.752 ms | **1.45x** |
+| `grid.seq` (nq = 200) | 50 000 | 0.0488 ms | 0.0197 ms | **2.48x** |
+| `build` | 50 000 | 0.859 ms | 0.803 ms | 1.07x |
+
+`all.par` is capped by the still-serial tree build (~0.8 ms = ~45 % of the
+parallel wall clock at p = 50 000); the evaluation itself scales 6.2x over the
+sequential one.
+
+**Changed**
+- **Preset retune**: `ChebPreset::FAST` goes from `(theta 0.5, n 9, leaf 32,
+  f64)` to `(theta 1.0, n 8, leaf 32, f32)`. `theta = 1.0` accepts far more
+  panels as far field, `n = 8` is a multiple of the 4-lane f32 width, and
+  `leaf_cap = 32` re-swept against the new point (`examples/sweep_leaf.rs`)
+  in both η conventions.
+- **Four-lane f32 far field** (`F32x4` in `src/stieltjes/simd.rs`, still the
+  crate's only `unsafe`). ONLY the well-separated far-field dot product is
+  f32: traversal, the distance test, the leaf exact sums and the returned
+  accumulators stay f64, and each panel's four lanes are reduced into an f64
+  scalar. ~1.3x on the far field with a ~6e-7 error floor; the accuracy
+  presets keep the 53-bit f64 reciprocal, which is what lets
+  `chebcode_xtreme` still reach ~1e-12.
+- **Fixed-size traversal stack.** `TraversalStack` (`[i32; 50]`, inline
+  push/pop) replaces every `Vec<i32>`, and the builder now *guarantees* the
+  depth (`MAX_TREE_DEPTH = 48`; a deeper node becomes an oversized exact
+  leaf) instead of assuming it.
+- **In-place parallel output.** `eval_points_parallel` preallocates the
+  result and writes it through `par_chunks_mut`, dropping the per-chunk
+  `Vec` + flatten (one allocation and one p-element copy per call).
+- **A/B-instrumented entry points.** `ChebPreset` now carries its far-field
+  `FastMode`, `compute_all_stieltjes_chebcode_impl_f32` and
+  `ChebCodeBatch::{evaluate_mode, evaluate_points_mode}` expose both
+  arithmetics on one shared tree, and `examples/measure_chebfast.rs` gains an
+  interleaved `ab` mode (plus `sweep_leaf.rs`, `validate_fast_preset.rs`).
+
+**Accuracy after the change** (library-default η = 0.1/√p, the worst case):
+the raw Stieltjes transform is 1.1e-6 … 1.5e-5 relative-L2 for p = 2 000 …
+50 000, and the *product* is essentially untouched — `deconvolve_spiked`
+bulk density 1.4e-6 … 3.8e-6 relative-L2 with identical spike recovery
+against the exact `blocked` pipeline (`examples/validate_fast_preset.rs`).
+The deconvolution grid is dispatched to `ChebCodeFast` only when
+`nq·4 < p`, so the f32 far field never sees a near-singular query set.
+
+**Measured negatives (kept on purpose, all reverted)**
+- **k-ary tree** (k = 4, 8): 1.1–2.0x SLOWER end to end, at equal accuracy.
+  Accepted panels per level are O(k), not O(1), which cancels the `log_k`
+  shallower tree; and the shallow k = 8 tree dumps the near field into exact
+  leaves (17 → 458 sources per query at p = 10 000). The binary tree stays.
+- **Packed AoS `Node`** (one cache line per visit): +2.6 % sequential CPU —
+  the metadata arrays are walked nearly sequentially, so the SoA layout
+  already prefetches well, while AoS adds address arithmetic.
+- **Even-`n` zero-weight padding** to kill the scalar tail: +3.3 % sequential
+  CPU (the padded lane still pays a full reciprocal). Moot now: `n = 8`.
+- **Two-accumulator far-field unroll**: p = 50 000 sequential 9.22 → 9.87 ms.
+  The accumulation chain is not the critical path.
+- **Two-lane refined-reciprocal `barycentric_row` in the build**: ~20 %
+  SLOWER than the scalar `fdiv` it replaces (reciprocal latency chain plus
+  extra loads/stores, in a short `n`-loop). The build stays scalar.
+- **Parallel tree build** (parallel leaf projections + per-depth parallel
+  merges, gated on `parallel = true`): 0.63–0.93x end to end. The per-level
+  Rayon barrier, buffer churn and scatter cost more than the ~0.8 ms of build
+  work at p = 50 000. Left serial.
+- **`F64x2::recip_fast`** (17-bit, 1 Newton step) did land +1.19–1.24x on the
+  f64 far field with a ~1.4e-6 floor, but the f32 far field is both faster
+  (~1.3x) and more accurate (~6e-7), so it is kept only as a measured
+  reference (`#[allow(dead_code)]`).
+
+---
+
 Performance round on the exact kernel, the deconvolution grid path and the
 treecode build. All numbers are interleaved before/after medians on the same
 Apple M1 Max, MP-like spectra, `mp_spectrum(p, c=0.25)`, η = 0.1/√p,

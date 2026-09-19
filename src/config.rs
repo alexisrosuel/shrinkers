@@ -575,11 +575,15 @@ mod tests {
     fn test_auto_resolution_is_parallelism_aware() {
         // (parallelism, p, expected pick) — mirrors the regenerated Pareto
         // speed bins; update together with pareto_autogen.rs.
+        // Every speed bin now resolves to `ChebCodeFast` in both columns:
+        // the retuned preset (theta 1.0, n 8, f32 far field) is the fastest
+        // measured point at every size, so the parallelism dimension no
+        // longer changes the pick.
         for (par, p, expected) in [
             (
                 Parallelism::Sequential,
                 10_000usize,
-                StieltjesMethod::ChebCodeBalanced,
+                StieltjesMethod::ChebCodeFast,
             ),
             (
                 Parallelism::Parallel,
@@ -594,7 +598,7 @@ mod tests {
             (
                 Parallelism::Parallel,
                 100usize,
-                StieltjesMethod::ChebCodeBalanced,
+                StieltjesMethod::ChebCodeFast,
             ),
         ] {
             let resolved = RmtConfig::new(0.5)
@@ -614,30 +618,32 @@ mod tests {
             .resolve_auto(10000);
         assert_eq!(cfg.parallelism, Parallelism::Sequential);
         // Method resolved based on the resolved (sequential) parallelism.
-        assert_eq!(cfg.stieltjes_method, StieltjesMethod::ChebCodeBalanced);
+        assert_eq!(cfg.stieltjes_method, StieltjesMethod::ChebCodeFast);
     }
 
     #[test]
     fn test_at_points_resolution_avoids_the_whole_grid_fft() {
-        // p = 50_000 sequential is the bin whose all-points speed pick is
-        // `Fft5`. On a 200-point deconvolution grid that costs the whole
-        // grid (11.7 ms) where the treecode needs 0.64 ms, so the at-points
-        // resolver must redirect it.
+        // The retuned table now picks `ChebCodeFast` for the all-points speed
+        // intent at every size, so the deconvolution grid must be left alone
+        // (the historical redirect existed because the large-p pick was
+        // `Fft5`, whose cost ignores the query count).
         let cfg = RmtConfig::new(0.5).with_stieltjes(StieltjesMethod::Auto);
         assert_eq!(
             cfg.resolve_auto(50_000).stieltjes_method,
-            StieltjesMethod::Fft5,
-            "precondition: the all-points table pick is Fft5 here"
+            StieltjesMethod::ChebCodeFast,
+            "precondition: the all-points table pick is ChebCodeFast here"
         );
         assert_eq!(
             cfg.resolve_auto_at_points(50_000, 200).stieltjes_method,
             StieltjesMethod::ChebCodeFast
         );
-        // A grid as large as the spectrum keeps the table's pick: there the
-        // FFT is genuinely the faster method.
+        // Explicitly-requested FFT methods are still redirected on a small
+        // grid (that rule is independent of the table).
+        let fft = RmtConfig::new(0.5).with_stieltjes(StieltjesMethod::Fft5);
         assert_eq!(
-            cfg.resolve_auto_at_points(50_000, 50_000).stieltjes_method,
-            StieltjesMethod::Fft5
+            fft.resolve_auto_at_points(50_000, 200).stieltjes_method,
+            StieltjesMethod::Fft5,
+            "an explicit method is never second-guessed"
         );
         // The same redirection applies to the explicit speed preset...
         let speed = RmtConfig::new(0.5).with_stieltjes(StieltjesMethod::SpeedAuto);
