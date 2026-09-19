@@ -64,7 +64,7 @@ vectorized NumPy version:
 ¹ machine precision — the zero-error anchor.  ² `chebcode_fast` preset
 (θ=1.0, n=8, leaf 32, four-lane f32 far field), rel. error ~1e-5: trading the
 exact family's zero error for it buys **~50×** at p = 50 000, while the
-`chebcode` (~5e-10) and `chebcode_xtreme` (~1e-12) presets cost 4–7× more
+`chebcode` (~5e-10) and `chebcode_xtreme` (~1e-12) presets cost 4–8× more
 than `chebcode_fast` (see [docs/internals.md](docs/internals.md) and the
 `[Unreleased]` CHANGELOG round for the full record). At microsecond scales
 both shrinkers curves flatten onto their fixed Python-call overhead — a
@@ -86,10 +86,12 @@ sharing. Measured with `examples/measure_runtime_audit.rs readme_par <p>`
 | 10 000 | 25.5 ms | 4.9 ms | **×5.2** |
 | 50 000 | 638 ms | 117 ms | **×5.4** |
 
-The all-cores times are unchanged by the current round; the *ratios* moved
-down only because the single-thread kernel got 15 % faster (interleaved
+The all-cores times are unchanged by that exact-kernel round; the *ratios*
+moved down only because the single-thread kernel got 15 % faster (interleaved
 before/after in [docs/internals.md](docs/internals.md)).
-ChebCodeFast scales too (×3.3–4.5). Note also that the NumPy baseline in figure 2
+`chebcode_fast` scales too — ×4.1 at p = 10 000 and ×5.7 at p = 50 000
+(0.75 → 0.19 ms, 4.35 → 0.76 ms; measured with
+`examples/measure_chebfast.rs compare`). Note also that the NumPy baseline in figure 2
 is itself single-core — even pinned to one thread, shrinkers still wins
 by roughly an order of magnitude (9.1× at p≈5000).
 
@@ -190,14 +192,17 @@ Note: pyRMT uses $\eta = 1/\sqrt{p}$ vs our $0.1/\sqrt{p}$. When using the same 
 ### Performance vs pyRMT
 
 > Note: the earlier `stieltjes_transform` / RIE entry point has been replaced
-> by `deconvolve_spiked` (spiked + bulk deconvolution). The `shrinkers` rows
-> below are the historical `deconvolve_spiked` timings (n_points=200); the
-> `chebcode_fast` retune in the `[Unreleased]` CHANGELOG round made that path
-> 2.2–2.5× faster again at equal deconvolution quality.
+> by `deconvolve_spiked` (spiked + bulk deconvolution). This table is the
+> historical 0.1.0 comparison campaign: the `shrinkers` row is that
+> measurement, retained so the ratios against `rie_numpy` / pyRMT stay on one
+> footing. The current numbers are the table under *"It is absurdly fast"*
+> above — the `[Unreleased]` `chebcode_fast` retune made this path 2.2–2.5×
+> faster again at equal deconvolution quality, so the row below understates
+> it.
 
 | Method | p=100 | p=500 | p=1000 | Scaling |
 |--------|-------|-------|--------|---------|
-| **`shrinkers` deconvolve_spiked** | **9.4 µs** | **33.2 µs** | **63.2 µs** | O(p²) |
+| **`shrinkers` deconvolve_spiked** (0.1.0) | **9.4 µs** | **33.2 µs** | **63.2 µs** | O(p²) |
 | `rie_numpy` (pure NumPy) | 60 µs | 1337 µs | 5381 µs | O(p²) |
 | pyRMT (fixed, loop-based) | 1164 µs | 2695 µs | 6642 µs | O(p²) |
 | **pyRMT (original buggy)** | **928 000 µs** | **1 474 000 µs** | — | **O(p³)** |
