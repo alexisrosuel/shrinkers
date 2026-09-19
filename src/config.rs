@@ -51,8 +51,10 @@ pub enum StieltjesMethod {
     /// O(p log p) Chebyshev-interpolation treecode (faster than the multipole
     /// treecode at every size, especially when parallelized)
     ChebCode,
-    /// Speed-tuned ChebCode preset (theta=0.5, n=9, leaf=32): ~1e-8 error
-    /// class at the lowest measured runtime of the family.
+    /// Speed-tuned ChebCode preset (theta=1.0, n=8, leaf=32, 4-lane f32
+    /// far field): ~2.3x the historical (0.5, 9) f64 point at a
+    /// ~1e-5-class relative-L2 error. `chebcode`/`chebcode_balanced` keep
+    /// the accuracy-grade operating points.
     ChebCodeFast,
     /// Precision-tuned ChebCode preset (theta=0.25, n=11, leaf=16):
     /// ~1e-12/1e-13 class without paying the full exact O(p²).
@@ -125,7 +127,7 @@ impl StieltjesMethod {
             Self::Fft2 => "O(p log p) 2-FFT grid (packed real + Hilbert)",
             Self::TreeCode => "O(p log p) 1D tree code (FMM)",
             Self::ChebCode => "O(p log p) Chebyshev-interpolation treecode",
-            Self::ChebCodeFast => "ChebCode speed preset (theta .5, n 9, leaf 32)",
+            Self::ChebCodeFast => "ChebCode speed preset (theta 1.0, n 8, leaf 32, f32 far field)",
             Self::ChebCodeXtreme => "ChebCode precision preset (theta .25, n 11, leaf 16)",
             Self::ChebCodeBalanced => "ChebCode balanced preset (theta .55, n 11, leaf 32)",
             Self::Ewald => "O(p·k+M log M) Ewald near/far splitting",
