@@ -71,6 +71,56 @@ pub enum FastMode {
 /// per-task cache warmth is high.
 const EVAL_CHUNK: usize = 256;
 
+/// Maximum recursion depth of the tree build — and therefore the hard bound on
+/// the traversal stack.
+///
+/// Realistic spectra bottom out at depth ~10-17 for p <= 1e6, so this bound is
+/// never reached in practice. It is a GUARANTEE for pathologically clustered
+/// inputs: a node at this depth becomes an (oversized) exact leaf instead of
+/// splitting further, so [`TraversalStack`]'s fixed buffer cannot overflow.
+const MAX_TREE_DEPTH: usize = 48;
+
+/// Fixed-capacity DFS stack, replacing `Vec<i32>`.
+///
+/// A root-to-leaf walk pushes at most one pending sibling per level, so
+/// `MAX_TREE_DEPTH + 1` slots always suffice ([`MAX_TREE_DEPTH`] is enforced
+/// by the builder). The buffer lives inline: no heap indirection and no
+/// capacity check on push. One instance is reused across a whole chunk of
+/// queries.
+#[derive(Clone)]
+struct TraversalStack {
+    buf: [i32; MAX_TREE_DEPTH + 2],
+    top: usize,
+}
+
+impl TraversalStack {
+    #[inline]
+    fn new() -> Self {
+        Self {
+            buf: [0; MAX_TREE_DEPTH + 2],
+            top: 0,
+        }
+    }
+    #[inline]
+    fn clear(&mut self) {
+        self.top = 0;
+    }
+    #[inline]
+    fn push(&mut self, v: i32) {
+        self.buf[self.top] = v;
+        self.top += 1;
+    }
+    #[inline]
+    fn pop(&mut self) -> Option<i32> {
+        if self.top == 0 {
+            None
+        } else {
+            self.top -= 1;
+            Some(self.buf[self.top])
+        }
+    }
+}
+
 /// Evaluate one tree at many query points, in parallel chunks.
 ///
 /// Shared by `compute_all_stieltjes_chebcode_impl` and
@@ -81,19 +131,20 @@ fn eval_points_parallel<const FAST_F32: bool>(
     points: &[f64],
     eta: f64,
 ) -> Vec<(f64, f64)> {
-    let mut parts: Vec<Vec<(f64, f64)>> = Vec::new();
+    // Preallocate once and write in place: the previous form collected a
+    // `Vec` per chunk and then flattened them (one extra allocation plus a
+    // full p-element copy per call).
+    let mut out = vec![(0.0f64, 0.0f64); points.len()];
     points
         .par_chunks(EVAL_CHUNK)
-        .map(|chunk| {
-            let mut stack = Vec::with_capacity(64);
-            let mut out = Vec::with_capacity(chunk.len());
-            for &x in chunk {
-                out.push(tree.contribution_mode::<FAST_F32>(x, eta, &mut stack));
+        .zip(out.par_chunks_mut(EVAL_CHUNK))
+        .for_each(|(chunk, dst)| {
+            let mut stack = TraversalStack::new();
+            for (&x, d) in chunk.iter().zip(dst.iter_mut()) {
+                *d = tree.contribution_mode::<FAST_F32>(x, eta, &mut stack);
             }
-            out
-        })
-        .collect_into_vec(&mut parts);
-    parts.into_iter().flatten().collect()
+        });
+    out
 }
 
 /// Flat, structure-of-arrays Chebyshev tree.
@@ -251,6 +302,7 @@ fn build_cheb(
     lo_idx: usize,
     hi_idx: usize,
     leaf_cap: usize,
+    depth: usize,
 ) -> i32 {
     let idx = tree.lo.len() as i32;
     let count = hi_idx - lo_idx;
@@ -269,7 +321,7 @@ fn build_cheb(
     tree.left.push(-1);
     tree.right.push(-1);
 
-    if count <= leaf_cap {
+    if count <= leaf_cap || depth >= MAX_TREE_DEPTH {
         fill_weights(tree, idx as usize, lo_idx, hi_idx, sm1, lam, scratch);
         return idx;
     }
@@ -279,8 +331,8 @@ fn build_cheb(
     if split == lo_idx || split == hi_idx {
         split = (lo_idx + hi_idx) / 2;
     }
-    let li = build_cheb(tree, sm1, lam, scratch, lo_idx, split, leaf_cap);
-    let ri = build_cheb(tree, sm1, lam, scratch, split, hi_idx, leaf_cap);
+    let li = build_cheb(tree, sm1, lam, scratch, lo_idx, split, leaf_cap, depth + 1);
+    let ri = build_cheb(tree, sm1, lam, scratch, split, hi_idx, leaf_cap, depth + 1);
 
     let ni = idx as usize;
     tree.left[ni] = li;
@@ -374,6 +426,7 @@ impl FlatChebTree {
             0,
             sorted.len(),
             leaf_cap,
+            0,
         );
         // f32 mirror of the flattened nodes/weights for `FastMode::F32`.
         // One extra pass over the (small) panel arrays; the f64 arrays are
@@ -386,14 +439,14 @@ impl FlatChebTree {
     /// Stieltjes contribution at query z=(lambda_i, -eta): per-query iterative
     /// walk. Returns (real, imag) raw sums (not scaled by 1/p).
     #[inline]
-    fn contribution(&self, lambda_i: f64, eta: f64, stack: &mut Vec<i32>) -> (f64, f64) {
+    fn contribution(&self, lambda_i: f64, eta: f64, stack: &mut TraversalStack) -> (f64, f64) {
         self.contribution_mode::<false>(lambda_i, eta, stack)
     }
 
     /// [`Self::contribution`] with the four-lane f32 far field
     /// ([`FastMode::F32`]). Leaves, traversal and accumulators are unchanged.
     #[inline]
-    fn contribution_f32(&self, lambda_i: f64, eta: f64, stack: &mut Vec<i32>) -> (f64, f64) {
+    fn contribution_f32(&self, lambda_i: f64, eta: f64, stack: &mut TraversalStack) -> (f64, f64) {
         self.contribution_mode::<true>(lambda_i, eta, stack)
     }
 
@@ -405,7 +458,7 @@ impl FlatChebTree {
         &self,
         lambda_i: f64,
         eta: f64,
-        stack: &mut Vec<i32>,
+        stack: &mut TraversalStack,
     ) -> (f64, f64) {
         let n = self.n;
         stack.clear();
@@ -580,7 +633,7 @@ impl FlatChebTree {
         lambda_i: f64,
         eta_v: F64x2,
         eta2_v: F64x2,
-        stack: &mut Vec<i32>,
+        stack: &mut TraversalStack,
     ) -> ((f64, f64), (f64, f64)) {
         let n = self.n;
         stack.clear();
@@ -844,7 +897,7 @@ fn compute_all_stieltjes_chebcode_impl_mode<const FAST_F32: bool>(
     if parallel {
         eval_points_parallel::<FAST_F32>(&tree, eigenvalues, eta)
     } else {
-        let mut stack = Vec::with_capacity(64);
+        let mut stack = TraversalStack::new();
         let mut result = Vec::with_capacity(p);
         for &lambda_i in eigenvalues {
             let (re, im) = tree.contribution_mode::<FAST_F32>(lambda_i, eta, &mut stack);
@@ -928,7 +981,7 @@ impl ChebCodeBatch {
 
     /// Evaluate the sum for a single query point at one η.
     pub fn evaluate_point(&self, x: f64, eta: f64) -> (f64, f64) {
-        let mut stack = Vec::with_capacity(64);
+        let mut stack = TraversalStack::new();
         match self.mode {
             FastMode::F64 => self.tree.contribution(x, eta, &mut stack),
             FastMode::F32 => self.tree.contribution_f32(x, eta, &mut stack),
@@ -937,7 +990,7 @@ impl ChebCodeBatch {
 
     /// [`Self::evaluate_point`] with the four-lane f32 far field.
     pub fn evaluate_point_f32(&self, x: f64, eta: f64) -> (f64, f64) {
-        let mut stack = Vec::with_capacity(64);
+        let mut stack = TraversalStack::new();
         self.tree.contribution_f32(x, eta, &mut stack)
     }
 
@@ -957,14 +1010,14 @@ impl ChebCodeBatch {
     ) -> Vec<(f64, f64)> {
         match (mode, parallel) {
             (FastMode::F64, false) => {
-                let mut stack = Vec::with_capacity(64);
+                let mut stack = TraversalStack::new();
                 points
                     .iter()
                     .map(|&x| self.tree.contribution(x, eta, &mut stack))
                     .collect()
             }
             (FastMode::F32, false) => {
-                let mut stack = Vec::with_capacity(64);
+                let mut stack = TraversalStack::new();
                 points
                     .iter()
                     .map(|&x| self.tree.contribution_f32(x, eta, &mut stack))
@@ -982,7 +1035,7 @@ impl ChebCodeBatch {
 
     /// [`Self::evaluate`] with an explicit [`FastMode`].
     pub fn evaluate_mode(&self, eta: f64, mode: FastMode) -> Vec<(f64, f64)> {
-        let mut stack = Vec::with_capacity(64);
+        let mut stack = TraversalStack::new();
         let flat: Vec<(f64, f64)> = self
             .tree
             .sorted
@@ -1021,7 +1074,7 @@ impl ChebCodeBatch {
                 let e2 = pair.get(1).copied().unwrap_or(e1);
                 let eta_v = F64x2::from_array([e1, e2]);
                 let eta2_v = eta_v.mul(eta_v);
-                let mut stack = Vec::with_capacity(64);
+                let mut stack = TraversalStack::new();
                 let mut a = Vec::with_capacity(p);
                 let mut b = Vec::with_capacity(p);
                 for &x in &self.tree.sorted {
@@ -1227,7 +1280,7 @@ mod tests_x2 {
         let batch = ChebCodeBatch::build(&evals, 0.3, 9, 16);
         let eta = 0.05;
         let eta_v = F64x2::from_array([eta, eta]);
-        let mut stack = Vec::with_capacity(64);
+        let mut stack = TraversalStack::new();
         for &x in evals.iter().step_by(17) {
             let s = batch.evaluate_point(x, eta);
             let ((r0, i0), _) = batch
