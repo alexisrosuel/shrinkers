@@ -233,48 +233,58 @@ FP issue rate, so op count converts directly into runtime:
 ### Stieltjes method frontier (bench_one, Apple M1 Max, MP spectra, η=1/√p)
 
 Same-binary A/B, rel L2 error vs the exact reference (overnight re-tuning
-round; the ChebCode default is now θ=0.5, n=11, leaf=32):
+round; the ChebCode default is now θ=0.5, n=11, leaf=32). The `ChebCodeFast`
+row was re-measured in the [Unreleased] round, which retuned the preset to
+θ=1.0, n=8, leaf=32 with a four-lane f32 far field — see `CHANGELOG.md` for
+that round's full record:
 
 | p=50 000 | error | seq | rayon |
 |---|---|---|---|
-| `ChebCodeFast` (θ.5 n9 L32) | ~1e-8 | 12.9 ms | **2.75 ms** |
+| `ChebCodeFast` (θ1.0 n8 L32 f32) | ~6e-6 | 4.29 ms | **0.69 ms** |
 | `ChebCode` (θ.5 n11 L32) | ~5e-10 | 14.44 ms | **3.24 ms** |
 | `ChebCodeXtreme` (θ.25 n11 L16) | ~6e-13 | 24.7 ms | **5.26 ms** |
 | `Hodlr` (ACA, tol 1e-9) | ~7e-10 | 140 ms | 64 ms |
 | `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 1.9 s | 0.86 s |
 | `BlockedTiled` (exact) | 0 | ~640 ms | ~114 ms |
 
-Among methods with usable accuracy (rel err ≤ 1e-6), `chebcode_fast`
-holds the runtime minimum at every size under Rayon, and only at
-p ≤ 2000 under Rayon does the exact `blocked_tiled` come within ~20 %
-of the fastest point. Sequentially the picture splits at p ≈ 20 000: below
-that `chebcode_fast` holds the minimum, above it the whole-grid `fft5`
-edges it out on the **all-points** problem — re-measured as an interleaved
-A/B (13 rounds, alternating order, `examples/measure_runtime_audit.rs ab`):
-p = 20 000: 5.94 vs 5.74 ms (tie); p = 50 000: **12.3 vs 15.8 ms**;
-p = 100 000: **26.2 vs 33.9 ms**. That is why the largest Pareto speed bin
-resolves to `fft5` sequentially. The FFT bank is also ~4 orders of
-magnitude less accurate there (~4e-5 vs ~1e-8), which is the price of the
-25 %; and because its cost is a whole-grid convolution it is the *wrong*
-choice for a small query set — see the at-points dispatch note below.
+Among methods with usable accuracy (rel err ≤ 1e-6), `chebcode_fast` holds
+the runtime minimum at every size in BOTH columns: the f32 far field plus the
+θ=1.0 opening angle moved the point far enough ahead that even the
+whole-grid `fft5`, which used to edge it out sequentially above p ≈ 20 000
+(25 % at p = 50 000), is now beaten everywhere. The regenerated Pareto table
+(`src/config/pareto_autogen.rs`) therefore resolves the speed intent to
+`ChebCodeFast` in every bin, sequentially and under Rayon, while the accuracy
+column keeps the exact family. The price is accuracy: `fft5` sits at ~4e-5
+where the retuned `ChebCodeFast` sits at ~6e-6 … 1.4e-5 — the FFT bank is no
+longer more accurate *or* faster, and survives as the explicit
+`method="fft5"` choice for callers who want its grid semantics.
 
 ### The at-points (deconvolution grid) path is dispatched separately
 
-`compute_stieltjes_at_points` evaluates at `nq` arbitrary query points
-rather than at the `p` sample eigenvalues. The Pareto table is an
-all-points table, so the large-p `fft5` pick would charge the whole grid
-for a 200-point deconvolution: `RmtConfig::resolve_auto_at_points`
-redirects the auto presets to `ChebCodeFast` when `nq·4 < p` (measured
-crossover ≈ `0.7·p`). It also sizes the treecode's `leaf_cap` from the
-query count (`L* = n·√(2p/nq)`, floored at the preset value), since the
-build dominates there and a coarser tree is both cheaper to build and
-*more* accurate (leaves are summed exactly). Interleaved before/after,
-nq = 200: `chebcode_fast` **1.37×** (p = 10 000), **1.45×** (p = 25 000),
-**1.60×** (p = 50 000); `chebcode_balanced` **1.77×** at p = 50 000;
-`deconvolve_spiked` — which combines both effects — **1.42×** at
+`compute_stieltjes_at_points` evaluates at `nq` arbitrary query points rather
+than at the `p` sample eigenvalues. The Pareto table is an all-points table,
+and the FFT family's cost is a whole-grid convolution that ignores `nq`, so
+`RmtConfig::resolve_auto_at_points` redirects any auto-resolved FFT pick to
+`ChebCodeFast` when `nq·4 < p` (measured crossover ≈ `0.7·p`). Since the
+retuned table no longer selects the FFT family for the speed intent, that
+redirect is now dormant on the auto path — it still guards explicit
+`Fft5`/`Adaptive`/`Dst` resolution and is exercised by
+`test_at_points_resolution_avoids_the_whole_grid_fft`. The resolver also sizes
+the treecode's `leaf_cap` from the query count (`L* = n·√(2p/nq)`, floored at
+the preset value), since the build dominates there and a coarser tree is both
+cheaper to build and *more* accurate (leaves are summed exactly). Interleaved
+before/after, nq = 200: `chebcode_fast` **1.37×** (p = 10 000), **1.45×**
+(p = 25 000), **1.60×** (p = 50 000); `chebcode_balanced` **1.77×** at
+p = 50 000; `deconvolve_spiked` — which combines both effects — **1.42×** at
 p = 10 000, **13.3×** at p = 25 000 and **15.4×** at p = 50 000
 (12.13 → 0.79 ms). Accuracy improves at the same time: rel-L2 on the grid
 goes 4.1e-9 → 1.3e-9 (p = 50 000) and 3.2e-9 → 2.0e-9 (p = 10 000).
+
+The retune moved this path again: the shipped `deconvolve_spiked` grid call
+is now **2.2–2.5×** faster than the historical preset (`grid.seq` 0.0488 →
+0.0197 ms at p = 50 000), and end-to-end deconvolution quality is unchanged
+(bulk-density rel-L2 1.4e-6 … 3.8e-6 against the exact pipeline, identical
+spike recovery — `examples/validate_fast_preset.rs`).
 
 ### Against the PyData baseline (p=50 000)
 
@@ -289,30 +299,32 @@ same η; timings single-run):
 | NumPy real-split kernel (savvy layout) | **4.8 s** | ~1e-15 |
 | SciPy grid + centered-kernel rfft, M=2¹⁸ | 30 ms | ~5e-4 |
 | SciPy grid + centered-kernel rfft, M=2²⁰ | 161 ms | ~1.3e-4 |
-| **Rust `chebcode_fast`** | **2.75 ms** | **~1e-8** |
+| **Rust `chebcode_fast`** | **0.69 ms** | **~6e-6** |
 | Rust `chebcode` default | 3.24 ms | ~5e-10 |
 | Rust `chebcode_xtreme` | 5.26 ms | ~6e-13 |
 
 Readings:
 
 - versus the best pure-NumPy O(p²) formulation (~4.8 s — real-split,
-  chunked, no complex128 temporaries), the treecode is **~1750× faster**
-  parallel and ~330× mono-thread; versus naive-but-typical NumPy, ~3000×.
+  chunked, no complex128 temporaries), the retuned treecode is **~7000×
+  faster** parallel and ~1100× mono-thread; versus naive-but-typical NumPy,
+  ~3000×.
 - the algorithmically-savvy PyData route (bin onto a uniform grid + rfft
   convolution, i.e. the same idea as the crate's `fft` family) does reach
   tens of milliseconds but PLATEAUS around 1e-4 relative error because
   sources collapse onto grid cells near the diagonal. Refining M cannot go
   below that floor — recovering high-order accuracy near moving query
   points is exactly what the Chebyshev panels buy. At matched 1e-4-class
-  accuracy `chebcode_fast` is still ~11× faster and 50 000× more accurate;
-  there is NO M that reaches its 1e-8 band.
+  accuracy `chebcode_fast` is still ~10× faster and ~20× more accurate;
+  there is NO M that reaches even its ~6e-6 band.
 - Numba was unavailable offline; a JIT'd scalar kernel would land in the
   exact-family runtime class (still O(p²)).
 
-ChebCode owns the speed-at-accuracy frontier on this spectrum family and,
-after the re-tune, also the near-machine-precision band that previously
-required the exact family (24× faster at ~1e-12); the exact family keeps
-the strict zero-error regime; `Hodlr` trades runtime for kernel
+ChebCode owns the speed-at-accuracy frontier on this spectrum family,
+occupies the relaxed-accuracy fast band (~1e-5) and — since the
+stabilized-then-retuned presets — also the near-machine-precision band that
+previously required the exact family (24× faster at ~1e-12); the exact family
+keeps the strict zero-error regime; `Hodlr` trades runtime for kernel
 agnosticism. Full curves:
 `docs/pareto/runtime_vs_p_{seq,rayon}.png`; accuracy-banded cuts and the
 combined grid: `docs/pareto/runtime_vs_p_grid.png`.
@@ -328,13 +340,13 @@ Sequential runtimes (the Python default), µs/call:
 
 | p | exact tiled | chebcode_fast | chebcode | xtreme |
 |---|---|---|---|---|
-| 30 | **0.48** | 1.18 | 1.25 | 2.33 |
-| 100 | **3.24** | 8.53 | 9.02 | 11.50 |
-| 200 | **12.17** | 22.52 | 24.68 | 33.69 |
-| 300 | **27.22** | 38.74 | 41.33 | 57.22 |
-| 400 | **48.10** | 56.84 | 60.99 | 81.65 |
-| 600 | 106.53 | **95.11** | **103.15** | 143.81 |
-| 1000 | 294.38 | **173.72** | **192.67** | 275.91 |
+| 30 | **0.44** | 1.18 | 1.25 | 2.42 |
+| 100 | **2.86** | 7.23 | 9.07 | 11.35 |
+| 200 | **10.62** | 16.46 | 24.54 | 32.97 |
+| 300 | **23.70** | 27.05 | 41.22 | 54.55 |
+| 400 | 41.18 | **39.12** | 59.99 | 80.66 |
+| 600 | 91.69 | **62.61** | **100.34** | 136.76 |
+| 1000 | 252.92 | **112.23** | **188.45** | 264.50 |
 
 - The exact kernel itself is symmetric-pair optimized: because the query set
   IS the source set, each unordered pair is visited ONCE (antisymmetric real
@@ -348,12 +360,14 @@ Sequential runtimes (the Python default), µs/call:
   (the old route cost three allocations plus two extra output passes — at
   p≤5 that was most of the wall time, hence ~2.5× end-to-end); above it the
   dense SoA streams win back ~17% and are kept.
-- **Crossover ≈ p≈500** for `chebcode_fast` (dead heat at 500, clear from
-  600) / ≈600 for `chebcode`, and ≈ p≈1000 for `chebcode_xtreme`. Below the
-  crossover O(p²) is brutally cheap — at p=100 the exact kernel is ~2.6×
-  faster than anything else; use it there. Note the direction of the move:
-  speeding up O(p²) pushed the treecode's territory OUTWARD from the
-  earlier ≈350 measurement.
+- **Crossover ≈ p≈400** for `chebcode_fast` (dead heat around 400, clear
+  from 500) / ≈500 for `chebcode`, and ≈ p≈1000 for `chebcode_xtreme`. Below
+  the crossover O(p²) is brutally cheap — at p=100 the exact kernel is ~2.5×
+  faster than anything else; use it there. The move is inward from the
+  earlier ≈500 measurement: the retuned preset (`theta 1.0`, f32 far field)
+  pays a slightly larger fixed cost on tiny panels, so it needs a few more
+  points before it overtakes the O(p²) kernel — while at p ≥ 1000 it is
+  1.7–2.3× ahead of the old point.
 - The panel structure is visible in the raw data: preset runtimes step up as
   p crosses the leaf cap (`xtreme` jumps between p=12 and p=20 with its
   leaf_cap of 16, `fast`/default between p=30 and p=50 with 32) — below the

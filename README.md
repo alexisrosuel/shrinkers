@@ -57,18 +57,20 @@ vectorized NumPy version:
 
 | p | Naive Python | NumPy | shrinkers exact ¹ | shrinkers ChebCode ² |
 |---|---|---|---|---|
-| 1 024 | 0.32 s | 2.3 ms | **0.33 ms** · 7× | **0.22 ms** · 11× |
-| 4 096 | 5.2 s | 94 ms | **1.2 ms** · 81× | **0.48 ms** · 195× |
-| 50 000 | *(~2 h extrapolated)* | 14.6 s | **0.17 s** · 86× | **3.6 ms** · ≈4000× |
+| 1 024 | 0.33 s | 2.3 ms | **0.23 ms** · 10× | **0.19 ms** · 12× |
+| 4 096 | 5.3 s | 91 ms | **1.19 ms** · 77× | **0.35 ms** · 260× |
+| 50 000 | *(~2 h extrapolated)* | 12.4 s | **0.115 s** · 108× | **2.2 ms** · ≈5600× |
 
-¹ machine precision — the zero-error anchor.  ² `chebcode_fast` preset,
-rel. error ~1e-8: giving up four digits of accuracy buys two more orders of
-magnitude in speed, and the higher-precision `chebcode` preset (~5e-10)
-costs nearly the same (see [docs/internals.md](docs/internals.md)).
-At microsecond scales both
-shrinkers curves flatten onto their fixed Python-call overhead — a Rayon
-request on tiny inputs runs sequential automatically rather than paying the
-thread-pool floor (details in [docs/internals.md](docs/internals.md)).
+¹ machine precision — the zero-error anchor.  ² `chebcode_fast` preset
+(θ=1.0, n=8, leaf 32, four-lane f32 far field), rel. error ~1e-5: trading the
+exact family's zero error for it buys **~50×** at p = 50 000, while the
+`chebcode` (~5e-10) and `chebcode_xtreme` (~1e-12) presets cost 4–7× more
+than `chebcode_fast` (see [docs/internals.md](docs/internals.md) and the
+`[Unreleased]` CHANGELOG round for the full record). At microsecond scales
+both shrinkers curves flatten onto their fixed Python-call overhead — a
+Rayon request on tiny inputs runs sequential automatically rather than
+paying the thread-pool floor (details in
+[docs/internals.md](docs/internals.md)).
 Every number is reproducible: `scripts/make_readme_figures.py`
 regenerates both figures end-to-end, and `docs/img/readme_figures.json`
 holds the raw measurements.
@@ -96,8 +98,9 @@ by roughly an order of magnitude (9.1× at p≈5000).
 - `deconvolve_spiked(evals, c)` — the one-call pipeline: BEMA detection →
   inverse-BBP spike debiasing → El Karoui bulk deconvolution;
 - Stieltjes-transform methods spanning the whole speed/accuracy frontier —
-  machine-precision exact kernels, ChebCode treecodes (~1e-8 … ~6e-13),
-  HODLR — plus data-driven `speed_auto` / `accuracy_auto` picks, with
+  machine-precision exact kernels, ChebCode treecodes (~1e-5 at the
+  `chebcode_fast` speed point, ~6e-13 at `chebcode_xtreme`), HODLR — plus
+  data-driven `speed_auto` / `accuracy_auto` picks, with
   `auto` = the measured speed policy (same Pareto table, resolved in one
   place for every entry point, and on the deconvolution grid the treecode is
   sized to the number of query points it actually serves);
@@ -188,7 +191,9 @@ Note: pyRMT uses $\eta = 1/\sqrt{p}$ vs our $0.1/\sqrt{p}$. When using the same 
 
 > Note: the earlier `stieltjes_transform` / RIE entry point has been replaced
 > by `deconvolve_spiked` (spiked + bulk deconvolution). The `shrinkers` rows
-> below are the current `deconvolve_spiked` timings (n_points=200).
+> below are the historical `deconvolve_spiked` timings (n_points=200); the
+> `chebcode_fast` retune in the `[Unreleased]` CHANGELOG round made that path
+> 2.2–2.5× faster again at equal deconvolution quality.
 
 | Method | p=100 | p=500 | p=1000 | Scaling |
 |--------|-------|-------|--------|---------|
@@ -200,8 +205,9 @@ Note: pyRMT uses $\eta = 1/\sqrt{p}$ vs our $0.1/\sqrt{p}$. When using the same 
 Key findings:
 - **`shrinkers` is 6–80× faster than `rie_numpy`** and **~100–120× faster than pyRMT (fixed)** at p=100
 - The **buggy pyRMT is O(p³)**: 928 ms at p=100, making it unusable beyond tiny dimensions
-- Below the measured small-p crossover (~p≤500 single-core), the exact O(p²)
-  kernels are the fastest pick; ChebCode takes over beyond
+- Below the measured small-p crossover (~p≤400 single-core for the retuned
+  `chebcode_fast`, ~p≤500 for `chebcode`), the exact O(p²) kernels are the
+  fastest pick; ChebCode takes over beyond
   ([docs/internals.md](docs/internals.md))
 
 ## Documentation
