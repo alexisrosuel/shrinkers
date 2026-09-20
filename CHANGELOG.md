@@ -3,7 +3,7 @@
 All notable changes to **shrinkers** are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.1.2] — 2026-09-20
 
 ### ChebCodeFast: relaxed operating point + 4-lane f32 far field
 
@@ -171,6 +171,43 @@ that kernel was not touched.
   The Pareto table itself is deliberately left untouched: the exact family is
   never the speed pick in any bin (it wins the accuracy column on error, not
   runtime), so making it 15 % faster cannot change a bin.
+- **The Python boundary validated less than its error messages promised.** Five
+  gaps, each reproduced against a freshly built extension before the fix:
+  `deconvolve_spiked` forwarded `eta` raw, so `eta <= 0` or `NaN` was accepted
+  there while `stieltjes_transform*` rejected it (the explicit `"inferred"`/None
+  sentinel still passes through untouched, because the downstream default
+  `0.1/√p_bulk` is deliberately not `0.1/√p_full`); `margin` was checked only in
+  `deconvolve_spiked` while `detect_spikes_bema`, `analyze_spikes` and
+  `estimate_population_eigenvalues` accepted non-positive or NaN values that
+  BEMA's `margin.max(1.0)` then swallowed silently; `FloatOrVec` validated the
+  array branch and returned early on the scalar one, so `inverse_bbp(nan)` and
+  `inverse_bbp(-1.0)` were accepted while the equivalent array raised; and
+  `clean_correlation_matrix` never checked symmetry even though `symmetric_eigh`
+  reads and updates both triangles, so a non-symmetric input produced a silently
+  wrong eigensystem (now rejected outside a 1e-12 relative tolerance). The
+  checks are single-definition helpers (`require_positive_finite`,
+  `checked_lambda_hat`, `owned_positive_spectrum`, `sorted_ascending`) shared by
+  every entry point. Tests: 39 → 50, `TestBoundaryValidation` pins each gap.
+- **`parse_method` matched `"chebcode_balanced" | "chebb"` twice**, making the
+  second arm unreachable. Rust CI never saw it: `python.rs` is behind
+  `#[cfg(feature = "python")]` and the rust job's clippy ran without that
+  feature — the lint job now runs `cargo clippy --features python`.
+- **The shipped type stub described a signature the extension no longer had.**
+  `shrinkers.pyi` still advertised `parallelism: Parallelism` while the runtime
+  had long taken `parallel: bool | None`, and it omitted the
+  `chebcode_balanced`/`chebb` methods; `eta`/`cutoff` now document the accepted
+  `None` too. Stub and runtime agree again.
+
+### Packaging & CI
+- **The wheel is now declared and exercised on Python 3.9–3.15.** The artifact
+  was already a single `cp39-abi3` wheel, so 3.11/3.12/3.14/3.15 could load it;
+  CI now proves that instead of assuming it, 3.15 included while it is still a
+  release candidate (`allow-prereleases`). `Programming Language :: Python ::
+  3.9` … `3.15` classifiers added.
+- **CI installs the wheel the job just built.** `pip install --find-links dist
+  shrinkers` resolved to the published 0.1.1 on PyPI rather than the
+  equal-version local wheel, so the Python matrix was silently testing the
+  released artifact; the job now installs `dist/*.whl` by explicit path.
 
 ### Changed
 - **ChebCode leaf capacity now depends on the query count.** A preset's
