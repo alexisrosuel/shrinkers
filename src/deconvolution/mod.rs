@@ -26,12 +26,16 @@ pub mod adaptive;
 /// namespace stops shadowing the `crate::spiked` toolkit module with a
 /// different meaning).
 pub mod hybrid;
+/// Inverse nonlinear shrinkage: precision-matrix eigenvalues estimated
+/// directly (Ledoit & Wolf 2022).
+pub mod inverse;
 pub mod population;
 pub mod precision;
 pub mod shrinkage;
 
 pub use adaptive::*;
 pub use hybrid::*;
+pub use inverse::*;
 pub use population::*;
 pub use precision::*;
 pub use shrinkage::*;

@@ -31,6 +31,43 @@ def spiked_spectrum(p: int = 300, spikes=(5.0, 7.0, 10.0), seed: int = 1) -> np.
     return np.sort(np.concatenate([bulk, np.asarray(spikes, dtype=np.float64)]))
 
 
+def qis_reference_precision(evals: np.ndarray, c: float) -> np.ndarray:
+    """Direct NumPy port of the QIS eigenvalues, specialised to p <= n.
+
+    Mirrors `QIS.py` from the Ledoit & Wolf reference package
+    (github.com/pald22/covShrinkage), returning the precision eigenvalues
+    (the reciprocals of the trace-rescaled covariance eigenvalues).
+    """
+    evals = np.asarray(evals, dtype=np.float64)
+    p = evals.size
+    x = 1.0 / evals
+    h = (min(c * c, 1.0 / (c * c)) ** 0.35) / p**0.35
+    xi = x[:, None]
+    xj = x[None, :]
+    diff = xj - xi
+    den = diff * diff + xj * xj * h * h
+    theta = (xj * diff / den).mean(axis=1)
+    htheta = (xj * xj * h / den).mean(axis=1)
+    amp2 = theta**2 + htheta**2
+    delta = 1.0 / ((1 - c) ** 2 * x + 2 * c * (1 - c) * x * theta + c * c * x * amp2)
+    delta *= evals.sum() / delta.sum()
+    return 1.0 / delta
+
+
+def random_sample_covariance(p: int, n: int, seed: int):
+    """A well-conditioned random population, its sample covariance, and the
+    concentration ratio c = p / (n - 1) (the reference demeans by default)."""
+    rng = np.random.default_rng(seed)
+    a = rng.standard_normal((p, p))
+    pop = a @ a.T / p + 0.5 * np.eye(p)
+    w, v = np.linalg.eigh(pop)
+    y = rng.standard_normal((n, p)) @ (v * np.sqrt(w)).T
+    y = y - y.mean(axis=0)
+    k = n - 1
+    sample = y.T @ y / k
+    return sample, p / k, w
+
+
 # ──────────────────────────────────────────────
 #  deconvolve_spiked
 # ──────────────────────────────────────────────
@@ -192,6 +229,134 @@ class TestDirectPrecisionShrinkage:
         evals[0] = -0.5
         with pytest.raises(ValueError, match="non-negative"):
             rk.direct_precision_shrinkage(evals, c=0.3)
+
+
+# ──────────────────────────────────────────────
+#  inverse_nonlinear_shrinkage / estimate_precision_matrix
+# ──────────────────────────────────────────────
+
+class TestInverseNonlinearShrinkage:
+    def test_keys_and_shapes(self):
+        evals = sample_spectrum(120)
+        res = rk.inverse_nonlinear_shrinkage(evals, c=0.3)
+        assert set(res) == {
+            "precision_eigenvalues",
+            "covariance_eigenvalues",
+            "smoothing",
+        }
+        assert res["precision_eigenvalues"].shape == (120,)
+        assert res["covariance_eigenvalues"].shape == (120,)
+        assert np.all(np.isfinite(res["precision_eigenvalues"]))
+        assert np.all(res["precision_eigenvalues"] > 0)
+        assert res["smoothing"] > 0
+
+    def test_matches_ledoit_wolf_reference(self):
+        sample, c, _ = random_sample_covariance(p=45, n=180, seed=7)
+        lam = np.ascontiguousarray(np.linalg.eigvalsh(sample))
+        res = rk.inverse_nonlinear_shrinkage(lam, c=c)
+        ref = qis_reference_precision(lam, c)
+        np.testing.assert_allclose(
+            res["precision_eigenvalues"], ref, rtol=1e-10, atol=1e-12
+        )
+
+    def test_qis_preserves_trace(self):
+        evals = sample_spectrum(100)
+        res = rk.inverse_nonlinear_shrinkage(evals, c=0.4)
+        # QIS rescales the covariance eigenvalues so Σδ == Σλ.
+        np.testing.assert_allclose(
+            res["covariance_eigenvalues"].sum(), evals.sum(), rtol=1e-12
+        )
+
+    def test_qis_beats_naive_inverse(self):
+        sample, c, population = random_sample_covariance(p=60, n=240, seed=3)
+        lam = np.ascontiguousarray(np.linalg.eigvalsh(sample))
+        qis = rk.inverse_nonlinear_shrinkage(lam, c=c)["precision_eigenvalues"]
+        true_prec = 1.0 / population
+        naive = 1.0 / lam
+
+        def error(estimate):
+            return np.linalg.norm(
+                np.sort(estimate) - np.sort(true_prec)
+            ) / np.linalg.norm(true_prec)
+
+        assert error(qis) < error(naive)
+
+    def test_methods_all_finite(self):
+        evals = sample_spectrum(90)
+        for method in ("qis", "lis", "gis"):
+            res = rk.inverse_nonlinear_shrinkage(evals, c=0.5, method=method)
+            assert np.all(np.isfinite(res["precision_eigenvalues"]))
+            assert np.all(res["precision_eigenvalues"] > 0)
+
+    def test_parallel_matches_sequential(self):
+        evals = sample_spectrum(150)
+        seq = rk.inverse_nonlinear_shrinkage(evals, c=0.3, parallel=False)
+        par = rk.inverse_nonlinear_shrinkage(evals, c=0.3, parallel=True)
+        np.testing.assert_allclose(
+            seq["precision_eigenvalues"], par["precision_eigenvalues"], rtol=1e-12
+        )
+
+    def test_zero_eigenvalue_raises(self):
+        evals = sample_spectrum(50)
+        evals[0] = 0.0
+        with pytest.raises(ValueError, match="strictly positive"):
+            rk.inverse_nonlinear_shrinkage(evals, c=0.3)
+
+    def test_unknown_method_raises(self):
+        with pytest.raises(ValueError, match="unknown inverse shrinkage"):
+            rk.inverse_nonlinear_shrinkage(sample_spectrum(20), c=0.3, method="nope")
+
+
+class TestEstimatePrecisionMatrix:
+    def test_keys_and_symmetry(self):
+        sample, c, _ = random_sample_covariance(p=12, n=60, seed=11)
+        res = rk.estimate_precision_matrix(sample, c=c)
+        assert set(res) == {
+            "precision",
+            "eigenvectors",
+            "precision_eigenvalues",
+            "covariance_eigenvalues",
+            "smoothing",
+        }
+        assert res["precision"].shape == (12, 12)
+        np.testing.assert_allclose(res["precision"], res["precision"].T, atol=1e-10)
+        np.testing.assert_allclose(
+            np.trace(res["precision"]),
+            res["precision_eigenvalues"].sum(),
+            rtol=1e-10,
+        )
+
+    def test_matrix_eigenvalues_match_reported(self):
+        sample, c, _ = random_sample_covariance(p=10, n=50, seed=12)
+        res = rk.estimate_precision_matrix(sample, c=c)
+        eig = np.sort(np.linalg.eigvalsh(res["precision"]))
+        np.testing.assert_allclose(
+            eig, np.sort(res["precision_eigenvalues"]), rtol=1e-8
+        )
+
+    def test_matrix_matches_spectrum_api(self):
+        sample, c, _ = random_sample_covariance(p=14, n=70, seed=13)
+        mat = rk.estimate_precision_matrix(sample, c=c)
+        lam = np.ascontiguousarray(np.linalg.eigvalsh(sample))
+        spec = rk.inverse_nonlinear_shrinkage(lam, c=c)
+        # Same estimator, same spectrum: the multisets of precision and
+        # covariance eigenvalues must agree.
+        np.testing.assert_allclose(
+            np.sort(mat["precision_eigenvalues"]),
+            np.sort(spec["precision_eigenvalues"]),
+            rtol=1e-9,
+        )
+        np.testing.assert_allclose(
+            np.sort(mat["covariance_eigenvalues"]),
+            np.sort(spec["covariance_eigenvalues"]),
+            rtol=1e-9,
+        )
+
+    def test_non_symmetric_raises(self):
+        cov = np.eye(5)
+        cov[0, 1] = 0.3
+        with pytest.raises(ValueError, match="symmetric"):
+            rk.estimate_precision_matrix(cov, c=0.3)
 
 
 # ──────────────────────────────────────────────

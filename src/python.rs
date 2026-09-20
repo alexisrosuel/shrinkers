@@ -31,9 +31,10 @@ use pyo3::prelude::*;
 
 use crate::config::{CutoffConfig, Parallelism, RmtConfig, StieltjesMethod};
 use crate::deconvolution::{
-    deconvolve_spiked, direct_precision_shrinkage, estimate_population_eigenvalues, rie_shrinkage,
+    InverseShrinkageMethod, deconvolve_spiked, direct_precision_shrinkage,
+    estimate_population_eigenvalues, inverse_nonlinear_shrinkage, rie_shrinkage,
 };
-use crate::pipeline::clean_correlation_matrix;
+use crate::pipeline::{clean_correlation_matrix, estimate_precision_matrix};
 use crate::spiked;
 
 /// A parameter accepted as either a scalar float or a 1-D array of floats.
@@ -195,6 +196,55 @@ fn owned_positive_spectrum(array: PyReadonlyArray1<'_, f64>, c: f64) -> PyResult
     Ok(ev)
 }
 
+/// Like [`owned_positive_spectrum`], but for the inverse-shrinkage entry points
+/// whose kernel divides by λ and evaluates the transform on `λ(1 + i·h)`:
+/// a zero eigenvalue is a genuine error there, not round-off dust.
+fn owned_strictly_positive_spectrum(
+    array: PyReadonlyArray1<'_, f64>,
+    c: f64,
+) -> PyResult<Vec<f64>> {
+    let ev = owned_positive_spectrum(array, c)?;
+    if let Some(&bad) = ev.iter().find(|&&v| v <= 0.0) {
+        return Err(PyValueError::new_err(format!(
+            "eigenvalues must be strictly positive for inverse shrinkage (found {bad})"
+        )));
+    }
+    Ok(ev)
+}
+
+/// Copy and validate a square, finite, symmetric matrix (the input contract of
+/// the dense eigendecomposition).
+fn owned_symmetric_matrix(
+    matrix: PyReadonlyArray2<'_, f64>,
+    what: &str,
+) -> PyResult<ndarray::Array2<f64>> {
+    let arr = matrix.as_array().to_owned();
+    let (rows, cols) = arr.dim();
+    if rows != cols {
+        return Err(PyValueError::new_err(format!(
+            "{what} must be a square matrix"
+        )));
+    }
+    for &v in arr.iter() {
+        if !v.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "{what} must contain only finite values"
+            )));
+        }
+    }
+    // `symmetric_eigh` reads and updates both triangles, so a non-symmetric
+    // input would silently produce a wrong eigensystem.
+    let tol = 1e-12 * arr.iter().fold(1.0_f64, |acc, &v| acc.max(v.abs()));
+    for i in 0..rows {
+        for j in (i + 1)..rows {
+            if (arr[[i, j]] - arr[[j, i]]).abs() > tol {
+                return Err(PyValueError::new_err(format!("{what} must be symmetric")));
+            }
+        }
+    }
+    Ok(arr)
+}
+
 /// The shared prologue of the `stieltjes_transform*` entry points: copy a
 /// finite, non-empty spectrum and resolve its `eta`.
 fn owned_spectrum_and_eta(
@@ -292,6 +342,15 @@ fn parse_method(method: &str) -> PyResult<StieltjesMethod> {
         other => {
             return Err(PyValueError::new_err(format!("unknown method '{other}'")));
         }
+    })
+}
+
+/// Parse the inverse-shrinkage loss name (`qis` / `lis` / `gis`).
+fn parse_inverse_method(method: &str) -> PyResult<InverseShrinkageMethod> {
+    InverseShrinkageMethod::parse(method).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "unknown inverse shrinkage method '{method}' (expected 'qis', 'lis' or 'gis')"
+        ))
     })
 }
 
@@ -469,6 +528,114 @@ fn direct_precision_shrinkage_py<'py>(
 
     let dict = pyo3::types::PyDict::new(py);
     dict.set_item("precision_eigenvalues", result.into_pyarray(py))?;
+    Ok(dict)
+}
+
+// ──────────────────────────────────────────────
+//  inverse_nonlinear_shrinkage / estimate_precision_matrix
+// ──────────────────────────────────────────────
+
+/// Inverse nonlinear shrinkage of the precision matrix (Ledoit & Wolf 2022).
+///
+/// Estimates the eigenvalues of Ω = Σ^{-1} directly, without inverting a
+/// covariance estimate, so the small inverse eigenvalues are not over-inflated.
+/// Three losses are available through `method`.
+///
+/// Args:
+///   eigenvalues: sample eigenvalues (p,), finite, strictly positive.
+///   c: concentration ratio p/n, in (0, 1].
+///   method: "qis" (default: Frobenius / inverse Stein / minimum variance),
+///     "lis" (Stein's loss) or "gis" (symmetrized Kullback-Leibler).
+///   parallel: False (default, single-threaded), True (multi-core), or None
+///     (library picks by problem size).
+///
+/// Returns a dict with keys:
+///   - "precision_eigenvalues": Ω̂ eigenvalues ω_i (p,)
+///   - "covariance_eigenvalues": matching Σ̂ eigenvalues (p,)
+///   - "smoothing": the Ledoit-Wolf bandwidth h
+#[pyfunction]
+#[pyo3(
+    name = "inverse_nonlinear_shrinkage",
+    signature = (eigenvalues, c, *, method = "qis", parallel = false)
+)]
+fn inverse_nonlinear_shrinkage_py<'py>(
+    py: Python<'py>,
+    eigenvalues: PyReadonlyArray1<'py, f64>,
+    c: f64,
+    method: &str,
+    parallel: Option<bool>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let ev = owned_strictly_positive_spectrum(eigenvalues, c)?;
+    let shrinkage = parse_inverse_method(method)?;
+    let config = RmtConfig::new(c).with_parallelism(parse_parallel(parallel));
+
+    let result = py.detach(|| inverse_nonlinear_shrinkage(&ev, c, shrinkage, &config));
+
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item(
+        "precision_eigenvalues",
+        result.precision_eigenvalues.into_pyarray(py),
+    )?;
+    dict.set_item(
+        "covariance_eigenvalues",
+        result.covariance_eigenvalues.into_pyarray(py),
+    )?;
+    dict.set_item("smoothing", result.smoothing)?;
+    Ok(dict)
+}
+
+/// Estimate the precision matrix Ω = Σ^{-1} from a sample covariance (or
+/// correlation) matrix by inverse nonlinear shrinkage (Ledoit & Wolf 2022).
+///
+/// The symmetric counterpart of `clean_correlation_matrix`: instead of
+/// shrinking covariance eigenvalues and inverting them, it derives the optimal
+/// precision eigenvalues directly, which avoids over-inflating the small
+/// inverted eigenvalues.
+///
+/// Args:
+///   covariance: sample covariance (or correlation) matrix (p, p), symmetric,
+///     finite, positive definite.
+///   c: concentration ratio p/n, in (0, 1].
+///   method: "qis" (default), "lis" or "gis".
+///   parallel: False (default), True, or None (library picks).
+///
+/// Returns a dict with keys:
+///   - "precision": precision matrix estimate Ω̂ (p, p)
+///   - "eigenvectors": sample eigenvectors (p, p), descending columns
+///   - "precision_eigenvalues": Ω̂ eigenvalues (p,), descending
+///   - "covariance_eigenvalues": Σ̂ eigenvalues (p,), descending
+///   - "smoothing": the Ledoit-Wolf bandwidth h
+#[pyfunction]
+#[pyo3(
+    name = "estimate_precision_matrix",
+    signature = (covariance, c, *, method = "qis", parallel = false)
+)]
+fn estimate_precision_matrix_py<'py>(
+    py: Python<'py>,
+    covariance: PyReadonlyArray2<'py, f64>,
+    c: f64,
+    method: &str,
+    parallel: Option<bool>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let cov = owned_symmetric_matrix(covariance, "covariance")?;
+    require_concentration(c)?;
+    let shrinkage = parse_inverse_method(method)?;
+    let config = RmtConfig::new(c).with_parallelism(parse_parallel(parallel));
+
+    let result = py.detach(|| estimate_precision_matrix(&cov, c, shrinkage, &config));
+
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("precision", result.precision.into_pyarray(py))?;
+    dict.set_item("eigenvectors", result.eigenvectors.into_pyarray(py))?;
+    dict.set_item(
+        "precision_eigenvalues",
+        result.precision_eigenvalues.into_pyarray(py),
+    )?;
+    dict.set_item(
+        "covariance_eigenvalues",
+        result.covariance_eigenvalues.into_pyarray(py),
+    )?;
+    dict.set_item("smoothing", result.smoothing)?;
     Ok(dict)
 }
 
@@ -848,6 +1015,8 @@ fn shrink_eigenvalues_py<'py>(
 fn shrinkers(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deconvolve_spiked_py, m)?)?;
     m.add_function(wrap_pyfunction!(direct_precision_shrinkage_py, m)?)?;
+    m.add_function(wrap_pyfunction!(inverse_nonlinear_shrinkage_py, m)?)?;
+    m.add_function(wrap_pyfunction!(estimate_precision_matrix_py, m)?)?;
     m.add_function(wrap_pyfunction!(clean_correlation_matrix_py, m)?)?;
     m.add_function(wrap_pyfunction!(stieltjes_transform_py, m)?)?;
     m.add_function(wrap_pyfunction!(stieltjes_transform_with_deriv_py, m)?)?;

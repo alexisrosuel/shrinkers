@@ -18,7 +18,7 @@
 //! for maximum performance, LAPACK's `dsyevd` is significantly faster.
 
 use crate::config::RmtConfig;
-use crate::deconvolution::rie_shrinkage;
+use crate::deconvolution::{InverseShrinkageMethod, inverse_nonlinear_shrinkage, rie_shrinkage};
 use crate::eigenvector_overlaps::compute_angular_overlaps;
 use ndarray::Array2;
 
@@ -268,9 +268,141 @@ pub fn clean_correlation_matrix(
 }
 
 // ──────────────────────────────────────────────
-//  Helper: permute eigenvectors by column index
+//  Precision-matrix estimation (inverse shrinkage)
 // ──────────────────────────────────────────────
 
+/// Result of estimating a precision matrix by inverse nonlinear shrinkage.
+#[derive(Debug, Clone)]
+pub struct PrecisionMatrixResult {
+    /// Precision matrix estimate $\hat{\Omega} = \hat{\Sigma}^{-1}$, shape
+    /// `(p, p)`, symmetric.
+    pub precision: Array2<f64>,
+    /// Sample eigenvectors, columns sorted descending by sample eigenvalue.
+    /// Column `i` is paired with `precision_eigenvalues[i]` and
+    /// `covariance_eigenvalues[i]`.
+    pub eigenvectors: Array2<f64>,
+    /// Eigenvalues of $\hat{\Omega}$, indexed like the sample eigenvalues
+    /// (descending λ) — `precision_eigenvalues[i]` is attached to
+    /// `eigenvectors[:, i]`. They are generally ascending because they are
+    /// reciprocal-scale.
+    pub precision_eigenvalues: Vec<f64>,
+    /// Eigenvalues of the matching covariance estimate $\hat{\Sigma}$ (the
+    /// reciprocals of `precision_eigenvalues`, trace-rescaled for QIS),
+    /// parallel to `eigenvectors`.
+    pub covariance_eigenvalues: Vec<f64>,
+    /// Ledoit–Wolf bandwidth $h$.
+    pub smoothing: f64,
+}
+
+/// Reconstruct the rotation-equivariant matrix `U diag(d) U'` from the sample
+/// eigenvectors and a set of cleaned eigenvalues.
+///
+/// Unlike [`reconstruct_covariance`], the diagonal is used as given — the
+/// inverse-shrinkage estimators already return the optimal eigenvalue of the
+/// estimated matrix, so no spike/bulk split or overlap correction applies.
+fn reconstruct_from_eigenvalues(eigenvectors: &Array2<f64>, diag: &[f64]) -> Array2<f64> {
+    let p = eigenvectors.ncols();
+    debug_assert_eq!(eigenvectors.nrows(), p);
+    debug_assert_eq!(diag.len(), p);
+    let mut out = vec![0.0_f64; p * p];
+    for r in 0..p {
+        for c in r..p {
+            let mut v = 0.0;
+            for t in 0..p {
+                v += diag[t] * eigenvectors[[r, t]] * eigenvectors[[c, t]];
+            }
+            out[r * p + c] = v;
+            out[c * p + r] = v;
+        }
+    }
+    Array2::from_shape_vec((p, p), out).unwrap()
+}
+
+/// Estimate the precision matrix from an already-computed eigensystem of the
+/// sample covariance/correlation matrix.
+///
+/// The eigenvalues are sorted descending (matching [`clean_eigensystem`]), the
+/// inverse-shrinkage precision eigenvalues are computed with
+/// [`inverse_nonlinear_shrinkage`], and the matrix is reconstructed as
+/// `U diag(ω) U'`.
+///
+/// # Arguments
+///
+/// * `eigenvectors` — sample eigenvectors, shape (p, p), columns = eigenvectors.
+/// * `eigenvalues` — sample eigenvalues (length p), parallel to the columns.
+/// * `c` — concentration ratio p / n, in (0, 1].
+/// * `method` — inverse-shrinkage loss (QIS / LIS / GIS).
+/// * `config` — `RmtConfig` selecting the Stieltjes kernel and parallelism.
+pub fn precision_from_eigensystem(
+    eigenvectors: &Array2<f64>,
+    eigenvalues: &[f64],
+    c: f64,
+    method: InverseShrinkageMethod,
+    config: &RmtConfig,
+) -> PrecisionMatrixResult {
+    let p = eigenvalues.len();
+
+    // Sort descending, exactly like `clean_eigensystem`.
+    let mut idx: Vec<usize> = (0..p).collect();
+    idx.sort_unstable_by(|&a, &b| eigenvalues[b].partial_cmp(&eigenvalues[a]).unwrap());
+    let sorted_evals: Vec<f64> = idx.iter().map(|&i| eigenvalues[i]).collect();
+    let sorted_eigenvectors = permute_eigenvectors(eigenvectors, &idx);
+
+    let nls = inverse_nonlinear_shrinkage(&sorted_evals, c, method, config);
+
+    // `nls` is indexed like the sample eigenvalues (descending λ), so
+    // `precision_eigenvalues[i]` is the optimal inverse eigenvalue attached to
+    // `eigenvectors[:, i]` and `eigenvalues[i]`. That is the natural pairing —
+    // no reordering — and it leaves Ω̂ = U diag(ω) U' unchanged. The precision
+    // eigenvalues are therefore generally *ascending* (1/δ decreases in λ),
+    // even though the sample eigenvalues driving them are descending.
+    let precision = reconstruct_from_eigenvalues(&sorted_eigenvectors, &nls.precision_eigenvalues);
+
+    PrecisionMatrixResult {
+        precision,
+        eigenvectors: sorted_eigenvectors,
+        precision_eigenvalues: nls.precision_eigenvalues,
+        covariance_eigenvalues: nls.covariance_eigenvalues,
+        smoothing: nls.smoothing,
+    }
+}
+
+/// Estimate the precision matrix $\Omega = \Sigma^{-1}$ from a sample
+/// covariance (or correlation) matrix by inverse nonlinear shrinkage.
+///
+/// This is the inverse-scale counterpart of [`clean_correlation_matrix`]:
+/// instead of shrinking the covariance eigenvalues and inverting them, it
+/// derives the optimal **precision** eigenvalues directly (Ledoit & Wolf,
+/// Bernoulli 2022), which avoids the over-inflation of the small inverted
+/// eigenvalues.
+///
+/// The spectral decomposition is computed internally with a symmetric
+/// eigendecomposition (Jacobi iteration). For very large p, prefer
+/// [`precision_from_eigensystem`] with an eigensystem from Python/scipy.
+///
+/// NOTE: this allocates a dense p×p working copy for the eigendecomposition
+/// and an O(p³) reconstruction.
+///
+/// # Arguments
+///
+/// * `covariance` — sample covariance (or correlation) matrix, shape (p, p),
+///   symmetric, positive definite.
+/// * `c` — concentration ratio p / n, in (0, 1].
+/// * `method` — inverse-shrinkage loss (QIS / LIS / GIS).
+/// * `config` — `RmtConfig` selecting the Stieltjes kernel and parallelism.
+pub fn estimate_precision_matrix(
+    covariance: &Array2<f64>,
+    c: f64,
+    method: InverseShrinkageMethod,
+    config: &RmtConfig,
+) -> PrecisionMatrixResult {
+    let (eigenvalues, eigenvectors) = symmetric_eigh(covariance);
+    precision_from_eigensystem(&eigenvectors, &eigenvalues, c, method, config)
+}
+
+// ──────────────────────────────────────────────
+//  Helper: permute eigenvectors by column index
+// ──────────────────────────────────────────────
 /// Permute columns of a matrix according to index ordering.
 fn permute_eigenvectors(eigenvectors: &Array2<f64>, idx: &[usize]) -> Array2<f64> {
     let (rows, cols) = eigenvectors.dim();
@@ -473,5 +605,89 @@ mod tests {
         let trace: f64 = evals.iter().sum();
         let orig_trace: f64 = (0..p).map(|i| a[[i, i]]).sum();
         assert!((trace - orig_trace).abs() < 1e-8);
+    }
+
+    // ── Precision-matrix estimation (inverse shrinkage) ──
+
+    #[test]
+    fn test_precision_from_eigensystem_identity_basis() {
+        use crate::deconvolution::InverseShrinkageMethod;
+        // Identity eigenbasis ⇒ the precision estimate is diagonal, with the
+        // inverse-shrinkage precision eigenvalues on the diagonal.
+        let p = 5;
+        let v = Array2::eye(p);
+        let evals = vec![2.0, 1.5, 1.0, 0.7, 0.5];
+        let c = 0.2;
+        let res = precision_from_eigensystem(
+            &v,
+            &evals,
+            c,
+            InverseShrinkageMethod::Qis,
+            &RmtConfig::new(c),
+        );
+        assert_eq!(res.precision.dim(), (p, p));
+        for i in 0..p {
+            for j in 0..p {
+                if i == j {
+                    assert_relative_eq!(
+                        res.precision[[i, j]],
+                        res.precision_eigenvalues[i],
+                        max_relative = 1e-12
+                    );
+                } else {
+                    assert_relative_eq!(res.precision[[i, j]], 0.0, epsilon = 1e-12);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_estimate_precision_matrix_symmetric_positive() {
+        use crate::deconvolution::InverseShrinkageMethod;
+        // A well-conditioned covariance with mild correlation.
+        let p = 8;
+        let mut cov = Array2::zeros((p, p));
+        for i in 0..p {
+            cov[[i, i]] = 1.0 + 0.2 * i as f64;
+        }
+        for i in 0..(p - 1) {
+            cov[[i, i + 1]] = 0.05;
+            cov[[i + 1, i]] = 0.05;
+        }
+        let c = 0.3;
+        let res =
+            estimate_precision_matrix(&cov, c, InverseShrinkageMethod::Qis, &RmtConfig::new(c));
+
+        assert_eq!(res.precision.dim(), (p, p));
+        for i in 0..p {
+            for j in 0..p {
+                assert_relative_eq!(
+                    res.precision[[i, j]],
+                    res.precision[[j, i]],
+                    epsilon = 1e-12
+                );
+            }
+        }
+        // All strictly positive; the trace of Ω̂ is the sum of its
+        // eigenvalues (the eigenvalues are in sample-eigenvalue order, so they
+        // need not themselves be sorted).
+        for &w in &res.precision_eigenvalues {
+            assert!(w > 0.0);
+        }
+        let trace: f64 = (0..p).map(|i| res.precision[[i, i]]).sum();
+        let sum_omega: f64 = res.precision_eigenvalues.iter().sum();
+        assert_relative_eq!(trace, sum_omega, max_relative = 1e-10);
+        // The reconstruction is consistent: Ω̂ = U diag(ω) U'.
+        let reconstructed =
+            reconstruct_from_eigenvalues(&res.eigenvectors, &res.precision_eigenvalues);
+        for i in 0..p {
+            for j in 0..p {
+                assert_relative_eq!(
+                    res.precision[[i, j]],
+                    reconstructed[[i, j]],
+                    epsilon = 1e-10
+                );
+            }
+        }
     }
 }

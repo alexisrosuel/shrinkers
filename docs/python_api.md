@@ -8,6 +8,8 @@ It exposes these functions:
 | `deconvolve_spiked` | **Primary**: spiked + bulk cleaning via free-probability deconvolution |
 | `clean_correlation_matrix` | Clean a full correlation matrix (RIE + eigenvector overlaps) |
 | `direct_precision_shrinkage` | Direct precision-matrix eigenvalue shrinkage |
+| `inverse_nonlinear_shrinkage` | Ledoit–Wolf inverse shrinkage (QIS/LIS/GIS) precision eigenvalues |
+| `estimate_precision_matrix` | Estimate the full precision matrix Ω̂ = Σ̂⁻¹ from a covariance matrix |
 | `stieltjes_transform` | Raw empirical Stieltjes transform |
 | `stieltjes_transform_with_deriv` | S and its analytic derivative dS/dx in one pass |
 | `detect_spikes_bema` | BEMA spike detection (K, bulk edge, σ²) |
@@ -209,6 +211,92 @@ from shrinkers import direct_precision_shrinkage
 res = direct_precision_shrinkage(evals, c=0.25)
 omega_evals = res["precision_eigenvalues"]
 ```
+
+---
+
+### `inverse_nonlinear_shrinkage(eigenvalues, c, *, method="qis", parallel=False)`
+
+Ledoit–Wolf **inverse nonlinear shrinkage** (Bernoulli 2022): estimates the
+eigenvalues of the precision matrix $\Omega = \Sigma^{-1}$ *directly*, so the
+small inverse eigenvalues are not over-inflated by inverting a
+covariance-optimal estimator. Three losses are available:
+
+| `method` | Loss the eigenvalues are optimal for |
+|---|---|
+| `"qis"` (default) | Frobenius / inverse Stein / minimum variance |
+| `"lis"` | Stein's loss |
+| `"gis"` | symmetrized Kullback–Leibler |
+
+Only the non-singular regime $c \le 1$ ($p \le n$) is supported, and the
+eigenvalues must be **strictly positive** (the kernel divides by λ and
+evaluates the transform on $\lambda(1+ih)$, so a zero is a genuine error here).
+
+**Parameters**
+
+- `eigenvalues` — `np.ndarray[float64]`, shape `(p,)`, finite, strictly
+  positive.
+- `c` — `float`, in $(0, 1]$.
+- `method` — `"qis"` (default), `"lis"` or `"gis"`.
+- `parallel` — `False` (default, single-threaded), `True` (multi-core), or
+  `None` (library picks by problem size).
+
+**Returns**
+
+- `dict` with:
+  - `"precision_eigenvalues"` — `np.ndarray[float64]`, shape `(p,)`, the Ω̂
+    eigenvalues, parallel to the input eigenvalues;
+  - `"covariance_eigenvalues"` — the matching Σ̂ eigenvalues (the reciprocals,
+    trace-rescaled for QIS);
+  - `"smoothing"` — the Ledoit–Wolf bandwidth $h$.
+
+```python
+from shrinkers import inverse_nonlinear_shrinkage
+
+res = inverse_nonlinear_shrinkage(evals, c=0.25)
+omega_evals = res["precision_eigenvalues"]
+```
+
+---
+
+### `estimate_precision_matrix(covariance, c, *, method="qis", parallel=False)`
+
+Estimate the full precision matrix
+$\hat{\Omega} = \hat{\Sigma}^{-1}$ from a sample covariance (or correlation)
+matrix by inverse nonlinear shrinkage — the symmetric counterpart of
+`clean_correlation_matrix`. The estimator is rotation-equivariant,
+$\hat{\Omega} = U\,\mathrm{diag}(\omega)\,U'$, with $U$ the sample
+eigenvectors.
+
+**Parameters**
+
+- `covariance` — `np.ndarray[float64]`, shape `(p, p)`, symmetric, finite,
+  positive definite.
+- `c` — `float`, in $(0, 1]$.
+- `method` — `"qis"` (default), `"lis"` or `"gis"`.
+- `parallel` — `False` (default), `True`, or `None` (library picks).
+
+**Returns**
+
+- `dict` with:
+  - `"precision"` — precision matrix estimate Ω̂, shape `(p, p)`;
+  - `"eigenvectors"` — sample eigenvectors `(p, p)`, columns sorted by
+    descending sample eigenvalue;
+  - `"precision_eigenvalues"` — Ω̂ eigenvalues `(p,)`, paired column-by-column
+    with `"eigenvectors"`;
+  - `"covariance_eigenvalues"` — the matching Σ̂ eigenvalues `(p,)`;
+  - `"smoothing"` — the Ledoit–Wolf bandwidth $h$.
+
+```python
+from shrinkers import estimate_precision_matrix
+
+res = estimate_precision_matrix(sample_cov, c=0.25)
+omega = res["precision"]              # (p, p) precision matrix
+omega_evals = res["precision_eigenvalues"]  # paired with res["eigenvectors"]
+```
+
+The dense path eigendecomposes internally with Jacobi iteration, so for large
+$p$ prefer extracting the eigensystem in NumPy/SciPy and calling the Rust
+`precision_from_eigensystem` entry point directly.
 
 ---
 

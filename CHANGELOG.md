@@ -3,6 +3,45 @@
 All notable changes to **shrinkers** are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added — Ledoit–Wolf inverse nonlinear shrinkage (precision matrix)
+
+Two new Python entry points estimate the precision matrix Ω = Σ⁻¹ directly,
+instead of inverting a covariance-optimal estimator (which over-inflates the
+small inverse eigenvalues):
+
+- `inverse_nonlinear_shrinkage(eigenvalues, c, *, method="qis", parallel=False)`
+  returns the optimal precision eigenvalues, the matching covariance
+  eigenvalues and the Ledoit–Wolf bandwidth. `method` selects the loss:
+  `"qis"` (Frobenius / inverse Stein / minimum variance, default), `"lis"`
+  (Stein's loss) and `"gis"` (symmetrized Kullback–Leibler).
+- `estimate_precision_matrix(covariance, c, *, method="qis", parallel=False)`
+  is the matrix counterpart of `clean_correlation_matrix`: it returns the full
+  p×p precision matrix Ω̂ = U diag(ω) U′, the sample eigenvectors and the paired
+  eigenvalues.
+
+Rust-side: `deconvolution::InverseShrinkageMethod` /
+`deconvolution::inverse_nonlinear_shrinkage` and
+`pipeline::{estimate_precision_matrix, precision_from_eigensystem,
+PrecisionMatrixResult}`.
+
+**Reuse** — θ and Hθ are exactly the real and imaginary parts of the empirical
+Stieltjes transform on the **scaled ray** z_i = λ_i(1 + ih), so the estimator
+drives the crate's existing ultra-optimized per-point kernels through the new
+`stieltjes::compute_stieltjes_scaled_ray` (η_i = h·λ_i per query point, which
+the batched FFT/treecode paths — fixed η — cannot serve; they fall back to the
+exact auto-vectorized sum). Total cost stays O(p²), the reference
+implementation's own complexity.
+
+**Verified** — the Python eigenvalue path matches the Ledoit & Wolf reference
+package (github.com/pald22/covShrinkage, `QIS.py`) to ~5e-16 relative, and a
+golden-master Rust test locks the formula.
+
+**Note** — the pre-existing `direct_precision_shrinkage` uses a different,
+simpler pointwise formula; these functions implement the published
+QIS/LIS/GIS estimators.
+
 ## [0.1.2] — 2026-09-20
 
 ### ChebCodeFast: relaxed operating point + 4-lane f32 far field

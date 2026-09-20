@@ -107,7 +107,9 @@ by roughly an order of magnitude (9.1× at p≈5000).
   place for every entry point, and on the deconvolution grid the treecode is
   sized to the number of query points it actually serves);
 - correlation-matrix cleaning with eigenvector-overlap correction, direct
-  precision-matrix shrinkage, Tracy–Widom spike detection;
+  precision-matrix shrinkage, Ledoit–Wolf inverse nonlinear shrinkage
+  (QIS/LIS/GIS) and full precision-matrix estimation, Tracy–Widom spike
+  detection;
 - Rust API + PyO3 bindings with the GIL released during computation;
 - multi-core execution built in — exact and ChebCode kernels parallelize
   multi-core (`parallel=True`).
@@ -168,6 +170,36 @@ print(res["spikes"])            # -> [8.779] debiased population spike
                                 #    (sample value was 10; BBP pulls it down)
 print(res["bulk"]["density"].shape)     # -> (200,) deconvolved bulk density
 ```
+
+### Precision matrices — estimating Σ⁻¹ directly
+
+Inverting a shrinkage-cleaned covariance is **not optimal** for the inverse:
+the covariance loss does not penalise errors on the inverse scale, so the small
+inverted eigenvalues get over-inflated. `shrinkers` implements Ledoit & Wolf's
+*inverse nonlinear shrinkage* (Bernoulli 2022), which derives the optimal
+precision eigenvalues directly instead of inverting an optimal covariance:
+
+```python
+from shrinkers import inverse_nonlinear_shrinkage, estimate_precision_matrix
+
+# Spectrum in, optimal precision eigenvalues out (default: QIS; also "lis"/"gis")
+res = inverse_nonlinear_shrinkage(evals, c=0.25)
+omega_evals = res["precision_eigenvalues"]
+
+# Or the full matrix Ω̂ = U diag(ω) U′ from a sample covariance/correlation matrix
+sample_cov = np.cov(data, rowvar=False)        # (p, p), data shape (n, p)
+res = estimate_precision_matrix(sample_cov, c=0.25)
+omega = res["precision"]                       # (p, p), symmetric
+omega_evals = res["precision_eigenvalues"]     # paired with res["eigenvectors"]
+```
+
+`qis` targets the Frobenius / inverse-Stein / minimum-variance losses, `lis`
+Stein's loss and `gis` the symmetrized Kullback–Leibler divergence. On a
+p = 60 random model, QIS cuts the relative-Frobenius error on the precision
+matrix from **0.57** (naive 1/λ) to **0.17**. The estimator reuses the crate's
+Stieltjes kernels — θ and Hθ are the transform evaluated on the scaled ray
+z_i = λ_i(1 + ih) — and matches the Ledoit–Wolf reference implementation to
+machine precision (~5e-16).
 
 See `docs/python_api.md` for the full API reference.
 

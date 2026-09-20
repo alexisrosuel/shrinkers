@@ -81,6 +81,27 @@ class DirectPrecisionShrinkageResult(TypedDict):
     precision_eigenvalues: np.ndarray  # direct precision delta_i (p,)
 
 
+InverseMethod: TypeAlias = Literal["qis", "lis", "gis"]
+
+
+class InverseNonlinearShrinkageResult(TypedDict):
+    """Result of inverse nonlinear shrinkage (Ledoit & Wolf 2022)."""
+
+    precision_eigenvalues: np.ndarray  # eigenvalues of Omega_hat (p,)
+    covariance_eigenvalues: np.ndarray  # matching Sigma_hat eigenvalues (p,)
+    smoothing: float  # Ledoit-Wolf bandwidth h
+
+
+class PrecisionMatrixResult(TypedDict):
+    """Result of `estimate_precision_matrix`."""
+
+    precision: np.ndarray  # precision matrix estimate (p, p)
+    eigenvectors: np.ndarray  # sample eigenvectors (p, p), descending columns
+    precision_eigenvalues: np.ndarray  # Omega_hat eigenvalues, paired with columns
+    covariance_eigenvalues: np.ndarray  # Sigma_hat eigenvalues, paired with columns
+    smoothing: float  # Ledoit-Wolf bandwidth h
+
+
 class StieltjesTransformResult(TypedDict):
     real: np.ndarray  # Re[S(lambda_i)] (p,)
     imag: np.ndarray  # Im[S(lambda_i)] (p,)
@@ -133,6 +154,24 @@ def clean_correlation_matrix(
 def direct_precision_shrinkage(
     eigenvalues: np.ndarray, c: float
 ) -> DirectPrecisionShrinkageResult: ...
+
+
+def inverse_nonlinear_shrinkage(
+    eigenvalues: np.ndarray,
+    c: float,
+    *,
+    method: InverseMethod = "qis",
+    parallel: bool | None = False,
+) -> InverseNonlinearShrinkageResult: ...
+
+
+def estimate_precision_matrix(
+    covariance: np.ndarray,
+    c: float,
+    *,
+    method: InverseMethod = "qis",
+    parallel: bool | None = False,
+) -> PrecisionMatrixResult: ...
 
 
 def stieltjes_transform(

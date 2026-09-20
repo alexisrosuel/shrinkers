@@ -209,6 +209,37 @@ fn stieltjes_sum_for_one(
     }
 }
 
+/// Evaluate the Stieltjes sum along a **scaled ray** `z_i = λ_i·(1 + i·scale)`
+/// at every eigenvalue, returning the RAW `(Re, Im)` sums (not scaled by `1/p`).
+///
+/// This is the kernel the Ledoit–Wolf *inverse* shrinkage estimators integrate
+/// against (see [`crate::deconvolution::inverse_nonlinear_shrinkage`]): unlike
+/// the pointwise estimator, whose imaginary shift `η` is the same for every
+/// query point, the inverse-shrinkage smoothing is proportional to the
+/// eigenvalue itself, so `η_i = scale·λ_i` changes from one query to the next.
+///
+/// The per-point kernels are reused verbatim: approximate batched methods
+/// (FFT/treecode) assume a single `η` and are therefore not applicable, so they
+/// fall back to the exact auto-vectorized sum-by-sum evaluation — the same
+/// documented fallback as [`stieltjes_sum_for_one`]. The overall cost is the
+/// O(p²) that the inverse-shrinkage estimator already has by construction.
+pub(crate) fn compute_stieltjes_scaled_ray(
+    eigenvalues: &[f64],
+    scale: f64,
+    method: StieltjesMethod,
+    cutoff: Option<f64>,
+    parallelism: Parallelism,
+) -> Vec<(f64, f64)> {
+    let eval_at = |&lambda_i: &f64| {
+        let eta = scale * lambda_i;
+        stieltjes_sum_for_one(lambda_i, eigenvalues, eta, method, cutoff)
+    };
+    match parallelism {
+        Parallelism::Parallel => eigenvalues.par_iter().map(eval_at).collect(),
+        Parallelism::Sequential | Parallelism::Auto => eigenvalues.iter().map(eval_at).collect(),
+    }
+}
+
 /// Resolve a ChebCode method variant to its measured preset.
 ///
 /// The presets themselves live in [`chebcode::ChebPreset`] — the single source
