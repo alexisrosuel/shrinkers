@@ -101,9 +101,14 @@ jobs:
           args: --release --out dist --find-interpreter
           manylinux: auto
 
+      # Install the wheel that was just built, by explicit path. Naming the
+      # distribution instead (`pip install --find-links dist shrinkers`) let
+      # pip prefer the published 0.1.1 on PyPI over the equal-version local
+      # wheel, so this matrix silently tested the stale release until the
+      # tests finally outran the published artifact.
       - name: Install wheel + test deps
         run: |
-          pip install --force-reinstall --find-links dist shrinkers
+          pip install --force-reinstall --no-deps dist/*.whl
           pip install numpy pytest
 
       - name: Import smoke test
