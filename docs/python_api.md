@@ -20,7 +20,8 @@ It exposes these functions:
 
 - **Module name:** `shrinkers`
 - **Version:** `shrinkers.__version__` (single-sourced from `Cargo.toml`)
-- **Python requirement:** `>= 3.9`
+- **Python requirement:** `>= 3.9` (CI builds and runs the suite on 3.9–3.15;
+  the wheel is `cp39-abi3`, so one artifact serves all of them)
 - **Array convention:** all 1-D inputs are `numpy.ndarray` of `float64`
   (contiguous).
 - **Threading:** heavy computation releases the GIL (`py.detach`), so Python

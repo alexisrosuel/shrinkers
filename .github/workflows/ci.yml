@@ -81,8 +81,11 @@ jobs:
       fail-fast: false
       matrix:
         # 3.9 is the declared floor (`requires-python` in pyproject.toml,
-        # `abi3-py39` in Cargo.toml) and was never actually built or tested.
-        python-version: ["3.9", "3.10", "3.13"]
+        # `abi3-py39` in Cargo.toml). Every leg builds the *same* abi3 wheel, so
+        # the extra interpreters are not about building anything new: they prove
+        # the stable ABI is actually forward-compatible instead of merely
+        # declared, which is the only thing a `cp39-abi3` wheel promises.
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       - uses: actions/checkout@v4
 
@@ -90,6 +93,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          # 3.15 is still a release candidate (final is scheduled for
+          # 2026-10-01), so `3.15` only resolves with prereleases enabled. Once
+          # 3.15.0 ships this flag becomes a no-op for the other legs.
+          allow-prereleases: true
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
