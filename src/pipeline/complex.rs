@@ -27,7 +27,7 @@ use ndarray::Array2;
 use num_complex::Complex64;
 
 use crate::config::RmtConfig;
-use crate::deconvolution::rie_shrinkage;
+use crate::deconvolution::{PopulationEigenvalues, estimate_population_eigenvalues, rie_shrinkage};
 
 use super::{compute_angular_overlaps, compute_d_bulk};
 
@@ -85,6 +85,36 @@ pub fn hermitian_eigh(re: &Array2<f64>, im: &Array2<f64>) -> (Vec<f64>, Array2<C
         }
     }
     (evals, out)
+}
+
+/// Eigendecomposition of a complex Hermitian matrix held as a single
+/// `Complex64` array.
+///
+/// The matrix is first symmetrised to its Hermitian part `(H + H^H) / 2`, so
+/// round-off asymmetry in the imaginary part does not matter.  This is the
+/// convenient front door to [`hermitian_eigh`] when the caller already has the
+/// matrix rather than its real/imaginary halves; both matrix-level entry points
+/// of this module ([`clean_correlation_matrix_complex`] and
+/// [`deconvolve_correlation_matrix_complex`]) start here.
+pub fn hermitian_eigh_matrix(h: &Array2<Complex64>) -> (Vec<f64>, Array2<Complex64>) {
+    let p = h.nrows();
+    assert_eq!(p, h.ncols(), "hermitian_eigh_matrix needs a square matrix");
+
+    let mut re = Array2::<f64>::zeros((p, p));
+    let mut im = Array2::<f64>::zeros((p, p));
+    for i in 0..p {
+        for j in i..p {
+            let a = h[[i, j]];
+            let b = h[[j, i]];
+            // Hermitian part: (H + H^H) / 2
+            re[[i, j]] = 0.5 * (a.re + b.re);
+            re[[j, i]] = re[[i, j]];
+            let m = 0.5 * (a.im - b.im);
+            im[[i, j]] = m;
+            im[[j, i]] = -m;
+        }
+    }
+    hermitian_eigh(&re, &im)
 }
 
 fn permute_eigenvectors_complex(
@@ -189,26 +219,68 @@ pub fn clean_correlation_matrix_complex(
     c: f64,
     config: &RmtConfig,
 ) -> CleanedEigensystemComplex {
-    let p = correlation.nrows();
-    assert_eq!(p, correlation.ncols(), "correlation matrix must be square");
-
-    let mut re = Array2::<f64>::zeros((p, p));
-    let mut im = Array2::<f64>::zeros((p, p));
-    for i in 0..p {
-        for j in i..p {
-            let a = correlation[[i, j]];
-            let b = correlation[[j, i]];
-            // Hermitian part: (C + C^H) / 2
-            re[[i, j]] = 0.5 * (a.re + b.re);
-            re[[j, i]] = re[[i, j]];
-            let m = 0.5 * (a.im - b.im);
-            im[[i, j]] = m;
-            im[[j, i]] = -m;
-        }
-    }
-
-    let (eigenvalues, eigenvectors) = hermitian_eigh(&re, &im);
+    let (eigenvalues, eigenvectors) = hermitian_eigh_matrix(correlation);
     clean_eigensystem_complex(&eigenvectors, &eigenvalues, c, config)
+}
+
+/// Result of the **spiked** decomposition of a complex Hermitian correlation
+/// matrix: the sample eigensystem and the population split of the spectrum.
+#[derive(Debug, Clone)]
+pub struct DeconvolvedCorrelationComplex {
+    /// Sample eigenvalues of the input matrix, ascending.
+    pub eigenvalues: Vec<f64>,
+    /// Sample eigenvectors as columns, ascending, matching `eigenvalues`.
+    /// Produced by the same eigendecomposition, so a caller that needs the
+    /// coherent directions does not pay for a second one.
+    pub eigenvectors: Array2<Complex64>,
+    /// The spiked decomposition: BEMA spike detection, inverse-BBP debiasing of
+    /// the spikes, and Ledoit–Wolf / RIE deconvolution of the bulk.
+    pub population: PopulationEigenvalues,
+}
+
+/// Eigendecompose a **complex correlation matrix** and split its spectrum into
+/// spikes and bulk.
+///
+/// This is [`clean_correlation_matrix_complex`]'s sibling for the *estimation*
+/// problem rather than the *cleaning* one.  The two answer different questions
+/// on the same matrix:
+///
+/// * `clean_correlation_matrix_complex` runs the RIE map on **every**
+///   eigenvalue and returns a reconstructed matrix whose spike directions are
+///   reweighted by their RMT angular overlap `alpha^2`;
+/// * this function instead **detects** the spikes (BEMA), debiases them with
+///   inverse BBP, and deconvolves only the **bulk**, so the caller gets the
+///   population *spectrum* -- the number of coherent modes, their debiased
+///   eigenvalues, and a bulk estimate per remaining sample eigenvalue.
+///
+/// Both start from the same `hermitian_eigh_matrix`, so a caller that needs the
+/// matrix *and* the spectrum should use this one and then feed
+/// `eigenvectors` / `eigenvalues` into
+/// [`clean_eigensystem_complex`], rather than pay for two
+/// eigendecompositions.
+///
+/// # Arguments
+///
+/// * `correlation` — Hermitian matrix, shape `(p, p)`. Symmetrised internally.
+/// * `c` — Concentration ratio `p / n`.
+/// * `margin` — Multiplicative margin above the fitted bulk edge for BEMA spike
+///   detection (use `>= 1.05` unless a signal is known to be present).
+/// * `config` — `RmtConfig` controlling the Stieltjes method used for the bulk
+///   deconvolution.
+pub fn deconvolve_correlation_matrix_complex(
+    correlation: &Array2<Complex64>,
+    c: f64,
+    margin: f64,
+    config: &RmtConfig,
+) -> DeconvolvedCorrelationComplex {
+    let (eigenvalues, eigenvectors) = hermitian_eigh_matrix(correlation);
+    let population = estimate_population_eigenvalues(&eigenvalues, c, margin, config);
+
+    DeconvolvedCorrelationComplex {
+        eigenvalues,
+        eigenvectors,
+        population,
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +363,69 @@ mod tests {
                 );
                 assert_relative_eq!(got.covariance[[i, j]].im, 0.0, epsilon = 1e-9);
             }
+        }
+    }
+
+    #[test]
+    fn hermitian_eigh_matrix_agrees_with_the_split_interface() {
+        let h = hermite(&[0.5, 1.0, 3.0, 4.0]);
+        let n = 4;
+        let re = Array2::from_shape_fn((n, n), |(i, j)| h[[i, j]].re);
+        let im = Array2::from_shape_fn((n, n), |(i, j)| h[[i, j]].im);
+        let (split, _) = hermitian_eigh(&re, &im);
+        let (joined, _) = hermitian_eigh_matrix(&h);
+        for (a, b) in split.iter().zip(joined.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn hermitian_eigh_matrix_symmetrises_a_non_hermitian_input() {
+        // Only the Hermitian part may matter; the antisymmetric part is dropped.
+        let mut h = Array2::<Complex64>::eye(3);
+        h[[0, 1]] = Complex64::new(0.0, 0.5);
+        h[[1, 0]] = Complex64::new(0.0, 0.25); // deliberately not -0.5i
+        let (evals, _) = hermitian_eigh_matrix(&h);
+
+        // (H + H^H)/2 leaves 0.125i on [0,1] and -0.125i on [1,0], so the
+        // spectrum is {1, 1 - 0.125, 1 + 0.125}.
+        assert_relative_eq!(evals[0], 0.875, epsilon = 1e-12);
+        assert_relative_eq!(evals[1], 1.0, epsilon = 1e-12);
+        assert_relative_eq!(evals[2], 1.125, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn deconvolve_correlation_matrix_complex_matches_the_eigenvalue_entry_point() {
+        // The matrix entry point must return exactly what the eigenvalue-only
+        // entry point returns on the same spectrum -- it is the same pipeline
+        // with the eigendecomposition folded in.
+        let p = 7;
+        let h = hermite(&[0.4, 0.6, 0.9, 1.0, 1.1, 2.5, 6.0]);
+        let (c, margin) = (0.4, 1.05);
+        let cfg = RmtConfig::new(c);
+
+        let got = deconvolve_correlation_matrix_complex(&h, c, margin, &cfg);
+        let want = estimate_population_eigenvalues(&got.eigenvalues, c, margin, &cfg);
+
+        assert_eq!(got.population.k, want.k);
+        for (a, b) in got.population.spikes.iter().zip(want.spikes.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-12);
+        }
+        for (a, b) in got
+            .population
+            .bulk_population
+            .iter()
+            .zip(want.bulk_population.iter())
+        {
+            assert_relative_eq!(a, b, epsilon = 1e-12);
+        }
+        assert_relative_eq!(got.population.sigma2, want.sigma2, epsilon = 1e-12);
+        assert_relative_eq!(got.population.bulk_edge, want.bulk_edge, epsilon = 1e-12);
+
+        // The eigenvectors come free and are unitary.
+        for i in 0..p {
+            let norm: f64 = (0..p).map(|k| got.eigenvectors[[k, i]].norm_sqr()).sum();
+            assert_relative_eq!(norm, 1.0, epsilon = 1e-9);
         }
     }
 

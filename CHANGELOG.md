@@ -37,6 +37,37 @@ This is the missing brick for frequency-domain estimation on time series; the
 downstream estimator that motivated it lives in its own repository and now
 delegates its eigensolver here rather than carrying a duplicate.
 
+### Added — complex Hermitian spiked decomposition
+
+The cleaning entry point above answers the *cleaning* question (RIE on every
+eigenvalue, spike directions reweighted by their angular overlap). The
+*estimation* question — how many coherent modes are there, what are their
+debiased eigenvalues, what does the bulk look like — needs the **spiked split**
+instead, and that only existed in the eigenvalue domain
+(`deconvolution::estimate_population_eigenvalues`). A caller holding the matrix
+had to eigendecompose it, throw the eigenvectors away, and hand the eigenvalues
+over.
+
+New surface:
+
+- `pipeline::complex::hermitian_eigh_matrix(h)` — the same eigendecomposition as
+  `hermitian_eigh(re, im)`, from a single `Complex64` array. Symmetrises to the
+  Hermitian part first, so round-off asymmetry does not matter. Both matrix-level
+  entry points now start here; `clean_correlation_matrix_complex` was refactored
+  onto it with no numerical change.
+- `pipeline::complex::deconvolve_correlation_matrix_complex(correlation, c,
+  margin, config)` — one pass from the matrix to the whole answer: sample
+  eigenvalues, sample eigenvectors, and the `PopulationEigenvalues` split (BEMA
+  detection, inverse-BBP spike debiasing, Ledoit–Wolf bulk deconvolution). The
+  eigenvectors are a by-product of the eigendecomposition, so a caller that also
+  needs the coherent directions does not pay for a second one — and the split is
+  guaranteed to come from the *same* eigenvalues that are returned.
+
+Verified: the matrix entry point reproduces
+`estimate_population_eigenvalues` on its own returned eigenvalues exactly
+(spikes, bulk, `sigma^2` and `bulk_edge` to 1e-12), and a non-Hermitian input's
+antisymmetric part is dropped rather than folded in. 147 Rust tests (3 new).
+
 ### Changed — calibrated regularization η for the bulk eigenvalue deconvolution
 
 The pointwise bulk deconvolution (`rie_shrinkage`, `ledoit_wolf_shrinkage`,
