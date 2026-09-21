@@ -36,7 +36,15 @@ pub struct PopulationEigenvalues {
     /// Estimated noise variance $\sigma^2$.
     pub sigma2: f64,
     /// Estimated **population** eigenvalues for the **bulk** (Ledoit–Wolf /
-    /// RIE pointwise deconvolution), ascending, one per bulk sample eigenvalue.
+    /// RIE pointwise deconvolution), one per bulk sample eigenvalue and **in
+    /// the same order as [`Self::bulk_sample`]** — that is, ascending in the
+    /// *sample* eigenvalue.
+    ///
+    /// This is **not** sorted by value: the RIE map `xi(lambda)` is not
+    /// monotone in `lambda` (it turns over near the bulk edges), so the
+    /// estimates come back out of order.  Callers that want order statistics
+    /// — pooling across frequencies, comparing quantiles — must sort
+    /// explicitly; assuming this vector is ascending is a silent error.
     pub bulk_population: Vec<f64>,
     /// The bulk sample eigenvalues (spikes removed), ascending.
     pub bulk_sample: Vec<f64>,
