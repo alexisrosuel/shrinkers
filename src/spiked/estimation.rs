@@ -23,7 +23,7 @@
 
 use crate::config::RmtConfig;
 use crate::deconvolution::shrinkage_factor;
-use crate::stieltjes;
+use crate::stieltjes::{self, EtaDefault};
 
 /// BBP threshold: the smallest population spike that produces a detectable
 /// sample spike. Below this, the spike is absorbed into the bulk.
@@ -78,7 +78,7 @@ pub fn ledoit_wolf_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Vec<f64
     }
 
     // Resolve Auto, pick the default η, and run the Stieltjes kernel once.
-    let resolved = stieltjes::resolve_and_compute_stieltjes(eigenvalues, config);
+    let resolved = stieltjes::resolve_and_compute_stieltjes(eigenvalues, config, EtaDefault::Bulk);
     let c = resolved.config.c;
 
     stieltjes::map_stieltjes(

@@ -35,7 +35,7 @@
 use ndarray::Array1;
 
 use crate::config::RmtConfig;
-use crate::stieltjes;
+use crate::stieltjes::{self, EtaDefault};
 
 /// Compute the direct precision shrinkage factor for a single eigenvalue.
 ///
@@ -75,7 +75,8 @@ pub fn direct_precision_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Ar
     }
 
     // Resolve Auto, pick the default η, and run the Stieltjes kernel once.
-    let resolved = stieltjes::resolve_and_compute_stieltjes(eigenvalues, config);
+    let resolved =
+        stieltjes::resolve_and_compute_stieltjes(eigenvalues, config, EtaDefault::Generic);
     let c = resolved.config.c;
 
     // Apply the direct precision factor, optionally in parallel.
@@ -130,6 +131,37 @@ mod tests {
         for (o, n) in default.iter().zip(naive.iter()) {
             assert_relative_eq!(o, n, max_relative = 1e-9);
         }
+    }
+
+    /// Counterpart of the RIE wiring test: this path keeps the *generic*
+    /// 0.1/√p, and running it at the bulk constant measurably changes (and
+    /// degrades) the answer. Guards the deliberate split.
+    #[test]
+    fn test_default_eta_stays_generic() {
+        let mut evals: Vec<f64> = (0..200).map(|i| 1.0 + (i as f64 - 100.0) * 1e-3).collect();
+        evals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let c = 0.3;
+        let p = evals.len() as f64;
+
+        let default = direct_precision_shrinkage_default(&evals, c);
+        let generic =
+            direct_precision_shrinkage(&evals, &RmtConfig::new(c).with_eta(0.1 / p.sqrt()));
+        let bulk = direct_precision_shrinkage(&evals, &RmtConfig::new(c).with_eta(0.4 / p.sqrt()));
+
+        for (a, b) in default.iter().zip(generic.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-12);
+        }
+        let mean = |v: &ndarray::Array1<f64>| v.iter().sum::<f64>() / v.len() as f64;
+        assert!(
+            (mean(&default) - 1.0).abs() < 0.1,
+            "generic default drifted: {}",
+            mean(&default)
+        );
+        assert!(
+            (mean(&bulk) - 1.0).abs() > 0.2,
+            "the bulk bandwidth is expected to degrade this path; if it no longer \
+             does, the two constants may have converged"
+        );
     }
 
     #[test]

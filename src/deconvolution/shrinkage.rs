@@ -13,7 +13,7 @@
 use ndarray::Array1;
 
 use crate::config::RmtConfig;
-use crate::stieltjes;
+use crate::stieltjes::{self, EtaDefault};
 
 /// Compute the shrinkage factor for a single eigenvalue.
 ///
@@ -64,7 +64,7 @@ pub fn rie_shrinkage(eigenvalues: &[f64], config: &RmtConfig) -> Array1<f64> {
     }
 
     // Resolve Auto, pick the default η, and run the Stieltjes kernel once.
-    let resolved = stieltjes::resolve_and_compute_stieltjes(eigenvalues, config);
+    let resolved = stieltjes::resolve_and_compute_stieltjes(eigenvalues, config, EtaDefault::Bulk);
     let c = resolved.config.c;
     let original_trace: f64 = eigenvalues.iter().copied().sum();
 
@@ -161,5 +161,35 @@ mod tests {
                 assert_relative_eq!(orig_sum, res_sum, epsilon = 1e-10);
             }
         }
+    }
+
+    /// The RIE path must fall back on the *bulk-calibrated* η (0.4/√p), and
+    /// not on the generic 0.1/√p. An explicit 0.4/√p has to reproduce the
+    /// default bit-for-bit, and an explicit 0.1/√p must NOT — that pair of
+    /// assertions fails if the `EtaDefault::Bulk` wiring is ever dropped.
+    #[test]
+    fn test_default_eta_is_bulk_calibrated() {
+        let mut evals: Vec<f64> = (0..300).map(|i| 0.2 + (i as f64) * 0.01).collect();
+        evals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let c = 0.3;
+        let p = evals.len() as f64;
+
+        let default = rie_shrinkage(&evals, &RmtConfig::new(c));
+        let bulk = rie_shrinkage(&evals, &RmtConfig::new(c).with_eta(0.4 / p.sqrt()));
+        let generic = rie_shrinkage(&evals, &RmtConfig::new(c).with_eta(0.1 / p.sqrt()));
+
+        for (a, b) in default.iter().zip(bulk.iter()) {
+            assert_relative_eq!(a, b, epsilon = 1e-12);
+        }
+        let worst = default
+            .iter()
+            .zip(generic.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            worst > 1e-6,
+            "the RIE default must differ from the generic 0.1/sqrt(p) bandwidth, \
+             but the two agree to {worst:.3e}"
+        );
     }
 }

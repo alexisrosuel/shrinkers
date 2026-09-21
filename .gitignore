@@ -34,3 +34,10 @@ venv/
 
 # scratch worktrees for perf exploration
 .wt/
+
+# standalone exploratory repositories, each with its own .git
+/lrv_spectral_test/
+/coherence_shrinkage/
+
+# local maturin/uv build cache (sandbox redirect)
+.uv-cache/

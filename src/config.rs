@@ -338,8 +338,10 @@ pub struct RmtConfig {
     // === Core parameters ===
     /// Concentration ratio p / n
     pub c: f64,
-    /// Regularization parameter; `None` = the crate default η = 0.1/√p
-    /// (`crate::stieltjes::default_eta`).
+    /// Regularization parameter; `None` = the path's default η, which is
+    /// **0.1/√p** (`crate::stieltjes::default_eta`) in general and
+    /// **0.4/√p** (`crate::stieltjes::default_eta_bulk`) for the pointwise
+    /// bulk eigenvalue deconvolution. See `docs/eta_choice.md`.
     ///
     /// Channel note: the pointwise paths (`rie_shrinkage`,
     /// `direct_precision_shrinkage`, `estimate_population_eigenvalues`)

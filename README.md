@@ -42,7 +42,7 @@ high-dimensional covariance are biased artifacts: the bulk is smeared over
 *Spiked model, p = 1000, c = 0.25, σ² = 1, three spikes injected at 12 / 7 / 4.
 All 3 spikes are detected and debiased to within 1 % (12.01 / 7.07 / 4.07),
 the noise level is estimated at σ̂² = 1.002, and the median relative error
-against the true population eigenvalues drops from **40 % to 4.3 %** in a
+against the true population eigenvalues drops from **40 % to 1.7 %** in a
 single call (`estimate_population_eigenvalues`).*
 
 **2 · It is absurdly fast for what it computes.** Same math as your NumPy

@@ -5,6 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — calibrated regularization η for the bulk eigenvalue deconvolution
+
+The pointwise bulk deconvolution (`rie_shrinkage`, `ledoit_wolf_shrinkage`,
+hence `estimate_population_eigenvalues`) now falls back on **η = 0.4/√p**
+instead of the crate-wide 0.1/√p, through a new
+`stieltjes::default_eta_bulk` selected by `EtaDefault::Bulk`. The density
+drivers (`spectral_deconvolution`, `deconvolve_spiked`, `deconvolve_adaptive`)
+and the precision shrinkage keep 0.1/√p; `direct_precision_shrinkage` is
+measurably degraded by the wider bandwidth (its identity-population output
+moves from ~1.0 to 1.26), so the two paths stay on separate constants.
+
+The exponent is not new — the RIE/Ledoit–Wolf update is *exact* under H0 when
+the Stieltjes transform is the exact MP one (verified to 1e-6 against machine
+precision), and the whole error comes from using the empirical transform. Its
+diagonal term contributes `−i/(pη)` while the off-axis evaluation costs a bias
+linear in `η`; balancing them forces `η* ∝ 1/√p`. The constant was then
+calibrated on **true Wishart spectra**, which is what callers actually pass in:
+`f* ∈ [0.30, 0.50]` (mean 0.39) across 15 `(p, c)` cells, `p ∈ [120, 2000]`,
+`c ∈ [0.1, 0.8]`.
+
+Measured effect:
+
+- H0 bulk bias on the spectral-coherence matrices (M=120, c=0.40) moves from
+  **−0.092 to +0.034**, median `|ξ−1|` from 0.140 to 0.060, and the monotone
+  tilt across the bulk deciles (from −0.02 up to −0.22) is gone;
+- the README's own cleaning benchmark (p=1000, c=0.25, spikes 12/7/4) goes
+  from **4.3 % to 1.7 %** median relative error — the figure and
+  `docs/img/readme_figures.json` are regenerated;
+- spike detection and debiasing are untouched (neither consumes η).
+
+This was found while checking whether the LRV spectral coherence matrix
+(arXiv:2501.04371) is a `shrinkers`-shaped estimation problem; the
+reconciliation with the earlier iid-marginal η sweep, including the
+generator-dependence of the optimum, is in `docs/eta_choice.md`.
+
 ### Added — Ledoit–Wolf inverse nonlinear shrinkage (precision matrix)
 
 Two new Python entry points estimate the precision matrix Ω = Σ⁻¹ directly,

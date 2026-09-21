@@ -37,13 +37,16 @@
 //!   family has two floors: rayon requests below `RAYON_MIN_P` run
 //!   sequential (scheduling would dominate), and tiled-parallel only kicks
 //!   in at `PAR_TILED_MIN_P`.
-//! - Two deliberate η conventions coexist (`default_eta` is the single
-//!   library constant): **η = 0.1/√p** wherever the crate picks a default
-//!   itself, **η = 1/√p** inside every recorded benchmark harness
-//!   (`pareto_data`, `bench_one`, `small_p_crossover`; declared in their
-//!   JSON meta). Larger η smooths more, so approximate-method errors
-//!   recorded at 1/√p are OPTIMISTIC relative to default-η calls — never
-//!   read the two families side-by-side.
+//! - Three deliberate η conventions coexist, all through the two single
+//!   definition points `default_eta` / `default_eta_bulk`: **η = 0.1/√p**
+//!   wherever the crate picks a generic default (density drivers, precision
+//!   shrinkage), **η = 0.4/√p** for the pointwise bulk eigenvalue
+//!   deconvolution (`EtaDefault::Bulk`), and **η = 1/√p** inside every
+//!   recorded benchmark harness (`pareto_data`, `bench_one`,
+//!   `small_p_crossover`; declared in their JSON meta). Larger η smooths
+//!   more, so approximate-method errors recorded at 1/√p are OPTIMISTIC
+//!   relative to 0.1/√p calls — never read those two families side-by-side.
+//!   The 0.1 vs 0.4 split and its measurements are in `docs/eta_choice.md`.
 
 mod adaptive;
 mod autovec;
@@ -84,18 +87,86 @@ use rayon::prelude::*;
 
 /// The crate-wide default regularization: **η = 0.1/√p**.
 ///
+/// Used by the density drivers ([`crate::deconvolution::spectral_deconvolution`],
+/// `deconvolve_spiked`, `deconvolve_adaptive`) and by the precision-matrix
+/// shrinkage. The bulk *covariance-eigenvalue* deconvolution has its own,
+/// separately calibrated default — [`default_eta_bulk`] — because those
+/// estimators have different losses; see `docs/eta_choice.md`.
+///
 /// Single definition point for a constant that was previously hardcoded at
 /// the Python boundary, in [`crate::deconvolution::deconvolve_spiked`] and
 /// in the adaptive driver alike.
 ///
 /// Note the separate benchmark convention: recorded harnesses measure at
 /// η = 1/√p instead (see the Conventions list above for why the split is
-/// kept rather than unified). The full justification — theory anchors,
-/// measured bias/stability/runtime trade-offs — lives in
-/// [`docs/eta_choice.md`](../docs/eta_choice.md).
+/// kept rather than unified).
 pub(crate) fn default_eta(p: usize) -> f64 {
     const SCALE: f64 = 0.1;
     SCALE / (p as f64).sqrt()
+}
+
+/// Default η for the **bulk covariance-eigenvalue deconvolution**: 0.4/√p.
+///
+/// Used by [`crate::deconvolution::rie_shrinkage`] and
+/// [`crate::spiked::ledoit_wolf_shrinkage`] (hence by
+/// `estimate_population_eigenvalues`). It is deliberately *not* the crate-wide
+/// [`default_eta`]: the direct precision shrinkage at this bandwidth degrades
+/// sharply (its identity-population test moves from ~1.0 to 1.26), and the
+/// *density* drivers were never calibrated against this criterion — so only
+/// the pointwise bulk path moves.
+///
+/// # Why the exponent is 1/2, and why the constant is 0.4
+///
+/// With the RIE / Ledoit–Wolf update `ξ = λ/|1-c+cλm(z)|²` at `z = λ+iη`, the
+/// H0 error of the pointwise bulk estimate splits into two biases that pull in
+/// opposite directions:
+///
+/// * the diagonal term of the empirical average contributes `-i/(pη)` to `m`
+///   — a deterministic displacement of order `1/(pη)`, which grows as `η`
+///   shrinks;
+/// * evaluating off the real axis costs a bias linear in `η` (measured
+///   ≈ `1.09 η` against the exact MP transform), which grows as `η` grows.
+///
+/// The sampling variance is `O(1/p)` and carries no `η`. Balancing the two
+/// biases, `c₁/(pη) = c₄η`, gives `η* = √(c₁/c₄)/√p`: the exponent `1/2` is
+/// forced by the structure, the constant is empirical.
+///
+/// Measured on **true Wishart spectra** — what callers actually have — the
+/// MSE-optimal constant is 0.4 for every `(p, c)` tested, `p ∈ [120, 2000]`
+/// and `c ∈ [0.1, 0.8]`. The curve is flat over `[0.4, 0.5]` and rises
+/// sharply beyond (`E[(ξ-1)²]` = 3.8e-4 at f=0.4, 9.1e-4 at f=1, 5.7e-3 at
+/// f=3, at p=2000, c=0.25). Against 0.1 this is a 2.7–8.4× reduction in
+/// `E[(ξ-1)²]`, about 3× in median `|ξ-1|`, and no effect on spike detection
+/// or debiasing — neither consumes η.
+///
+/// The optimum is *generator-dependent*, which is the real lesson: the same
+/// sweep on `p` iid draws from the MP density (no eigenvalue repulsion, hence
+/// far more near-degenerate pairs) puts it at f≈1, and on a deterministic MP
+/// quantile spectrum (perfectly regular) at f≈0.1. Calibrating on true Wishart
+/// draws is the choice that matches the library's inputs; the reconciliation
+/// with the earlier iid-marginal sweep is in `docs/eta_choice.md`.
+pub(crate) fn default_eta_bulk(p: usize) -> f64 {
+    const SCALE: f64 = 0.4;
+    SCALE / (p as f64).sqrt()
+}
+
+/// Which default η a pointwise estimator falls back on when the caller pinned
+/// none. See [`default_eta`] and [`default_eta_bulk`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EtaDefault {
+    /// [`default_eta`] — density drivers and precision shrinkage.
+    Generic,
+    /// [`default_eta_bulk`] — bulk covariance-eigenvalue deconvolution.
+    Bulk,
+}
+
+impl EtaDefault {
+    fn resolve(self, p: usize) -> f64 {
+        match self {
+            EtaDefault::Generic => default_eta(p),
+            EtaDefault::Bulk => default_eta_bulk(p),
+        }
+    }
 }
 
 /// An [`RmtConfig`] resolved for a concrete problem size, together with the
@@ -104,8 +175,9 @@ pub(crate) fn default_eta(p: usize) -> f64 {
 /// This is the shared prologue of the pointwise estimators
 /// ([`crate::deconvolution::rie_shrinkage`],
 /// [`crate::deconvolution::direct_precision_shrinkage`],
-/// [`crate::spiked::ledoit_wolf_shrinkage`]): resolve `Auto`, pick the crate
-/// default η when the caller pinned none, then run the selected kernel once.
+/// [`crate::spiked::ledoit_wolf_shrinkage`]): resolve `Auto`, pick the
+/// caller's default η when the caller pinned none, then run the selected
+/// kernel once.
 pub(crate) struct ResolvedStieltjes {
     /// The config after `resolve_auto`, ready to be consumed by a map step.
     pub config: RmtConfig,
@@ -118,9 +190,12 @@ pub(crate) struct ResolvedStieltjes {
 pub(crate) fn resolve_and_compute_stieltjes(
     eigenvalues: &[f64],
     config: &RmtConfig,
+    eta_default: EtaDefault,
 ) -> ResolvedStieltjes {
     let config = config.resolve_auto(eigenvalues.len());
-    let eta = config.eta.unwrap_or_else(|| default_eta(eigenvalues.len()));
+    let eta = config
+        .eta
+        .unwrap_or_else(|| eta_default.resolve(eigenvalues.len()));
     let pairs = compute_all_stieltjes(
         eigenvalues,
         eta,
@@ -1158,5 +1233,34 @@ mod tests {
             };
             assert!(rel < tol, "{method:?} grid rel-L2 {rel:.3e}");
         }
+    }
+
+    /// The bulk deconvolution's default η is a *calibrated* constant, not an
+    /// incidental one.
+    ///
+    /// The H0 calibration on true Wishart spectra puts the MSE-optimal scale
+    /// at 0.4 (`docs/eta_choice.md`); this test pins the policy so that any
+    /// change to it has to be deliberate and re-measured. It cannot check the
+    /// calibration itself — that needs Wishart draws and an eigensolver, and
+    /// is reproduced by `coherence_shrinkage/scripts/eta_reconcile.py`.
+    #[test]
+    fn default_eta_bulk_is_null_calibrated() {
+        const EXPECTED_SCALE: f64 = 0.4;
+        for p in [120, 400, 1000, 2000, 10_000] {
+            let eta = default_eta_bulk(p);
+            assert!(
+                (eta * (p as f64).sqrt() - EXPECTED_SCALE).abs() < 1e-12,
+                "default_eta_bulk({p}) = {eta} is not {EXPECTED_SCALE}/sqrt(p)"
+            );
+        }
+        // The exponent is part of the contract, not just the constant.
+        assert!((default_eta_bulk(400) / default_eta_bulk(1600) - 2.0).abs() < 1e-12);
+        // ... and the generic default is deliberately a different constant.
+        assert!((default_eta(400) * 20.0 - 0.1).abs() < 1e-12);
+        assert_ne!(
+            default_eta(400).to_bits(),
+            default_eta_bulk(400).to_bits(),
+            "the two defaults must not silently converge"
+        );
     }
 }
