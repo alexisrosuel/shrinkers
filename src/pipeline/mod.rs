@@ -18,6 +18,8 @@
 //! for maximum performance, LAPACK's `dsyevd` is significantly faster.
 
 use crate::config::RmtConfig;
+
+pub mod complex;
 use crate::deconvolution::{InverseShrinkageMethod, inverse_nonlinear_shrinkage, rie_shrinkage};
 use crate::eigenvector_overlaps::compute_angular_overlaps;
 use ndarray::Array2;
@@ -110,7 +112,7 @@ pub fn reconstruct_covariance(
 }
 
 /// Compute d_bulk: average of RIE eigenvalues for which α² = 0.
-fn compute_d_bulk(lambda_rie: &[f64], alpha2: &[f64]) -> f64 {
+pub(crate) fn compute_d_bulk(lambda_rie: &[f64], alpha2: &[f64]) -> f64 {
     let mut sum = 0.0;
     let mut count = 0;
 
@@ -426,7 +428,7 @@ fn permute_eigenvectors(eigenvectors: &Array2<f64>, idx: &[usize]) -> Array2<f64
 ///
 /// Returns (eigenvalues_ascending, eigenvectors) where columns of eigenvectors
 /// are the eigenvectors.
-fn symmetric_eigh(matrix: &Array2<f64>) -> (Vec<f64>, Array2<f64>) {
+pub(crate) fn symmetric_eigh(matrix: &Array2<f64>) -> (Vec<f64>, Array2<f64>) {
     let p = matrix.nrows();
     let mut a = matrix.to_owned();
     let mut eigvec_matrix = Array2::eye(p);

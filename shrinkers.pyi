@@ -150,6 +150,15 @@ def clean_correlation_matrix(
     correlation: np.ndarray, c: float
 ) -> CleanCorrelationMatrixResult: ...
 
+def clean_correlation_matrix_complex(
+    correlation: np.ndarray, c: float
+) -> CleanCorrelationMatrixResult:
+    """Clean a complex Hermitian correlation matrix (e.g. a spectral coherence
+    matrix). Same estimator as ``clean_correlation_matrix``; the conjugate
+    transpose replaces the transpose. ``covariance`` and ``eigenvectors`` come
+    back complex."""
+    ...
+
 
 def direct_precision_shrinkage(
     eigenvalues: np.ndarray, c: float

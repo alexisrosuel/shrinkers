@@ -106,8 +106,9 @@ by roughly an order of magnitude (9.1× at p≈5000).
   `auto` = the measured speed policy (same Pareto table, resolved in one
   place for every entry point, and on the deconvolution grid the treecode is
   sized to the number of query points it actually serves);
-- correlation-matrix cleaning with eigenvector-overlap correction, direct
-  precision-matrix shrinkage, Ledoit–Wolf inverse nonlinear shrinkage
+- correlation-matrix cleaning with eigenvector-overlap correction — real
+  symmetric or **complex Hermitian**, so a spectral coherence matrix works
+  too — direct precision-matrix shrinkage, Ledoit–Wolf inverse nonlinear shrinkage
   (QIS/LIS/GIS) and full precision-matrix estimation, Tracy–Widom spike
   detection;
 - Rust API + PyO3 bindings with the GIL released during computation;

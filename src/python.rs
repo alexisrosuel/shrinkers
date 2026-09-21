@@ -25,6 +25,7 @@
 //! NOTE: numpy 0.29 bundles ndarray 0.16 internally while the project uses
 //! ndarray 0.17. We bridge via `Vec<f64>` to avoid version mismatch.
 
+use num_complex::Complex64;
 use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -34,6 +35,7 @@ use crate::deconvolution::{
     InverseShrinkageMethod, deconvolve_spiked, direct_precision_shrinkage,
     estimate_population_eigenvalues, inverse_nonlinear_shrinkage, rie_shrinkage,
 };
+use crate::pipeline::complex::clean_correlation_matrix_complex;
 use crate::pipeline::{clean_correlation_matrix, estimate_precision_matrix};
 use crate::spiked;
 
@@ -965,6 +967,66 @@ fn estimate_population_eigenvalues_py<'py>(
     Ok(dict)
 }
 
+/// Clean a **complex Hermitian correlation matrix** — a spectral coherence
+/// matrix, or any Hermitian matrix with unit diagonal.
+///
+/// Same estimator as `clean_correlation_matrix`; only the eigensolver and the
+/// reconstruction change (the conjugate transpose replaces the transpose).
+///
+/// Args:
+///   correlation: complex Hermitian matrix (p, p), finite.
+///   c: concentration ratio p/n, in (0, 1].
+///
+/// Returns the same dict as `clean_correlation_matrix`, with `covariance` and
+/// `eigenvectors` complex.
+#[pyfunction]
+#[pyo3(name = "clean_correlation_matrix_complex", signature = (correlation, c))]
+fn clean_correlation_matrix_complex_py<'py>(
+    py: Python<'py>,
+    correlation: PyReadonlyArray2<'py, Complex64>,
+    c: f64,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let corr = correlation.as_array().to_owned();
+
+    let (rows, cols) = corr.dim();
+    if rows != cols {
+        return Err(PyValueError::new_err("correlation must be a square matrix"));
+    }
+    for v in corr.iter() {
+        if !v.re.is_finite() || !v.im.is_finite() {
+            return Err(PyValueError::new_err(
+                "correlation matrix must contain only finite values",
+            ));
+        }
+    }
+    let scale = corr
+        .iter()
+        .fold(1.0_f64, |acc, v| acc.max(v.re.abs()).max(v.im.abs()));
+    let tol = 1e-12 * scale;
+    for i in 0..rows {
+        for j in (i + 1)..rows {
+            let (a, b) = (corr[[i, j]], corr[[j, i]]);
+            if (a.re - b.re).abs() > tol || (a.im + b.im).abs() > tol {
+                return Err(PyValueError::new_err(
+                    "correlation matrix must be Hermitian",
+                ));
+            }
+        }
+    }
+    require_concentration(c)?;
+
+    let config = RmtConfig::new(c);
+    let result = py.detach(|| clean_correlation_matrix_complex(&corr, c, &config));
+
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("covariance", result.covariance.into_pyarray(py))?;
+    dict.set_item("eigenvectors", result.eigenvectors.into_pyarray(py))?;
+    dict.set_item("eigenvalues", result.eigenvalues.into_pyarray(py))?;
+    dict.set_item("overlaps", result.overlaps.into_pyarray(py))?;
+    dict.set_item("sigma2", result.sigma2)?;
+    Ok(dict)
+}
+
 /// Raw Ledoit–Wolf non-linear shrinkage ξ(λᵢ) for every eigenvalue
 /// (NOT trace-rescaled — see `shrink_eigenvalues` for the trace-preserving
 /// variant).
@@ -1018,6 +1080,7 @@ fn shrinkers(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(inverse_nonlinear_shrinkage_py, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_precision_matrix_py, m)?)?;
     m.add_function(wrap_pyfunction!(clean_correlation_matrix_py, m)?)?;
+    m.add_function(wrap_pyfunction!(clean_correlation_matrix_complex_py, m)?)?;
     m.add_function(wrap_pyfunction!(stieltjes_transform_py, m)?)?;
     m.add_function(wrap_pyfunction!(stieltjes_transform_with_deriv_py, m)?)?;
     m.add_function(wrap_pyfunction!(detect_spikes_bema_py, m)?)?;

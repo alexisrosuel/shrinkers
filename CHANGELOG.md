@@ -5,6 +5,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added — complex Hermitian correlation-matrix cleaning
+
+`clean_correlation_matrix` assumed real symmetric input, which is what a
+covariance gives. A **spectral coherence matrix** does not: it is built from
+Fourier coefficients and is complex Hermitian, with unit diagonal, the same
+Marchenko-Pastur bulk and the same BBP spikes.
+
+New surface:
+
+- `pipeline::complex::hermitian_eigh(re, im)` — eigenvalues and eigenvectors of
+  a Hermitian matrix through the standard real embedding
+  `H = A + iB -> [[A, -B], [B, A]]`. Reuses the existing `symmetric_eigh`; the
+  embedding duplicates each eigenvalue, it does not scale it.
+- `pipeline::complex::clean_eigensystem_complex` and
+  `clean_correlation_matrix_complex` — the same estimator, with the conjugate
+  transpose replacing the transpose in `d_bulk I + sum_t scale_t v_t v_t^H`.
+  The RIE shrinkage, the `sigma^2` estimate and the RMT angular overlaps are
+  scalar and shared with the real path, so there is no second implementation of
+  anything that matters.
+- Python: `clean_correlation_matrix_complex(correlation, c)`, which validates
+  Hermitian symmetry at the boundary and returns the same dict, with
+  `covariance` and `eigenvectors` complex.
+
+Verified: a real matrix passed through the complex path reproduces the real
+path's cleaned eigenvalues **bit for bit** (`max |diff| = 0.0`), the cleaned
+matrix is Hermitian to machine precision and positive definite, and non-Hermitian
+input is rejected with a `ValueError`. 144 Rust tests (4 new), 62 Python.
+
+This is the missing brick for frequency-domain estimation on time series; the
+downstream estimator that motivated it lives in its own repository and now
+delegates its eigensolver here rather than carrying a duplicate.
+
 ### Changed — calibrated regularization η for the bulk eigenvalue deconvolution
 
 The pointwise bulk deconvolution (`rie_shrinkage`, `ledoit_wolf_shrinkage`,
