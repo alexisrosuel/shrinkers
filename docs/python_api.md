@@ -7,6 +7,7 @@ It exposes these functions:
 |---|---|
 | `deconvolve_spiked` | **Primary**: spiked + bulk cleaning via free-probability deconvolution |
 | `clean_correlation_matrix` | Clean a full correlation matrix (RIE + eigenvector overlaps) |
+| `clean_correlation_matrix_complex` | Same, for a complex Hermitian correlation matrix (e.g. a spectral coherence matrix) |
 | `direct_precision_shrinkage` | Direct precision-matrix eigenvalue shrinkage |
 | `inverse_nonlinear_shrinkage` | Ledoit–Wolf inverse shrinkage (QIS/LIS/GIS) precision eigenvalues |
 | `estimate_precision_matrix` | Estimate the full precision matrix Ω̂ = Σ̂⁻¹ from a covariance matrix |
@@ -184,6 +185,55 @@ evals = res["eigenvalues"]        # RIE-cleaned eigenvalues (descending)
 overlaps = res["overlaps"]        # theoretical alignment of each eigenvector
 sigma2 = res["sigma2"]            # noise variance
 ```
+
+### `clean_correlation_matrix_complex(correlation, c)`
+
+The same estimator for a **complex Hermitian** correlation matrix. This is the
+frequency-domain case: a spectral coherence matrix
+
+$$C(\nu) = \mathrm{dg}(S(\nu))^{-1/2}\,S(\nu)\,\mathrm{dg}(S(\nu))^{-1/2}$$
+
+built from Fourier coefficients has unit diagonal and a Marchenko–Pastur bulk
+with aspect ratio $c = M/B$ ($M$ channels, $B$ smoothing span), so the RMT
+machinery applies unchanged — only the eigendecomposition and the reconstruction
+change (the conjugate transpose replaces the transpose).
+
+**Parameters**
+
+- `correlation` — `np.ndarray[complex128]`, shape `(p, p)`. Hermitian (to
+  `1e-12` relative tolerance), finite. Must be contiguous.
+- `c` — `float`. Concentration ratio $p/n$, in $(0, 1]$.
+
+**Returns**
+
+- `dict` with the same keys as `clean_correlation_matrix`. `"covariance"` is
+  `np.ndarray[complex128]` of shape `(p, p)` (Hermitian, positive definite) and
+  `"eigenvectors"` is `np.ndarray[complex128]` of shape `(p, p)`;
+  `"eigenvalues"`, `"overlaps"` and `"sigma2"` stay real.
+
+**Raises**
+
+- `ValueError` if the matrix is not square, not finite, or not Hermitian.
+
+**Example**
+
+```python
+import numpy as np
+from shrinkers import clean_correlation_matrix_complex
+
+# Smoothed periodogram coherence matrix at frequency nu (M, M), complex
+C = dg(S) ** -0.5 @ S @ dg(S) ** -0.5
+res = clean_correlation_matrix_complex(C, c=M / B)
+
+cleaned = res["covariance"]       # Hermitian cleaned correlation matrix
+```
+
+**Note.** `clean_correlation_matrix_complex` answers the *cleaning* question
+(RIE on every eigenvalue, spike directions reweighted by their angular overlap).
+The *estimation* question — how many coherent modes, their debiased eigenvalues,
+the bulk spectrum — is `pipeline::complex::deconvolve_correlation_matrix_complex`,
+which returns the eigenvalues, the eigenvectors and the BEMA / inverse-BBP /
+Ledoit–Wolf split in one pass. It is Rust-only for now.
 
 ---
 
