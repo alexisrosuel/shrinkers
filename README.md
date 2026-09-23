@@ -114,7 +114,7 @@ by roughly an order of magnitude (9.1× at p≈5000).
   (QIS/LIS/GIS) and full precision-matrix estimation, Tracy–Widom spike
   detection;
 - complex-Hermitian **spiked decomposition** straight from the matrix
-  (`pipeline::complex::deconvolve_correlation_matrix_complex`): eigenvalues,
+  (`deconvolve_correlation_matrix_complex`, in Rust and Python): eigenvalues,
   eigenvectors and the BEMA/inverse-BBP/Ledoit–Wolf spectrum split in one pass;
 - Rust API + PyO3 bindings with the GIL released during computation;
 - multi-core execution built in — exact and ChebCode kernels parallelize

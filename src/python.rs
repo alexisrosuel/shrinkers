@@ -1,18 +1,23 @@
 //! PyO3 bindings for the RMT Shrinkage Kernel.
 //!
-//! The package's public entry points are:
-//! - `deconvolve_spiked`: given the sample eigenvalues, applies the spiked +
-//!   bulk cleaning via free-probability deconvolution. Spikes are detected
-//!   (BEMA) and debiased (inverse BBP), then the remaining bulk is deconvolved
-//!   with the El Karoui method to recover the population spectral density.
-//! - `direct_precision_shrinkage`: direct precision-matrix eigenvalue
-//!   shrinkage (Ledoit & Wolf 2020), without inverting a cleaned covariance.
-//! - `clean_correlation_matrix`: given a sample correlation matrix, applies RIE
-//!   eigenvalue shrinkage + eigenvector angular overlap correction and returns
-//!   the cleaned covariance matrix together with the eigenvectors and their
-//!   theoretical alignment with the population eigenvectors.
-//! - `stieltjes_transform`: raw empirical Stieltjes transform with a choice of
-//!   kernel, precision, far-field cutoff, and a parallel switch.
+//! The package's public entry points fall into four groups:
+//!
+//! - **spectral deconvolution** — `deconvolve_spiked` (spikes detected with
+//!   BEMA, debiased with inverse BBP, then the remaining bulk deconvolved with
+//!   El Karoui into a population spectral density) and
+//!   `estimate_population_eigenvalues` (the per-eigenvalue pointwise split);
+//! - **correlation-matrix cleaning** — `clean_correlation_matrix` and
+//!   `clean_correlation_matrix_complex` take the sample matrix itself and
+//!   return the cleaned matrix together with the RIE eigenvalues, the sorted
+//!   eigenvectors and their theoretical angular overlaps;
+//!   `deconvolve_correlation_matrix_complex` is the complex-Hermitian *spiked*
+//!   split (BEMA / inverse BBP / Ledoit–Wolf) from the matrix in one pass;
+//! - **precision estimation** — `direct_precision_shrinkage`,
+//!   `inverse_nonlinear_shrinkage` and `estimate_precision_matrix`
+//!   (Ledoit & Wolf inverse nonlinear shrinkage, QIS/LIS/GIS);
+//! - **low-level primitives** — `stieltjes_transform*`,
+//!   `detect_spikes_bema`, `detect_spikes_tracy_widom`, `inverse_bbp`,
+//!   `analyze_spikes`, `ledoit_wolf_shrinkage`, `shrink_eigenvalues`.
 //!
 //! # Threading & error behaviour
 //!
@@ -21,9 +26,6 @@
 //! - Inputs are validated at the boundary: non-finite eigenvalues,
 //!   non-positive spectra where positivity is required, and out-of-range
 //!   concentration ratios raise `ValueError` instead of panicking.
-//!
-//! NOTE: numpy 0.29 bundles ndarray 0.16 internally while the project uses
-//! ndarray 0.17. We bridge via `Vec<f64>` to avoid version mismatch.
 
 use num_complex::Complex64;
 use numpy::{IntoPyArray, PyReadonlyArray1, PyReadonlyArray2};
@@ -35,7 +37,9 @@ use crate::deconvolution::{
     InverseShrinkageMethod, deconvolve_spiked, direct_precision_shrinkage,
     estimate_population_eigenvalues, inverse_nonlinear_shrinkage, rie_shrinkage,
 };
-use crate::pipeline::complex::clean_correlation_matrix_complex;
+use crate::pipeline::complex::{
+    clean_correlation_matrix_complex, deconvolve_correlation_matrix_complex,
+};
 use crate::pipeline::{clean_correlation_matrix, estimate_precision_matrix};
 use crate::spiked;
 
@@ -241,6 +245,43 @@ fn owned_symmetric_matrix(
         for j in (i + 1)..rows {
             if (arr[[i, j]] - arr[[j, i]]).abs() > tol {
                 return Err(PyValueError::new_err(format!("{what} must be symmetric")));
+            }
+        }
+    }
+    Ok(arr)
+}
+
+/// Copy and validate a square, finite, Hermitian matrix (the input contract of
+/// the complex eigendecomposition). The symmetry test mirrors
+/// [`owned_symmetric_matrix`]: a relative `1e-12` tolerance on
+/// `H[i, j] == conj(H[j, i])`.
+fn owned_hermitian_matrix(
+    matrix: PyReadonlyArray2<'_, Complex64>,
+    what: &str,
+) -> PyResult<ndarray::Array2<Complex64>> {
+    let arr = matrix.as_array().to_owned();
+    let (rows, cols) = arr.dim();
+    if rows != cols {
+        return Err(PyValueError::new_err(format!(
+            "{what} must be a square matrix"
+        )));
+    }
+    for v in arr.iter() {
+        if !v.re.is_finite() || !v.im.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "{what} must contain only finite values"
+            )));
+        }
+    }
+    let scale = arr
+        .iter()
+        .fold(1.0_f64, |acc, v| acc.max(v.re.abs()).max(v.im.abs()));
+    let tol = 1e-12 * scale;
+    for i in 0..rows {
+        for j in (i + 1)..rows {
+            let (a, b) = (arr[[i, j]], arr[[j, i]]);
+            if (a.re - b.re).abs() > tol || (a.im + b.im).abs() > tol {
+                return Err(PyValueError::new_err(format!("{what} must be Hermitian")));
             }
         }
     }
@@ -667,31 +708,7 @@ fn clean_correlation_matrix_py<'py>(
     correlation: PyReadonlyArray2<'py, f64>,
     c: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let corr = correlation.as_array().to_owned();
-
-    let (rows, cols) = corr.dim();
-    if rows != cols {
-        return Err(PyValueError::new_err("correlation must be a square matrix"));
-    }
-    for &v in corr.iter() {
-        if !v.is_finite() {
-            return Err(PyValueError::new_err(
-                "correlation matrix must contain only finite values",
-            ));
-        }
-    }
-    // `symmetric_eigh` reads and updates both triangles, so a non-symmetric
-    // input would silently produce a wrong eigensystem.
-    let tol = 1e-12 * corr.iter().fold(1.0_f64, |acc, &v| acc.max(v.abs()));
-    for i in 0..rows {
-        for j in (i + 1)..rows {
-            if (corr[[i, j]] - corr[[j, i]]).abs() > tol {
-                return Err(PyValueError::new_err(
-                    "correlation matrix must be symmetric",
-                ));
-            }
-        }
-    }
+    let corr = owned_symmetric_matrix(correlation, "correlation")?;
     require_concentration(c)?;
 
     let config = RmtConfig::new(c);
@@ -986,33 +1003,7 @@ fn clean_correlation_matrix_complex_py<'py>(
     correlation: PyReadonlyArray2<'py, Complex64>,
     c: f64,
 ) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-    let corr = correlation.as_array().to_owned();
-
-    let (rows, cols) = corr.dim();
-    if rows != cols {
-        return Err(PyValueError::new_err("correlation must be a square matrix"));
-    }
-    for v in corr.iter() {
-        if !v.re.is_finite() || !v.im.is_finite() {
-            return Err(PyValueError::new_err(
-                "correlation matrix must contain only finite values",
-            ));
-        }
-    }
-    let scale = corr
-        .iter()
-        .fold(1.0_f64, |acc, v| acc.max(v.re.abs()).max(v.im.abs()));
-    let tol = 1e-12 * scale;
-    for i in 0..rows {
-        for j in (i + 1)..rows {
-            let (a, b) = (corr[[i, j]], corr[[j, i]]);
-            if (a.re - b.re).abs() > tol || (a.im + b.im).abs() > tol {
-                return Err(PyValueError::new_err(
-                    "correlation matrix must be Hermitian",
-                ));
-            }
-        }
-    }
+    let corr = owned_hermitian_matrix(correlation, "correlation")?;
     require_concentration(c)?;
 
     let config = RmtConfig::new(c);
@@ -1024,6 +1015,71 @@ fn clean_correlation_matrix_complex_py<'py>(
     dict.set_item("eigenvalues", result.eigenvalues.into_pyarray(py))?;
     dict.set_item("overlaps", result.overlaps.into_pyarray(py))?;
     dict.set_item("sigma2", result.sigma2)?;
+    Ok(dict)
+}
+
+/// Eigendecompose a **complex Hermitian correlation matrix** and split its
+/// spectrum into spikes and bulk — the matrix-level *estimation* counterpart of
+/// `clean_correlation_matrix_complex`.
+///
+/// Where the cleaning entry point runs the RIE map on every eigenvalue and
+/// returns a reconstructed matrix, this detects the spikes (BEMA), debiases
+/// them (inverse BBP) and deconvolves only the bulk (Ledoit–Wolf / RIE), so the
+/// caller gets the population *spectrum*: how many coherent modes, their
+/// debiased eigenvalues, and one bulk estimate per remaining sample eigenvalue.
+/// The sample eigenvectors come back as a by-product of the same
+/// eigendecomposition, so there is no reason to call the cleaning entry point
+/// as well to get them.
+///
+/// Args:
+///   correlation: complex Hermitian matrix (p, p), finite.
+///   c: concentration ratio p/n, in (0, 1].
+///   margin: multiplicative margin above the fitted bulk edge for spike
+///     detection (default 1.0; slightly above 1.0 adds robustness).
+///
+/// Returns a dict with keys:
+///   - "eigenvalues": sample eigenvalues of the matrix (p,), ascending
+///   - "eigenvectors": sample eigenvectors (p, p), complex, ascending columns
+///   - "k": number of detected spikes
+///   - "spikes": estimated population spike eigenvalues ℓ_i (descending)
+///   - "spike_sample": the sample eigenvalues classified as spikes (descending)
+///   - "bulk_edge": estimated bulk edge λ₊ = σ²(1+√γ)²
+///   - "sigma2": estimated noise variance σ²
+///   - "bulk_population": per-bulk-eigenvalue population estimates, parallel
+///     to "bulk_sample" (ascending in the sample eigenvalue; **not** sorted by
+///     value — the RIE map is not monotone)
+///   - "bulk_sample": the bulk sample eigenvalues (spikes removed), ascending
+#[pyfunction]
+#[pyo3(
+    name = "deconvolve_correlation_matrix_complex",
+    signature = (correlation, c, margin = 1.0)
+)]
+fn deconvolve_correlation_matrix_complex_py<'py>(
+    py: Python<'py>,
+    correlation: PyReadonlyArray2<'py, Complex64>,
+    c: f64,
+    margin: f64,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let corr = owned_hermitian_matrix(correlation, "correlation")?;
+    require_concentration(c)?;
+    require_positive_finite(margin, "margin")?;
+
+    let config = RmtConfig::new(c);
+    let res = py.detach(|| deconvolve_correlation_matrix_complex(&corr, c, margin, &config));
+
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("eigenvalues", res.eigenvalues.into_pyarray(py))?;
+    dict.set_item("eigenvectors", res.eigenvectors.into_pyarray(py))?;
+    dict.set_item("k", res.population.k)?;
+    dict.set_item("spikes", res.population.spikes.into_pyarray(py))?;
+    dict.set_item("spike_sample", res.population.spike_sample.into_pyarray(py))?;
+    dict.set_item("bulk_edge", res.population.bulk_edge)?;
+    dict.set_item("sigma2", res.population.sigma2)?;
+    dict.set_item(
+        "bulk_population",
+        res.population.bulk_population.into_pyarray(py),
+    )?;
+    dict.set_item("bulk_sample", res.population.bulk_sample.into_pyarray(py))?;
     Ok(dict)
 }
 
@@ -1081,6 +1137,10 @@ fn shrinkers(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(estimate_precision_matrix_py, m)?)?;
     m.add_function(wrap_pyfunction!(clean_correlation_matrix_py, m)?)?;
     m.add_function(wrap_pyfunction!(clean_correlation_matrix_complex_py, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        deconvolve_correlation_matrix_complex_py,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(stieltjes_transform_py, m)?)?;
     m.add_function(wrap_pyfunction!(stieltjes_transform_with_deriv_py, m)?)?;
     m.add_function(wrap_pyfunction!(detect_spikes_bema_py, m)?)?;

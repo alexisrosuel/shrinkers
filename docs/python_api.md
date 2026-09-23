@@ -8,6 +8,7 @@ It exposes these functions:
 | `deconvolve_spiked` | **Primary**: spiked + bulk cleaning via free-probability deconvolution |
 | `clean_correlation_matrix` | Clean a full correlation matrix (RIE + eigenvector overlaps) |
 | `clean_correlation_matrix_complex` | Same, for a complex Hermitian correlation matrix (e.g. a spectral coherence matrix) |
+| `deconvolve_correlation_matrix_complex` | Spiked decomposition (BEMA + inverse BBP + Ledoit–Wolf bulk) of a complex Hermitian correlation matrix |
 | `direct_precision_shrinkage` | Direct precision-matrix eigenvalue shrinkage |
 | `inverse_nonlinear_shrinkage` | Ledoit–Wolf inverse shrinkage (QIS/LIS/GIS) precision eigenvalues |
 | `estimate_precision_matrix` | Estimate the full precision matrix Ω̂ = Σ̂⁻¹ from a covariance matrix |
@@ -231,9 +232,62 @@ cleaned = res["covariance"]       # Hermitian cleaned correlation matrix
 **Note.** `clean_correlation_matrix_complex` answers the *cleaning* question
 (RIE on every eigenvalue, spike directions reweighted by their angular overlap).
 The *estimation* question — how many coherent modes, their debiased eigenvalues,
-the bulk spectrum — is `pipeline::complex::deconvolve_correlation_matrix_complex`,
-which returns the eigenvalues, the eigenvectors and the BEMA / inverse-BBP /
-Ledoit–Wolf split in one pass. It is Rust-only for now.
+the bulk spectrum — is answered by the sibling below.
+
+### `deconvolve_correlation_matrix_complex(correlation, c, margin=1.0)`
+
+The matrix-level counterpart of `estimate_population_eigenvalues`, for a
+**complex Hermitian** correlation matrix. One pass from the matrix to the whole
+spiked split:
+
+1. the sample eigensystem of the input matrix (`"eigenvalues"` ascending,
+   `"eigenvectors"` as complex ascending columns);
+2. BEMA spike detection, inverse-BBP debiasing of the spikes, and Ledoit–Wolf /
+   RIE pointwise deconvolution of the bulk.
+
+Use this rather than calling the cleaning entry point when you want the
+population *spectrum*; the eigenvectors come back as a by-product of the same
+eigendecomposition, so a caller that also needs the coherent directions does not
+pay for a second decomposition — and the split is guaranteed to come from the
+*same* eigenvalues that are returned.
+
+**Parameters**
+
+- `correlation` — `np.ndarray[complex128]`, shape `(p, p)`. Hermitian (to
+  `1e-12` relative tolerance), finite. Must be contiguous.
+- `c` — `float`. Concentration ratio $p/n$, in $(0, 1]$.
+- `margin` — `float`, default `1.0`. Multiplicative margin above the fitted
+  bulk edge for spike detection (slightly above `1.0` adds robustness).
+
+**Returns**
+
+- `dict` with keys:
+  - `"eigenvalues"` — `np.ndarray[float64]`, shape `(p,)`. Sample eigenvalues
+    of the input matrix, ascending.
+  - `"eigenvectors"` — `np.ndarray[complex128]`, shape `(p, p)`. Sample
+    eigenvectors as columns, ascending, matching `"eigenvalues"`.
+  - `"k"`, `"spikes"`, `"spike_sample"`, `"bulk_edge"`, `"sigma2"`,
+    `"bulk_population"`, `"bulk_sample"` — the same population split as
+    `estimate_population_eigenvalues`.
+
+**Raises**
+
+- `ValueError` if the matrix is not square, not finite, or not Hermitian, or if
+  `c` / `margin` are out of range.
+
+**Example**
+
+```python
+import numpy as np
+from shrinkers import deconvolve_correlation_matrix_complex
+
+# Spectral coherence matrix at frequency nu, see above
+res = deconvolve_correlation_matrix_complex(C, c=M / B, margin=1.05)
+
+print(res["k"])                    # number of coherent modes
+print(res["spikes"])               # debiased population eigenvalues of the modes
+print(res["eigenvectors"][:, -res["k"]:])  # the coherent directions
+```
 
 ---
 

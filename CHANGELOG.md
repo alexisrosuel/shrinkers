@@ -26,6 +26,41 @@ since it landed: unsorted imports, redundant `int(round(...))` casts, timing
 lambdas capturing the loop variable, an unused `noqa` and a dead `np.load`
 assignment. All fixed; no measured number changes.
 
+### Changed — correlation-cleaning API tidy-up
+
+A review pass over the two `clean_correlation_matrix*` entry points and the new
+complex spiked split. No estimator changed; the surface is now consistent.
+
+- `src/python.rs`: one shared `owned_hermitian_matrix` validator replaces the
+  inline Hermitian checks (square / finite / `H = H^H` at `1e-12` relative
+  tolerance), and `clean_correlation_matrix_py` now goes through the existing
+  `owned_symmetric_matrix` instead of repeating it. The module doc comment lost
+  its stale "numpy 0.29 bundles ndarray 0.16" note — the crate and `rust-numpy`
+  both build against ndarray 0.17 — and its entry-point list now covers the four
+  groups actually exported.
+- `shrinkers.pyi`: `CleanCorrelationMatrixComplexResult` types the complex
+  `covariance` / `eigenvectors` (the real TypedDict was being reused for them),
+  and the new function below is declared.
+- Python tests: 12 new cases cover the complex path where there were none —
+  real-as-complex equivalence with the real entry point, Hermitian validation,
+  non-square / non-finite rejection, positive-definiteness, and the matrix
+  spiked split matching `estimate_population_eigenvalues` on its own returned
+  eigenvalues. 74 Python tests (62 before).
+- `docs/python_api.md`: both complex entry points are in the function table, and
+  the one-line "Rust-only for now" note became a full section for
+  `deconvolve_correlation_matrix_complex`.
+- `docs/internals.md`: a *Cleaning a correlation matrix* theory section covering
+  the five pipeline stages and the real/complex shared scalars.
+- README: a new *Cleaning a correlation matrix* section with the figure below.
+
+### Added — `deconvolve_correlation_matrix_complex` in Python
+
+The matrix-level complex-Hermitian spiked decomposition (Rust commit below) is
+now bound, so the whole correlation-matrix story is available from Python:
+`clean_correlation_matrix_complex` for the cleaned matrix,
+`deconvolve_correlation_matrix_complex(correlation, c, margin=1.0)` for the
+population split plus the sample eigensystem in one pass.
+
 ### Added — complex Hermitian correlation-matrix cleaning
 
 `clean_correlation_matrix` assumed real symmetric input, which is what a
@@ -83,11 +118,14 @@ New surface:
   eigenvectors are a by-product of the eigendecomposition, so a caller that also
   needs the coherent directions does not pay for a second one — and the split is
   guaranteed to come from the *same* eigenvalues that are returned.
+- Python: `deconvolve_correlation_matrix_complex(correlation, c, margin=1.0)`
+  (added in the follow-up commit, listed under the API tidy-up above).
 
 Verified: the matrix entry point reproduces
 `estimate_population_eigenvalues` on its own returned eigenvalues exactly
-(spikes, bulk, `sigma^2` and `bulk_edge` to 1e-12), and a non-Hermitian input's
-antisymmetric part is dropped rather than folded in. 147 Rust tests (3 new).
+(spikes, bulk, `sigma^2` and `bulk_edge` to 1e-12), both in Rust and through
+the Python binding, and a non-Hermitian input's antisymmetric part is dropped
+rather than folded in. 147 Rust tests (3 new).
 
 ### Changed — calibrated regularization η for the bulk eigenvalue deconvolution
 

@@ -198,6 +198,143 @@ class TestCleanCorrelationMatrix:
             rk.clean_correlation_matrix(bad, c=0.15)
 
 
+def complex_hermitian_correlation(p: int = 30, seed: int = 0) -> np.ndarray:
+    """A unit-diagonal Hermitian matrix: random unitary basis, a spiked
+    spectrum, then rescaled so the diagonal is exactly one."""
+    rng = np.random.default_rng(seed)
+    z = (
+        rng.standard_normal((p, p)) + 1j * rng.standard_normal((p, p))
+    ) / np.sqrt(2.0)
+    q, _ = np.linalg.qr(z)
+    evals = np.concatenate([[6.0], np.linspace(0.7, 1.4, p - 1)])
+    h = (q * evals) @ q.conj().T
+    d = np.sqrt(np.real(np.diag(h)))
+    return np.ascontiguousarray(h / np.outer(d, d))
+
+
+class TestCleanCorrelationMatrixComplex:
+    @pytest.fixture()
+    def sample_corr(self) -> np.ndarray:
+        return complex_hermitian_correlation()
+
+    def test_shapes_and_hermitian(self, sample_corr):
+        p = sample_corr.shape[0]
+        res = rk.clean_correlation_matrix_complex(sample_corr, c=0.3)
+        cov = res["covariance"]
+        assert cov.shape == (p, p)
+        assert np.iscomplexobj(cov)
+        np.testing.assert_allclose(cov, cov.conj().T, atol=1e-12)
+        assert res["eigenvalues"].shape == (p,)
+        assert res["overlaps"].shape == (p,)
+        assert res["eigenvalues"].dtype == np.float64
+        assert 0.0 <= res["sigma2"]
+
+    def test_cleaned_matrix_is_positive_definite(self, sample_corr):
+        res = rk.clean_correlation_matrix_complex(sample_corr, c=0.3)
+        assert np.all(np.linalg.eigvalsh(res["covariance"]) > -1e-10)
+
+    def test_real_input_matches_the_real_path(self):
+        # A real symmetric matrix embedded as complex must reproduce the real
+        # entry point's cleaned eigenvalues and covariance.
+        rng = np.random.default_rng(7)
+        x = rng.standard_normal((300, 25))
+        real = np.ascontiguousarray(np.corrcoef(x, rowvar=False))
+        c = 25 / 300
+
+        got = rk.clean_correlation_matrix_complex(real.astype(np.complex128), c=c)
+        want = rk.clean_correlation_matrix(real, c=c)
+
+        np.testing.assert_allclose(
+            got["eigenvalues"], want["eigenvalues"], rtol=1e-9, atol=1e-9
+        )
+        np.testing.assert_allclose(
+            got["covariance"].real, want["covariance"], atol=1e-8
+        )
+        np.testing.assert_allclose(got["covariance"].imag, 0.0, atol=1e-10)
+
+    def test_nonsquare_raises(self):
+        with pytest.raises(ValueError, match="square"):
+            rk.clean_correlation_matrix_complex(
+                np.ones((3, 4), dtype=np.complex128), c=0.5
+            )
+
+    def test_nonfinite_raises(self, sample_corr):
+        bad = sample_corr.copy()
+        bad[0, 1] = complex(np.inf, 0.0)
+        with pytest.raises(ValueError, match="finite"):
+            rk.clean_correlation_matrix_complex(bad, c=0.15)
+
+    def test_non_hermitian_raises(self):
+        bad = np.eye(3, dtype=np.complex128)
+        bad[0, 1] = 0.4j  # the conjugate entry is missing
+        with pytest.raises(ValueError, match="Hermitian"):
+            rk.clean_correlation_matrix_complex(bad, c=0.25)
+
+
+class TestDeconvolveCorrelationMatrixComplex:
+    def test_keys_and_shapes(self):
+        p = 25
+        h = complex_hermitian_correlation(p)
+        res = rk.deconvolve_correlation_matrix_complex(h, c=0.3)
+        assert set(res) == {
+            "eigenvalues",
+            "eigenvectors",
+            "k",
+            "spikes",
+            "spike_sample",
+            "bulk_edge",
+            "sigma2",
+            "bulk_population",
+            "bulk_sample",
+        }
+        assert res["eigenvalues"].shape == (p,)
+        assert res["eigenvectors"].shape == (p, p)
+        assert np.iscomplexobj(res["eigenvectors"])
+        assert res["k"] >= 1
+
+    def test_matches_the_eigenvalue_entry_point(self):
+        c, margin = 0.4, 1.05
+        h = complex_hermitian_correlation(28, seed=3)
+        mat = rk.deconvolve_correlation_matrix_complex(h, c=c, margin=margin)
+        spec = rk.estimate_population_eigenvalues(
+            np.ascontiguousarray(mat["eigenvalues"]), c=c, margin=margin
+        )
+        assert mat["k"] == spec["k"]
+        np.testing.assert_allclose(mat["spikes"], spec["spikes"], rtol=1e-10)
+        np.testing.assert_allclose(
+            mat["bulk_population"], spec["bulk_population"], rtol=1e-10
+        )
+        np.testing.assert_allclose(
+            mat["bulk_sample"], spec["bulk_sample"], rtol=1e-10
+        )
+        np.testing.assert_allclose(mat["sigma2"], spec["sigma2"], rtol=1e-10)
+        np.testing.assert_allclose(mat["bulk_edge"], spec["bulk_edge"], rtol=1e-10)
+
+    def test_eigenvectors_are_unitary(self):
+        h = complex_hermitian_correlation(20, seed=4)
+        res = rk.deconvolve_correlation_matrix_complex(h, c=0.35)
+        v = res["eigenvectors"]
+        np.testing.assert_allclose(v.conj().T @ v, np.eye(20), atol=1e-9)
+
+    def test_eigenvalues_match_numpy(self):
+        h = complex_hermitian_correlation(18, seed=5)
+        res = rk.deconvolve_correlation_matrix_complex(h, c=0.3)
+        np.testing.assert_allclose(
+            res["eigenvalues"], np.linalg.eigvalsh(h), atol=1e-9
+        )
+
+    def test_non_hermitian_raises(self):
+        bad = np.eye(3, dtype=np.complex128)
+        bad[1, 0] = 0.2j
+        with pytest.raises(ValueError, match="Hermitian"):
+            rk.deconvolve_correlation_matrix_complex(bad, c=0.25)
+
+    def test_bad_margin_raises(self):
+        h = complex_hermitian_correlation(6)
+        with pytest.raises(ValueError, match="margin"):
+            rk.deconvolve_correlation_matrix_complex(h, c=0.3, margin=-1.0)
+
+
 # ──────────────────────────────────────────────
 #  direct_precision_shrinkage
 # ──────────────────────────────────────────────

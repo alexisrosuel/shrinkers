@@ -31,6 +31,44 @@ $$\xi(\lambda_i) = \frac{\lambda_i}{\bigl|1 - c + c \cdot \lambda_i \cdot m_g(\l
 
 The shrunk eigenvalues are then trace-preserving rescaled.
 
+## Cleaning a correlation matrix
+
+`clean_correlation_matrix` (real symmetric) and `clean_correlation_matrix_complex`
+(complex Hermitian) take the *matrix* and run the whole pipeline in one call:
+
+1. **Eigendecomposition** — the real path uses the Jacobi `symmetric_eigh`; the
+   complex path uses the standard real embedding
+   `H = A + iB -> [[A, -B], [B, A]]`, whose eigenvalues are each of `H`'s with
+   multiplicity two and whose eigenvector `[u; v]` gives `u + iv`. The embedding
+   duplicates; it does not scale (`pipeline::complex::hermitian_eigh`).
+2. **RIE shrinkage** — the pointwise map $\xi(\lambda_i)$ above on **every**
+   eigenvalue, with the bulk-calibrated $\eta = 0.4/\sqrt p$ (`EtaDefault::Bulk`;
+   see `docs/eta_choice.md` for why that constant and not the crate-wide
+   $0.1/\sqrt p$).
+3. **Noise variance** — the MP-median-corrected $\hat\sigma^2$
+   (`spiked::estimate_bulk_noise`).
+4. **Angular overlaps** — the RMT prediction
+   $\alpha_i^2 = \cos^2\theta_i$ for the alignment of each sample eigenvector
+   with its population counterpart (`eigenvector_overlaps::compute_angular_overlaps`).
+5. **Reconstruction** — a linear shrinkage of the *directions* on top of the
+   eigenvalue shrinkage:
+
+   $$\hat\Sigma = d_{\text{bulk}} I + \sum_t \alpha_t^2\,(\xi_t - d_{\text{bulk}})\,
+     v_t v_t^{H}, \qquad d_{\text{bulk}} = \operatorname{mean}_{i:\,\alpha_i^2 = 0}\xi_i$$
+
+   so eigenvectors with no detectable population alignment collapse to the
+   isotropic $d_{\text{bulk}}$ level. The complex path uses the conjugate
+   transpose in the same formula; every scalar above is shared, which is why
+   there is no second estimator to drift from the first.
+
+Steps 2–5 are also exposed without the eigendecomposition as `clean_eigensystem`
+/ `clean_eigensystem_complex`, for callers that already have a LAPACK
+eigensystem. The **estimation** question on the same matrix (how many spikes,
+their debiased values, the population bulk) is the sibling
+`deconvolve_correlation_matrix_complex` / `estimate_population_eigenvalues`,
+which detects and debiases spikes rather than shrinking every eigenvalue
+pointwise.
+
 ## Spectral Deconvolution (Marčenko-Pastur Inversion)
 
 The bulk step of `deconvolve_spiked` implements **spectral deconvolution** — the inverse problem of recovering the **population spectral density** $\mu_{\Sigma}$ from sample eigenvalues by inverting the Marčenko-Pastur equation (El Karoui 2008):
