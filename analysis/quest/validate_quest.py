@@ -1,7 +1,6 @@
 """Validate the QuEST reference port against Monte Carlo and closed forms."""
 
 import numpy as np
-
 from quest_reference import quest
 
 
@@ -15,7 +14,7 @@ def sample_spectrum(rng, tau, n):
 def main():
     rng = np.random.default_rng(0)
     p, c = 1000, 0.25
-    n = int(round(p / c))
+    n = round(p / c)
     tau = np.concatenate([[12.0, 7.0, 4.0], np.ones(p - 3)])
 
     res = quest(tau, n)

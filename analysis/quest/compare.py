@@ -9,9 +9,9 @@ import json
 import time
 
 import numpy as np
+from quest_reference import quest
 
 import shrinkers as sh
-from quest_reference import quest
 
 
 # --------------------------------------------------------------------------
@@ -64,7 +64,7 @@ def experiment_A(report):
     print(f"    {'p':>6} {'median rel err':>15} {'90th pct':>10} {'max rel err':>12}")
     rows = []
     for p in (2000, 5000, 10000, 20000):
-        n = int(round(p / c))
+        n = round(p / c)
         tau = np.concatenate([np.full(p // 2, 3.0), np.full(p - p // 2, 1.0)])
         res = quest(tau, n)
         lam, d = res["lambda"], res["d"]
@@ -79,7 +79,7 @@ def experiment_A(report):
     # --- A2: spiked population: bulk vs atomic spikes ---
     print("A2. Spiked population [12, 7, 4, 1 x (p-3)]:")
     p = 2000
-    n = int(round(p / c))
+    n = round(p / c)
     tau = spiked_tau(p, [12.0, 7.0, 4.0])
     res = quest(tau, n)
     lam, d = res["lambda"], res["d"]
@@ -117,7 +117,7 @@ def experiment_B(report):
     c = 0.25
     rows = []
     for p in (500, 1000, 2000, 4000):
-        n = int(round(p / c))
+        n = round(p / c)
         tau = spiked_tau(p, [12.0, 7.0, 4.0])
         lam = quest(tau, n)["lambda"]
         est = sh.estimate_population_eigenvalues(lam, c)
@@ -144,7 +144,7 @@ def experiment_C(report):
     print("=" * 78)
     rng = np.random.default_rng(3)
     p, c = 1000, 0.25
-    n = int(round(p / c))
+    n = round(p / c)
     tau = spiked_tau(p, [12.0, 7.0, 4.0])
     lam_obs = sample_spectrum(rng, tau, n)
     est = sh.estimate_population_eigenvalues(lam_obs, c)
@@ -175,16 +175,20 @@ def experiment_D(report):
     print(f"  {'p':>6} {'QuEST fwd':>12} {'stieltjes':>12} {'LW shrink':>12} "
           f"{'deconvolve':>12} {'pop_est':>12}")
     for p in (500, 1000, 2000, 4000, 8000):
-        n = int(round(p / c))
+        n = round(p / c)
         tau = np.sort(spiked_tau(p, [12.0, 7.0, 4.0]))
         lam = np.sort(quest(tau, n)["lambda"])
         row = {
             "p": p,
-            "quest_forward_ms": timeit(lambda: quest(tau, n), repeats=5, warmup=1),
-            "stieltjes_ms": timeit(lambda: sh.stieltjes_transform(lam, method="blocked"), repeats=7),
-            "lw_shrink_ms": timeit(lambda: sh.ledoit_wolf_shrinkage(lam, c), repeats=7),
-            "deconvolve_ms": timeit(lambda: sh.deconvolve_spiked(lam, c=c), repeats=7),
-            "pop_est_ms": timeit(lambda: sh.estimate_population_eigenvalues(lam, c), repeats=7),
+            "quest_forward_ms": timeit(lambda tau=tau, n=n: quest(tau, n), repeats=5, warmup=1),
+            "stieltjes_ms": timeit(
+                lambda lam=lam: sh.stieltjes_transform(lam, method="blocked"), repeats=7
+            ),
+            "lw_shrink_ms": timeit(lambda lam=lam: sh.ledoit_wolf_shrinkage(lam, c), repeats=7),
+            "deconvolve_ms": timeit(lambda lam=lam: sh.deconvolve_spiked(lam, c=c), repeats=7),
+            "pop_est_ms": timeit(
+                lambda lam=lam: sh.estimate_population_eigenvalues(lam, c), repeats=7
+            ),
         }
         rows.append(row)
         print(f"  {p:>6} {row['quest_forward_ms']:>11.3f}ms {row['stieltjes_ms']:>11.3f}ms "
@@ -192,7 +196,7 @@ def experiment_D(report):
               f"{row['pop_est_ms']:>11.3f}ms")
 
     p = 8000
-    n = int(round(p / c))
+    n = round(p / c)
     tau = np.sort(spiked_tau(p, [12.0, 7.0, 4.0]))
     lam = np.sort(quest(tau, n)["lambda"])
     seq = timeit(lambda: sh.stieltjes_transform(lam, method="blocked", parallel=False), repeats=5)
@@ -212,7 +216,7 @@ def experiment_E(report):
 
     c = 0.25
     p = 100
-    n = int(round(p / c))
+    n = round(p / c)
     tau = spiked_tau(p, [12.0, 7.0, 4.0])
     # deterministic QuEST spectrum: isolates the cost of the inversion itself
     # from finite-sample noise in the target.
@@ -238,7 +242,7 @@ def experiment_E(report):
 
     print(f"  p={p}, n={n}, one QuEST eval = "
           f"{timeit(lambda: quest(np.sort(tau), n), repeats=7):.3f}ms")
-    print(f"  target lambda = QuEST(tau), tau = [12,7,4,1...]")
+    print("  target lambda = QuEST(tau), tau = [12,7,4,1...]")
     print(f"  QuEST inversion (Nelder-Mead, {calls['n']} evals): {t_quest_opt:.1f}ms"
           f"  -> theta = {np.round(opt.x, 4)}  (true [12 7 4 1])")
     print(f"  shrinkers estimate_population_eigenvalues          : {t_shrink:.4f}ms"

@@ -19,6 +19,13 @@ sample). The multiset of cleaned values — and therefore the median error, 1.7 
 — is unchanged; only the alignment is. The caption also said "within 1 %" for
 spike estimates whose worst error is 1.7 % (4.07 vs 4.00), now "within 2 %".
 
+### Fixed — the QuEST analysis scripts now pass the lint gate
+
+`analysis/quest/` had been failing `ruff check .` — the exact command CI runs —
+since it landed: unsorted imports, redundant `int(round(...))` casts, timing
+lambdas capturing the loop variable, an unused `noqa` and a dead `np.load`
+assignment. All fixed; no measured number changes.
+
 ### Added — complex Hermitian correlation-matrix cleaning
 
 `clean_correlation_matrix` assumed real symmetric input, which is what a

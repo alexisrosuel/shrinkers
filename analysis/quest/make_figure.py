@@ -5,9 +5,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from quest_reference import quest
 
 import shrinkers as sh
-from quest_reference import quest
 
 plt.rcParams.update({"font.size": 9, "axes.grid": True, "grid.alpha": 0.3})
 
@@ -15,7 +15,7 @@ fig, ax = plt.subplots(2, 2, figsize=(10, 7.2))
 
 # --- (a) the two directions on the spiked model -------------------------
 c, p = 0.25, 2000
-n = int(round(p / c))
+n = round(p / c)
 tau = np.concatenate([[12.0, 7.0, 4.0], np.ones(p - 3)])
 res = quest(tau, n)
 lam = res["lambda"]
@@ -34,7 +34,7 @@ a.legend(fontsize=8)
 
 # --- (b) shrinkage functions on a continuous spectrum --------------------
 c2, p2 = 0.25, 20000
-n2 = int(round(p2 / c2))
+n2 = round(p2 / c2)
 tau2 = np.concatenate([np.full(p2 // 2, 3.0), np.full(p2 - p2 // 2, 1.0)])
 r2 = quest(tau2, n2)
 lam2, d2 = r2["lambda"], r2["d"]
@@ -55,7 +55,7 @@ b.legend(fontsize=8)
 ps = np.array([500, 1000, 2000, 4000, 8000])
 spike_err, refit = [], []
 for pp in ps:
-    nn = int(round(pp / c))
+    nn = round(pp / c)
     tt = np.concatenate([[12.0, 7.0, 4.0], np.ones(pp - 3)])
     ll = quest(tt, nn)["lambda"]
     e = sh.estimate_population_eigenvalues(ll, c)
@@ -71,7 +71,6 @@ cc.set_title("(c) shrinkers recovers the QuEST pre-image")
 cc.legend(fontsize=8)
 
 # --- (d) runtime ---------------------------------------------------------
-td = np.load  # noqa
 rt = [
     (500, 7.845, 0.068, 0.028),
     (1000, 8.788, 0.258, 0.040),

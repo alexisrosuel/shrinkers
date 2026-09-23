@@ -252,7 +252,7 @@ def _quantiles(F_grid, x_grid, p: int) -> np.ndarray:
 def quest_from_c(tau: np.ndarray, c: float, **kw) -> dict:
     """Convenience: specify the concentration ratio ``c`` instead of ``n``."""
     tau = np.asarray(tau, float).ravel()
-    n = int(round(tau.size / c))
+    n = round(tau.size / c)
     return quest(tau, n, **kw)
 
 
@@ -272,7 +272,7 @@ if __name__ == "__main__":
     for c in (0.1, 0.25, 0.5, 1.0):
         p = 500
         tau = np.ones(p)
-        res = quest(tau, int(round(p / c)))
+        res = quest(tau, round(p / c))
         x = res["x"]
         f = res["f"]
         ref = _mp_density(x, c)
