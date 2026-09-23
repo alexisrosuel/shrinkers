@@ -55,20 +55,32 @@ def fig_cleaning() -> dict:
     truth_desc, sample_desc = simulate_spiked(p, spikes, seed=42)
 
     res = rk.estimate_population_eigenvalues(np.sort(sample_desc), c=C)
-    cleaned_desc = np.sort(
-        np.concatenate([res["spikes"], res["bulk_population"]])
-    )[::-1]
-    # Sanity: every series must be genuinely descending so rank i aligns
-    # across panels (a previous revision plotted the truth ascending).
+
+    # The cleaned estimates must stay in the SAMPLE-eigenvalue order, not be
+    # sorted by value: `spikes` is descending and `bulk_population` is parallel
+    # to the *ascending* `bulk_sample`, so reversing the latter lines every
+    # estimate up with the sample eigenvalue it came from. Sorting the cleaned
+    # values (what this figure used to do) instead turns the red curve into an
+    # order statistic whose features sit at different ranks from the sample's,
+    # which reads as a horizontal shift against the grey and black curves. The
+    # multiset of cleaned values — hence the median error — is identical either
+    # way; only the rank alignment changes.
+    k = len(spikes)
+    assert res["k"] == k, f"expected {k} detected spikes, got {res['k']}"
+    assert np.allclose(res["spike_sample"], sample_desc[:k])
+    cleaned_desc = np.concatenate(
+        [res["spikes"], np.asarray(res["bulk_population"])[::-1]]
+    )
+    assert cleaned_desc.shape == sample_desc.shape
+    # Truth and sample are genuinely descending; the cleaned series follows the
+    # sample's ranks, so it is only descending up to the estimator's noise.
     assert truth_desc[0] > truth_desc[1] > truth_desc[2], truth_desc[:4]
     assert sample_desc[0] > sample_desc[1], sample_desc[:3]
-    assert cleaned_desc[0] > cleaned_desc[1], cleaned_desc[:3]
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
 
     ax = axes[0]
     idx = np.arange(1, p + 1)
-    k = len(spikes)
     # Bulk as a line starting AFTER the spike ranks (no vertical jump in the
     # trace); the spikes themselves are isolated scatter markers.
     ax.plot(idx[k:], truth_desc[k:], "-", color="black", lw=1.5,

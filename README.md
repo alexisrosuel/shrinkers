@@ -40,10 +40,12 @@ high-dimensional covariance are biased artifacts: the bulk is smeared over
 ![Cleaning quality](docs/img/cleaning_quality.png)
 
 *Spiked model, p = 1000, c = 0.25, σ² = 1, three spikes injected at 12 / 7 / 4.
-All 3 spikes are detected and debiased to within 1 % (12.01 / 7.07 / 4.07),
+All 3 spikes are detected and debiased to within 2 % (12.01 / 7.07 / 4.07),
 the noise level is estimated at σ̂² = 1.002, and the median relative error
 against the true population eigenvalues drops from **40 % to 1.7 %** in a
-single call (`estimate_population_eigenvalues`).*
+single call (`estimate_population_eigenvalues`). Each red point is the cleaned
+value of the sample eigenvalue at the same rank — the estimator is a pointwise
+map, so the ranks are not re-sorted.*
 
 **2 · It is absurdly fast for what it computes.** Same math as your NumPy
 one-liner, orders of magnitude faster — compared below against the two

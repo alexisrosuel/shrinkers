@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed — rank alignment of the cleaning-quality README figure
+
+`scripts/make_readme_figures.py` sorted the cleaned estimates by value before
+plotting them, so the red curve was the *order statistic* of the cleaned
+spectrum while the grey sample and black truth curves were in their own rank
+order. `estimate_population_eigenvalues` is a pointwise map, so the two
+orderings put features at different ranks: the red error curve's minimum sat at
+rank ~666 against the sample's rank ~449, which reads as a horizontal shift on
+the figure. The cleaned series now stays in the sample-eigenvalue order
+(`spikes` descending, `bulk_population` reversed to match the descending bulk
+sample). The multiset of cleaned values — and therefore the median error, 1.7 %
+— is unchanged; only the alignment is. The caption also said "within 1 %" for
+spike estimates whose worst error is 1.7 % (4.07 vs 4.00), now "within 2 %".
+
 ### Added — complex Hermitian correlation-matrix cleaning
 
 `clean_correlation_matrix` assumed real symmetric input, which is what a
