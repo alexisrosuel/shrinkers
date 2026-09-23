@@ -57,7 +57,8 @@
 //! This crate's pointwise estimators use a *constant* imaginary shift $\eta$;
 //! the inverse-shrinkage bandwidth is proportional to the eigenvalue instead,
 //! so the per-point kernels are reused through
-//! [`crate::stieltjes::compute_stieltjes_scaled_ray`] with $\eta_i = h\lambda_i$.
+//! `crate::stieltjes::compute_stieltjes_scaled_ray` (a crate-internal helper)
+//! with $\eta_i = h\lambda_i$.
 //! The identity above is what that function exploits, keeping the estimator on
 //! the same optimized kernels as the rest of the crate.
 //!
