@@ -144,5 +144,36 @@
       7.065935898650943,
       4.067536836392795
     ]
+  },
+  "correlation_cleaning": {
+    "real": {
+      "c": 0.25,
+      "sigma2_est": 0.9929176011736838,
+      "mp_edge": 2.2340646026407884,
+      "rel_frobenius_sample": 0.4935377064592528,
+      "rel_frobenius_cleaned": 0.09467031475540559,
+      "max_sample_eig": 3.3373649172614526,
+      "max_clean_eig": 2.5147205523283893,
+      "max_true_eig": 2.8874294254325923,
+      "p": 400,
+      "factors": 3,
+      "noise": 0.5
+    },
+    "complex": {
+      "c": 0.2,
+      "sigma2_est": 0.9683818048215275,
+      "mp_edge": 2.0282051832877803,
+      "rel_frobenius_sample": 0.6336571394767564,
+      "rel_frobenius_cleaned": 0.4336770443753167,
+      "max_sample_eig": 5.778509938252451,
+      "max_clean_eig": 5.040314830749514,
+      "max_true_eig": 5.672923731438293,
+      "channels": 200,
+      "bins": 1000,
+      "modes": [
+        6.0,
+        3.0
+      ]
+    }
   }
 }
