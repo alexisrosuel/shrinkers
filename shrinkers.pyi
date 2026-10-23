@@ -79,36 +79,6 @@ class CleanCorrelationMatrixResult(TypedDict):
     sigma2: float
 
 
-class CleanCorrelationMatrixComplexResult(TypedDict):
-    """Same keys as ``CleanCorrelationMatrixResult``; ``covariance`` and
-    ``eigenvectors`` are ``complex128`` (Hermitian and unitary respectively)."""
-
-    covariance: np.ndarray  # cleaned Hermitian matrix (p, p), complex128
-    eigenvectors: np.ndarray  # complex128 (p, p), descending columns
-    eigenvalues: np.ndarray  # RIE-cleaned eigenvalues (p,), descending, real
-    overlaps: np.ndarray  # squared angular overlaps alpha_i^2 (p,)
-    sigma2: float
-
-
-class DeconvolveCorrelationMatrixComplexResult(TypedDict):
-    """Spiked split of a complex Hermitian correlation matrix.
-
-    ``eigenvalues`` / ``eigenvectors`` are the *sample* eigensystem of the
-    input matrix (ascending); the remaining keys mirror
-    ``EstimatePopulationEigenvaluesResult``.
-    """
-
-    eigenvalues: np.ndarray  # sample eigenvalues (p,), ascending
-    eigenvectors: np.ndarray  # complex128 (p, p), ascending columns
-    k: int
-    spikes: np.ndarray  # population spikes, descending
-    spike_sample: np.ndarray  # sample spikes, descending
-    bulk_edge: float
-    sigma2: float
-    bulk_population: np.ndarray  # per-bulk-eigenvalue estimates, bulk_sample order
-    bulk_sample: np.ndarray  # ascending
-
-
 class DirectPrecisionShrinkageResult(TypedDict):
     precision_eigenvalues: np.ndarray  # direct precision delta_i (p,)
 
@@ -178,25 +148,26 @@ def deconvolve_spiked(
 ) -> DeconvolveSpikedResult: ...
 
 
+def clean_covariance_matrix(
+    covariance: np.ndarray, c: float
+) -> CleanCorrelationMatrixResult:
+    """Clean a sample covariance matrix (RIE + eigenvector overlaps).
+
+    The covariance-named twin of ``clean_correlation_matrix``: the estimator is
+    agnostic to whether the input is a covariance or a correlation matrix, so
+    the two differ only in the scale of the matrix they return."""
+
 def clean_correlation_matrix(
-    correlation: np.ndarray, c: float
-) -> CleanCorrelationMatrixResult: ...
+    correlation: np.ndarray, c: float, *, renormalize: bool = ...
+) -> CleanCorrelationMatrixResult:
+    """Clean a sample correlation matrix.
 
-def clean_correlation_matrix_complex(
-    correlation: np.ndarray, c: float
-) -> CleanCorrelationMatrixComplexResult:
-    """Clean a complex Hermitian correlation matrix (e.g. a spectral coherence
-    matrix). Same estimator as ``clean_correlation_matrix``; the conjugate
-    transpose replaces the transpose. ``covariance`` and ``eigenvectors`` come
-    back complex."""
-
-def deconvolve_correlation_matrix_complex(
-    correlation: np.ndarray, c: float, margin: float = ...
-) -> DeconvolveCorrelationMatrixComplexResult:
-    """Spiked split (BEMA + inverse BBP + Ledoit-Wolf bulk) of a complex
-    Hermitian correlation matrix, with the sample eigensystem as a by-product.
-    The matrix-level counterpart of ``estimate_population_eigenvalues``."""
-
+    ``renormalize=True`` rescales the cleaned matrix back to unit diagonal
+    (``R = D^-1/2 Sigma D^-1/2``). The raw RIE reconstruction preserves the
+    trace but not the individual diagonal entries, which drift well away from
+    one when spikes are present; renormalising restores the exact correlation
+    contract at the cost of the reconstruction's rotation-equivariance. Default
+    ``False``."""
 
 def direct_precision_shrinkage(
     eigenvalues: np.ndarray, c: float

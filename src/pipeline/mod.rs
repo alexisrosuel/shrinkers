@@ -19,7 +19,6 @@
 
 use crate::config::RmtConfig;
 
-pub mod complex;
 use crate::deconvolution::{InverseShrinkageMethod, inverse_nonlinear_shrinkage, rie_shrinkage};
 use crate::eigenvector_overlaps::compute_angular_overlaps;
 use ndarray::Array2;
@@ -237,6 +236,48 @@ pub fn clean_eigensystem(
     }
 }
 
+/// Eigendecompose a symmetric sample matrix and clean its eigensystem.
+///
+/// The estimator is agnostic to whether the input is a covariance or a
+/// correlation matrix — it only ever sees a spectrum and `c` — so both
+/// matrix-level entry points share this one body.
+fn eigendecompose_and_clean(
+    matrix: &Array2<f64>,
+    c: f64,
+    config: &RmtConfig,
+) -> CleanedEigensystem {
+    let (eigenvalues, eigenvectors) = symmetric_eigh(matrix);
+    clean_eigensystem(&eigenvectors, &eigenvalues, c, config)
+}
+
+/// Clean a sample covariance matrix and return the cleaned covariance matrix
+/// plus the cleaned eigenvalues, sorted eigenvectors, and their theoretical
+/// alignment with the population eigenvectors.
+///
+/// The spectral decomposition is computed internally with a symmetric
+/// eigendecomposition (Jacobi iteration). For very large p, prefer
+/// `clean_eigensystem` if you already have the eigensystem from Python/scipy.
+///
+/// NOTE: this allocates a dense p×p working copy for the eigendecomposition.
+///
+/// # Arguments
+///
+/// * `covariance` — Sample covariance matrix, shape (p, p), symmetric.
+/// * `c` — Concentration ratio N / T.
+/// * `config` — `RmtConfig` controlling RIE shrinkage method.
+///
+/// # Returns
+///
+/// A [`CleanedEigensystem`] with the cleaned covariance, eigenvalues,
+/// eigenvectors, and angular overlaps.
+pub fn clean_covariance_matrix(
+    covariance: &Array2<f64>,
+    c: f64,
+    config: &RmtConfig,
+) -> CleanedEigensystem {
+    eigendecompose_and_clean(covariance, c, config)
+}
+
 /// Clean a correlation matrix and return the cleaned covariance matrix plus
 /// the cleaned eigenvalues, sorted eigenvectors, and their theoretical
 /// alignment with the population eigenvectors.
@@ -244,6 +285,13 @@ pub fn clean_eigensystem(
 /// The spectral decomposition is computed internally with a symmetric
 /// eigendecomposition (Jacobi iteration). For very large p, prefer
 /// `clean_eigensystem` if you already have the eigensystem from Python/scipy.
+///
+/// The estimator is exactly [`clean_covariance_matrix`]: RIE commutes with
+/// orthogonal conjugation but *not* with the diagonal congruence that links a
+/// covariance to its correlation matrix, so the correlation matrix is cleaned
+/// on its own spectrum rather than rescaled from the cleaned covariance. The
+/// returned matrix is the raw reconstruction — trace-preserving, but its
+/// diagonal is not forced back to one; see [`renormalize_to_unit_diagonal`].
 ///
 /// NOTE: this allocates a dense p×p working copy for the eigendecomposition.
 ///
@@ -262,11 +310,34 @@ pub fn clean_correlation_matrix(
     c: f64,
     config: &RmtConfig,
 ) -> CleanedEigensystem {
-    // ── 1. Spectral decomposition ──
-    let (eigenvalues, eigenvectors) = symmetric_eigh(correlation);
+    eigendecompose_and_clean(correlation, c, config)
+}
 
-    // ── 2. Clean ──
-    clean_eigensystem(&eigenvectors, &eigenvalues, c, config)
+/// Rescale a cleaned covariance matrix to unit diagonal,
+/// `R = D^{-1/2} Σ D^{-1/2}` with `D = diag(Σ)`.
+///
+/// This is the step that turns a matrix cleaned *in correlation units* back
+/// into a genuine correlation matrix: the RIE + angular-overlap reconstruction
+/// preserves the trace but not the individual diagonal entries, which drift
+/// well away from one whenever spikes are present. It is a post-processing
+/// choice, not part of the estimator — it breaks the rotation-equivariance of
+/// the reconstruction, so [`clean_correlation_matrix`] leaves the raw
+/// reconstruction in place and this is applied only on request (Python's
+/// `renormalize=True`).
+///
+/// A non-positive diagonal entry means the input is not a valid covariance and
+/// the congruence is undefined; the matrix is then returned unchanged rather
+/// than partially rescaled.
+pub fn renormalize_to_unit_diagonal(covariance: &Array2<f64>) -> Array2<f64> {
+    let p = covariance.nrows();
+    debug_assert_eq!(p, covariance.ncols());
+
+    if (0..p).any(|i| covariance[[i, i]] <= 0.0) {
+        return covariance.to_owned();
+    }
+
+    let scales: Vec<f64> = (0..p).map(|i| 1.0 / covariance[[i, i]].sqrt()).collect();
+    Array2::from_shape_fn((p, p), |(i, j)| covariance[[i, j]] * scales[i] * scales[j])
 }
 
 // ──────────────────────────────────────────────
@@ -691,5 +762,87 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Matrix-level entry points + renormalisation ──
+
+    /// A symmetric matrix with a genuine spike, used as both a covariance and
+    /// a correlation matrix below.
+    fn symmetric_spiked_matrix(p: usize) -> Array2<f64> {
+        let mut a = Array2::zeros((p, p));
+        for i in 0..p {
+            for j in 0..p {
+                a[[i, j]] = 0.2 / (1.0 + (i as f64 - j as f64).abs());
+            }
+            a[[i, i]] = 1.0;
+        }
+        a
+    }
+
+    /// The two matrix-level entry points share one kernel: on the *same* input
+    /// they must agree exactly, which is the whole point of adding the
+    /// covariance-named twin without touching the estimator.
+    #[test]
+    fn test_clean_covariance_matrix_matches_the_correlation_path() {
+        let a = symmetric_spiked_matrix(9);
+        let c = 0.35;
+        let cfg = RmtConfig::new(c);
+
+        let cov = clean_covariance_matrix(&a, c, &cfg);
+        let corr = clean_correlation_matrix(&a, c, &cfg);
+
+        for (x, y) in cov.eigenvalues.iter().zip(corr.eigenvalues.iter()) {
+            assert_relative_eq!(x, y, epsilon = 1e-14);
+        }
+        for i in 0..9 {
+            for j in 0..9 {
+                assert_relative_eq!(
+                    cov.covariance[[i, j]],
+                    corr.covariance[[i, j]],
+                    epsilon = 1e-14
+                );
+            }
+        }
+    }
+
+    /// `renormalize_to_unit_diagonal` must produce a unit diagonal and agree
+    /// with the explicit `D^{-1/2} Σ D^{-1/2}` congruence.
+    #[test]
+    fn test_renormalize_to_unit_diagonal() {
+        let a = symmetric_spiked_matrix(11);
+        let c = 0.4;
+        let cleaned = clean_covariance_matrix(&a, c, &RmtConfig::new(c));
+        let sigma = cleaned.covariance;
+
+        let renorm = renormalize_to_unit_diagonal(&sigma);
+
+        let p = 11;
+        for i in 0..p {
+            assert_relative_eq!(renorm[[i, i]], 1.0, epsilon = 1e-12);
+            for j in 0..p {
+                let want = sigma[[i, j]] / (sigma[[i, i]].sqrt() * sigma[[j, j]].sqrt());
+                assert_relative_eq!(renorm[[i, j]], want, epsilon = 1e-12);
+            }
+        }
+        // Symmetry survives the (diagonal) congruence.
+        for i in 0..p {
+            for j in 0..p {
+                assert_relative_eq!(renorm[[i, j]], renorm[[j, i]], epsilon = 1e-14);
+            }
+        }
+    }
+
+    /// A non-positive diagonal cannot be normalised: the matrix is returned
+    /// unchanged rather than partially rescaled.
+    #[test]
+    fn test_renormalize_leaves_nonpositive_diagonal_alone() {
+        let m = Array2::from_shape_vec((2, 2), vec![0.0, 0.5, 0.5, 4.0]).unwrap();
+        let got = renormalize_to_unit_diagonal(&m);
+        for i in 0..2 {
+            for j in 0..2 {
+                assert_relative_eq!(got[[i, j]], m[[i, j]], epsilon = 1e-15);
+            }
+        }
+        assert!(got.iter().all(|v| v.is_finite()));
     }
 }

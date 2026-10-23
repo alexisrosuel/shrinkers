@@ -33,14 +33,11 @@ The shrunk eigenvalues are then trace-preserving rescaled.
 
 ## Cleaning a correlation matrix
 
-`clean_correlation_matrix` (real symmetric) and `clean_correlation_matrix_complex`
-(complex Hermitian) take the *matrix* and run the whole pipeline in one call:
+`clean_correlation_matrix` (and its covariance-named twin
+`clean_covariance_matrix`) take the *matrix* and run the whole pipeline in one
+call:
 
-1. **Eigendecomposition** — the real path uses the Jacobi `symmetric_eigh`; the
-   complex path uses the standard real embedding
-   `H = A + iB -> [[A, -B], [B, A]]`, whose eigenvalues are each of `H`'s with
-   multiplicity two and whose eigenvector `[u; v]` gives `u + iv`. The embedding
-   duplicates; it does not scale (`pipeline::complex::hermitian_eigh`).
+1. **Eigendecomposition** — a Jacobi `symmetric_eigh` (`pipeline::symmetric_eigh`).
 2. **RIE shrinkage** — the pointwise map $\xi(\lambda_i)$ above on **every**
    eigenvalue, with the bulk-calibrated $\eta = 0.4/\sqrt p$ (`EtaDefault::Bulk`;
    see `docs/eta_choice.md` for why that constant and not the crate-wide
@@ -54,20 +51,23 @@ The shrunk eigenvalues are then trace-preserving rescaled.
    eigenvalue shrinkage:
 
    $$\hat\Sigma = d_{\text{bulk}} I + \sum_t \alpha_t^2\,(\xi_t - d_{\text{bulk}})\,
-     v_t v_t^{H}, \qquad d_{\text{bulk}} = \operatorname{mean}_{i:\,\alpha_i^2 = 0}\xi_i$$
+     v_t v_t^{\top}, \qquad d_{\text{bulk}} = \operatorname{mean}_{i:\,\alpha_i^2 = 0}\xi_i$$
 
    so eigenvectors with no detectable population alignment collapse to the
-   isotropic $d_{\text{bulk}}$ level. The complex path uses the conjugate
-   transpose in the same formula; every scalar above is shared, which is why
-   there is no second estimator to drift from the first.
+   isotropic $d_{\text{bulk}}$ level.
+6. **Optional unit-diagonal rescale** — the reconstruction preserves the *trace*
+   of the input, not its diagonal, so on a spiked input the cleaned diagonal
+   drifts from one. `renormalize_to_unit_diagonal` applies the
+   $D^{-1/2}\hat\Sigma D^{-1/2}$ congruence on request; the matrix entry points
+   expose it as Python's `renormalize=True`. The unit diagonal is a constraint
+   the population satisfies, but enforcing it costs the reconstruction's
+   rotation-equivariance, so it is off by default.
 
-Steps 2–5 are also exposed without the eigendecomposition as `clean_eigensystem`
-/ `clean_eigensystem_complex`, for callers that already have a LAPACK
-eigensystem. The **estimation** question on the same matrix (how many spikes,
-their debiased values, the population bulk) is the sibling
-`deconvolve_correlation_matrix_complex` / `estimate_population_eigenvalues`,
-which detects and debiases spikes rather than shrinking every eigenvalue
-pointwise.
+Steps 2–5 are also exposed without the eigendecomposition as `clean_eigensystem`,
+for callers that already have a LAPACK eigensystem. The **estimation** question
+on the same matrix (how many spikes, their debiased values, the population bulk)
+is the eigenvalue-level sibling `estimate_population_eigenvalues`, which detects
+and debiases spikes rather than shrinking every eigenvalue pointwise.
 
 ## Spectral Deconvolution (Marčenko-Pastur Inversion)
 
@@ -300,7 +300,7 @@ that round's full record:
 
 > **Latest kernel pass (`[Unreleased]`).** The f32 speed path was reworked
 > (compact 24-byte nodes, interleaved panels, one-step reciprocal, f32
-> partials, η factoring, pre-order child links, 1.3× outside angle) and the
+> partials, η factoring, pre-order child links, 1.4× outside angle) and the
 > build split into topology / parallel leaf fills / reverse merges. At
 > p = 50 000, η = 1/√p, same-binary interleaved A/B (9-run medians): FAST
 > eval 4.41 → 3.59 ms sequential (0.72 → 0.55 ms Rayon), end-to-end
@@ -490,7 +490,7 @@ stack: a panel well-separated from z (`half_width² < θ²·dist²`, stored as
 pairwise sum. The FAST preset runs this traversal and the far field in f32
 on a compact 24-byte node record and 64-byte interleaved panels, keeps
 `η` out of the per-term imaginary accumulation (one multiply at the end),
-and gives panels outside the query a `1.3·θ` opening angle. Cost per query:
+and gives panels outside the query a `1.4·θ` opening angle. Cost per query:
 O(log p · n); for all p eigenvalues: O(p log p).
 
 On top of that, `ChebCodeBatch` adds three amortizations:

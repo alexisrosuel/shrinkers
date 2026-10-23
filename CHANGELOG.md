@@ -100,6 +100,48 @@ a Python `nufft`/`fft_fast` test. Docs: `README`, `docs/internals.md`,
 `docs/python_api.md`, `docs/hardware_optimizations.md`; benchmark:
 `examples/measure_nufft.rs`.
 
+### Added — `clean_covariance_matrix` and an opt-in unit-diagonal renormalisation
+
+Two additions that make the covariance/correlation surface symmetric without
+touching the estimator. The cleaning kernel only ever sees a spectrum and `c`,
+so the covariance/correlation distinction lives entirely in the input matrix —
+the estimator was already agnostic, only the entry-point names were not.
+
+- `clean_covariance_matrix(covariance, c)` (Rust + Python) is the
+  covariance-named twin of `clean_correlation_matrix`. On the same input the two
+  agree to round-off; they differ only in the scale of the matrix they return.
+- `renormalize_to_unit_diagonal` (Rust) rescales a cleaned matrix to unit
+  diagonal, `R = D^{-1/2} Σ D^{-1/2}`, exposed as the keyword-only
+  `renormalize=False` on `clean_correlation_matrix`. The
+  RIE + angular-overlap reconstruction preserves the *trace* but not the
+  individual diagonal entries, which drift well away from one when spikes are
+  present (max $|d_{ii} - 1| \approx 0.2$ on a $p = 60$ three-factor sample).
+  Renormalising restores the exact correlation contract — and, because the
+  population correlation has a unit diagonal, it also lowered the relative
+  Frobenius error against the population (0.238 → 0.191 on that real example) —
+  at the cost of the reconstruction's rotation-equivariance. A non-positive
+  diagonal (not a valid covariance) returns the matrix unchanged rather than
+  partially rescaled.
+- Rust: the two matrix-level entry points now share one private
+  `eigendecompose_and_clean` body, so "same estimator" is structural rather than
+  a comment.
+- Tests: 3 Rust + 8 Python cases (covariance/correlation equality on the same
+  matrix, the congruence, unit diagonal, covariance units preserved, the default
+  `False`, validation).
+- Docs: `docs/python_api.md` gains a `clean_covariance_matrix` section and the
+  `renormalize` parameter on `clean_correlation_matrix`; `shrinkers.pyi`
+  types them; the README correlation section shows both.
+
+### Removed — unreleased complex-Hermitian correlation entry points
+
+The `clean_correlation_matrix_complex` / `deconvolve_correlation_matrix_complex`
+Python bindings and the `pipeline::complex` Rust module were removed before
+release. The matrix-level surface is now real symmetric: covariance inputs use
+`clean_covariance_matrix`, and `clean_correlation_matrix(..., renormalize=True)`
+restores the unit-diagonal correlation contract. Nothing in a released version
+exposed the complex API; the README, type stubs, Python docs and tests now
+describe the real/covariance surface only.
+
 ### Fixed — rank alignment of the cleaning-quality README figure
 
 `scripts/make_readme_figures.py` sorted the cleaned estimates by value before
@@ -121,115 +163,24 @@ since it landed: unsorted imports, redundant `int(round(...))` casts, timing
 lambdas capturing the loop variable, an unused `noqa` and a dead `np.load`
 assignment. All fixed; no measured number changes.
 
-### Changed — correlation-cleaning API tidy-up
+### Changed — correlation-cleaning surface tidy-up
 
-A review pass over the two `clean_correlation_matrix*` entry points and the new
-complex spiked split. No estimator changed; the surface is now consistent.
+A review pass over the correlation/covariance entry points. No estimator
+changed; the surface is now consistent.
 
-- `src/python.rs`: one shared `owned_hermitian_matrix` validator replaces the
-  inline Hermitian checks (square / finite / `H = H^H` at `1e-12` relative
-  tolerance), and `clean_correlation_matrix_py` now goes through the existing
-  `owned_symmetric_matrix` instead of repeating it. The module doc comment lost
-  its stale "numpy 0.29 bundles ndarray 0.16" note — the crate and `rust-numpy`
-  both build against ndarray 0.17 — and its entry-point list now covers the four
-  groups actually exported.
-- `shrinkers.pyi`: `CleanCorrelationMatrixComplexResult` types the complex
-  `covariance` / `eigenvectors` (the real TypedDict was being reused for them),
-  and the new function below is declared.
-- Python tests: 12 new cases cover the complex path where there were none —
-  real-as-complex equivalence with the real entry point, Hermitian validation,
-  non-square / non-finite rejection, positive-definiteness, and the matrix
-  spiked split matching `estimate_population_eigenvalues` on its own returned
-  eigenvalues. 74 Python tests (62 before).
-- `docs/python_api.md`: both complex entry points are in the function table, and
-  the one-line "Rust-only for now" note became a full section for
-  `deconvolve_correlation_matrix_complex`.
+- `src/python.rs`: `clean_correlation_matrix_py` now goes through the shared
+  `owned_symmetric_matrix` validator instead of repeating it, and the module doc
+  comment's entry-point list covers the groups actually exported.
 - `docs/internals.md`: a *Cleaning a correlation matrix* theory section covering
-  the five pipeline stages and the real/complex shared scalars.
-- README: a new *Cleaning a correlation matrix* section with the figure below.
-
-### Added — `deconvolve_correlation_matrix_complex` in Python
-
-The matrix-level complex-Hermitian spiked decomposition (Rust commit below) is
-now bound, so the whole correlation-matrix story is available from Python:
-`clean_correlation_matrix_complex` for the cleaned matrix,
-`deconvolve_correlation_matrix_complex(correlation, c, margin=1.0)` for the
-population split plus the sample eigensystem in one pass.
+  the pipeline stages.
+- README: a *Cleaning a correlation matrix* section with the figure below.
 
 ### Added — correlation-cleaning README figure
 
 `docs/img/correlation_cleaning.png` (third front-page figure, regenerated by
-`scripts/make_readme_figures.py` with its numbers in `readme_figures.json`):
-the real symmetric entry point on a three-factor correlation matrix and the
-complex Hermitian entry point on a spectral coherence matrix, each plotted
-against its known population. Relative Frobenius error drops 0.49 → 0.09 (real,
-p = 400, c = 0.25) and 0.63 → 0.43 (complex, M = 200, B = 1000, c = 0.20).
-
-### Added — complex Hermitian correlation-matrix cleaning
-
-`clean_correlation_matrix` assumed real symmetric input, which is what a
-covariance gives. A **spectral coherence matrix** does not: it is built from
-Fourier coefficients and is complex Hermitian, with unit diagonal, the same
-Marchenko-Pastur bulk and the same BBP spikes.
-
-New surface:
-
-- `pipeline::complex::hermitian_eigh(re, im)` — eigenvalues and eigenvectors of
-  a Hermitian matrix through the standard real embedding
-  `H = A + iB -> [[A, -B], [B, A]]`. Reuses the existing `symmetric_eigh`; the
-  embedding duplicates each eigenvalue, it does not scale it.
-- `pipeline::complex::clean_eigensystem_complex` and
-  `clean_correlation_matrix_complex` — the same estimator, with the conjugate
-  transpose replacing the transpose in `d_bulk I + sum_t scale_t v_t v_t^H`.
-  The RIE shrinkage, the `sigma^2` estimate and the RMT angular overlaps are
-  scalar and shared with the real path, so there is no second implementation of
-  anything that matters.
-- Python: `clean_correlation_matrix_complex(correlation, c)`, which validates
-  Hermitian symmetry at the boundary and returns the same dict, with
-  `covariance` and `eigenvectors` complex.
-
-Verified: a real matrix passed through the complex path reproduces the real
-path's cleaned eigenvalues **bit for bit** (`max |diff| = 0.0`), the cleaned
-matrix is Hermitian to machine precision and positive definite, and non-Hermitian
-input is rejected with a `ValueError`. 144 Rust tests (4 new), 62 Python.
-
-This is the missing brick for frequency-domain estimation on time series; the
-downstream estimator that motivated it lives in its own repository and now
-delegates its eigensolver here rather than carrying a duplicate.
-
-### Added — complex Hermitian spiked decomposition
-
-The cleaning entry point above answers the *cleaning* question (RIE on every
-eigenvalue, spike directions reweighted by their angular overlap). The
-*estimation* question — how many coherent modes are there, what are their
-debiased eigenvalues, what does the bulk look like — needs the **spiked split**
-instead, and that only existed in the eigenvalue domain
-(`deconvolution::estimate_population_eigenvalues`). A caller holding the matrix
-had to eigendecompose it, throw the eigenvectors away, and hand the eigenvalues
-over.
-
-New surface:
-
-- `pipeline::complex::hermitian_eigh_matrix(h)` — the same eigendecomposition as
-  `hermitian_eigh(re, im)`, from a single `Complex64` array. Symmetrises to the
-  Hermitian part first, so round-off asymmetry does not matter. Both matrix-level
-  entry points now start here; `clean_correlation_matrix_complex` was refactored
-  onto it with no numerical change.
-- `pipeline::complex::deconvolve_correlation_matrix_complex(correlation, c,
-  margin, config)` — one pass from the matrix to the whole answer: sample
-  eigenvalues, sample eigenvectors, and the `PopulationEigenvalues` split (BEMA
-  detection, inverse-BBP spike debiasing, Ledoit–Wolf bulk deconvolution). The
-  eigenvectors are a by-product of the eigendecomposition, so a caller that also
-  needs the coherent directions does not pay for a second one — and the split is
-  guaranteed to come from the *same* eigenvalues that are returned.
-- Python: `deconvolve_correlation_matrix_complex(correlation, c, margin=1.0)`
-  (added in the follow-up commit, listed under the API tidy-up above).
-
-Verified: the matrix entry point reproduces
-`estimate_population_eigenvalues` on its own returned eigenvalues exactly
-(spikes, bulk, `sigma^2` and `bulk_edge` to 1e-12), both in Rust and through
-the Python binding, and a non-Hermitian input's antisymmetric part is dropped
-rather than folded in. 147 Rust tests (3 new).
+`scripts/make_readme_figures.py` with its numbers in `readme_figures.json`): the
+real symmetric entry point on a three-factor correlation matrix against its
+known population. Relative Frobenius error drops 0.49 → 0.09 (p = 400, c = 0.25).
 
 ### Changed — calibrated regularization η for the bulk eigenvalue deconvolution
 

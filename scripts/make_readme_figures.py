@@ -9,8 +9,7 @@ vectorized NumPy baseline (chunked broadcasting; NO scipy, NO FFT — the
 comparison isolates "same arithmetic, better engine").
 
 Figure 3 — cleaning the matrix itself, not just its spectrum: the real
-symmetric entry point on a spiked correlation matrix and the complex Hermitian
-entry point on a spectral coherence matrix.
+symmetric entry point on a spiked correlation matrix.
 
 Outputs:
   docs/img/cleaning_quality.png
@@ -138,7 +137,7 @@ def fig_cleaning() -> dict:
 
 
 # ──────────────────────────────────────────────
-# Figure 3: cleaning a correlation matrix (real and complex Hermitian)
+# Figure 3: cleaning a correlation matrix (real symmetric)
 # ──────────────────────────────────────────────
 
 def simulate_factor_correlation(p: int, n: int, k: int, noise: float, seed: int):
@@ -157,93 +156,41 @@ def simulate_factor_correlation(p: int, n: int, k: int, noise: float, seed: int)
     return np.ascontiguousarray(np.corrcoef(z, rowvar=False)), pop
 
 
-def simulate_complex_correlation(
-    m: int, b: int, modes: list[float], seed: int
-):
-    """A complex Hermitian correlation matrix with a known population.
-
-    A random unitary basis carries ``modes`` coherent eigenvalues on top of a
-    unit bulk; ``b`` complex Gaussian vectors drawn from that population are
-    averaged into the sample coherence matrix (the smoothed-periodogram
-    construction in the API docs, with ``c = m / b``). Returns
-    ``(sample, population)``.
-    """
-    rng = np.random.default_rng(seed)
-    z0 = (
-        rng.standard_normal((m, m)) + 1j * rng.standard_normal((m, m))
-    ) / np.sqrt(2.0)
-    q, _ = np.linalg.qr(z0)
-    evals = np.concatenate([np.asarray(modes), np.ones(m - len(modes))])
-    sigma = (q * evals) @ q.conj().T
-    d = np.sqrt(np.real(np.diag(sigma)))
-    pop = sigma / np.outer(d, d)
-    w = (
-        rng.standard_normal((b, m)) + 1j * rng.standard_normal((b, m))
-    ) / np.sqrt(2.0)
-    z = w @ np.linalg.cholesky(pop).T
-    s = z.conj().T @ z / b
-    d = np.sqrt(np.real(np.diag(s)))
-    return np.ascontiguousarray(s / np.outer(d, d)), pop
-
-
 def fig_correlation_cleaning() -> dict:
-    # ── Panel A: real symmetric correlation matrix (3-factor population) ──
+    # A real symmetric correlation matrix from a 3-factor population.
     p, c_real = 400, C
-    corr, pop_real = simulate_factor_correlation(p, round(p / c_real), 3, 0.5, seed=7)
-    real = rk.clean_correlation_matrix(corr, c=c_real)
+    corr, pop = simulate_factor_correlation(p, round(p / c_real), 3, 0.5, seed=7)
+    result = rk.clean_correlation_matrix(corr, c=c_real)
 
-    # ── Panel B: complex Hermitian correlation matrix (2 coherent modes) ──
-    m, b = 200, 1000
-    c_cplx = m / b
-    coh, pop_cplx = simulate_complex_correlation(m, b, [6.0, 3.0], seed=11)
-    cplx = rk.clean_correlation_matrix_complex(coh, c=c_cplx)
-
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig, ax = plt.subplots(1, 1, figsize=(6.4, 4.2))
     stats: dict[str, dict[str, object]] = {}
-    panels = [
-        (axes[0], corr, pop_real, real, c_real, real["sigma2"],
-         f"real symmetric (p={p}, c={c_real})", "real"),
-        (axes[1], coh, pop_cplx, cplx, c_cplx, cplx["sigma2"],
-         f"complex Hermitian coherence (M={m}, B={b}, c={c_cplx:.2f})", "complex"),
-    ]
-    for ax, sample_mat, pop_mat, result, c, sigma2, title, key in panels:
-        truth = np.sort(np.linalg.eigvalsh(pop_mat))[::-1]
-        sample = np.sort(np.linalg.eigvalsh(sample_mat))[::-1]
-        cleaned = np.sort(np.asarray(result["eigenvalues"]))[::-1]
-        idx = np.arange(1, sample.size + 1)
 
-        edge = (1.0 + np.sqrt(c)) ** 2 * sigma2
-        ax.plot(idx, truth, "-", color="black", lw=1.5, label="true population")
-        ax.plot(idx, sample, ".", color="#9aa5b1", ms=3.5, label="sample")
-        ax.plot(idx, cleaned, ".", color="#d62728", ms=3.5,
-                label="cleaned by shrinkers")
-        ax.axhline(edge, color="#2b6cb0", lw=0.9, ls="--",
-                   label=f"MP bulk edge ({edge:.2f})")
-        ax.set_yscale("log")
-        ax.set_xlabel("rank (descending order)")
-        ax.set_ylabel("eigenvalue")
-        ax.set_title(title, fontsize=10)
-        ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
+    truth = np.sort(np.linalg.eigvalsh(pop))[::-1]
+    sample = np.sort(np.linalg.eigvalsh(corr))[::-1]
+    cleaned = np.sort(np.asarray(result["eigenvalues"]))[::-1]
+    idx = np.arange(1, sample.size + 1)
 
-        err_sample = float(
-            np.linalg.norm(sample_mat - pop_mat) / np.linalg.norm(pop_mat)
-        )
-        err_clean = float(
-            np.linalg.norm(result["covariance"] - pop_mat) / np.linalg.norm(pop_mat)
-        )
-        ax.text(0.02, 0.03,
-                f"rel. Frobenius error: {err_sample:.2f} → {err_clean:.2f}",
-                transform=ax.transAxes, fontsize=8.5, color="#333333")
-        stats[key] = {
-            "c": float(c),
-            "sigma2_est": float(sigma2),
-            "mp_edge": float(edge),
-            "rel_frobenius_sample": err_sample,
-            "rel_frobenius_cleaned": err_clean,
-            "max_sample_eig": float(sample[0]),
-            "max_clean_eig": float(cleaned[0]),
-            "max_true_eig": float(truth[0]),
-        }
+    edge = (1.0 + np.sqrt(c_real)) ** 2 * result["sigma2"]
+    ax.plot(idx, truth, "-", color="black", lw=1.5, label="true population")
+    ax.plot(idx, sample, ".", color="#9aa5b1", ms=3.5, label="sample")
+    ax.plot(idx, cleaned, ".", color="#d62728", ms=3.5, label="cleaned by shrinkers")
+    ax.axhline(edge, color="#2b6cb0", lw=0.9, ls="--", label=f"MP bulk edge ({edge:.2f})")
+    ax.set_yscale("log")
+    ax.set_xlabel("rank (descending order)")
+    ax.set_ylabel("eigenvalue")
+    ax.set_title(f"real symmetric correlation (p={p}, c={c_real})", fontsize=10)
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
+
+    err_sample = float(np.linalg.norm(corr - pop) / np.linalg.norm(pop))
+    err_clean = float(np.linalg.norm(result["covariance"] - pop) / np.linalg.norm(pop))
+    ax.text(
+        0.02,
+        0.03,
+        f"rel. Frobenius error: {err_sample:.2f} → {err_clean:.2f}",
+        transform=ax.transAxes,
+        fontsize=8.5,
+        color="#333333",
+    )
 
     fig.suptitle(
         "Cleaning a correlation matrix: RIE + eigenvector-overlap correction",
@@ -252,8 +199,19 @@ def fig_correlation_cleaning() -> dict:
     fig.tight_layout()
     savefig(fig, OUT_DIR / "correlation_cleaning.png", dpi=150)
 
-    stats["real"].update({"p": p, "factors": 3, "noise": 0.5})
-    stats["complex"].update({"channels": m, "bins": b, "modes": [6.0, 3.0]})
+    stats["real"] = {
+        "c": float(c_real),
+        "sigma2_est": float(result["sigma2"]),
+        "mp_edge": float(edge),
+        "rel_frobenius_sample": err_sample,
+        "rel_frobenius_cleaned": err_clean,
+        "max_sample_eig": float(sample[0]),
+        "max_clean_eig": float(cleaned[0]),
+        "max_true_eig": float(truth[0]),
+        "p": p,
+        "factors": 3,
+        "noise": 0.5,
+    }
     return stats
 
 

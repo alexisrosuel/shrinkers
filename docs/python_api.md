@@ -7,8 +7,7 @@ It exposes these functions:
 |---|---|
 | `deconvolve_spiked` | **Primary**: spiked + bulk cleaning via free-probability deconvolution |
 | `clean_correlation_matrix` | Clean a full correlation matrix (RIE + eigenvector overlaps) |
-| `clean_correlation_matrix_complex` | Same, for a complex Hermitian correlation matrix (e.g. a spectral coherence matrix) |
-| `deconvolve_correlation_matrix_complex` | Spiked decomposition (BEMA + inverse BBP + Ledoit–Wolf bulk) of a complex Hermitian correlation matrix |
+| `clean_covariance_matrix` | Same estimator, covariance-named twin for a full covariance matrix |
 | `direct_precision_shrinkage` | Direct precision-matrix eigenvalue shrinkage |
 | `inverse_nonlinear_shrinkage` | Ledoit–Wolf inverse shrinkage (QIS/LIS/GIS) precision eigenvalues |
 | `estimate_precision_matrix` | Estimate the full precision matrix Ω̂ = Σ̂⁻¹ from a covariance matrix |
@@ -153,7 +152,7 @@ print(res["bulk"]["density"])   # deconvolved bulk density
 
 ## Cleaning a correlation matrix
 
-### `clean_correlation_matrix(correlation, c)`
+### `clean_correlation_matrix(correlation, c, *, renormalize=False)`
 
 Clean a sample **correlation matrix** via RIE eigenvalue shrinkage + eigenvector
 angular overlap correction. The spectral decomposition is computed internally,
@@ -165,6 +164,16 @@ returned alongside the cleaned covariance matrix.
 - `correlation` — `np.ndarray[float64]`, shape `(p, p)`. Sample correlation
   matrix (symmetric, finite). Must be contiguous.
 - `c` — `float`. Concentration ratio $p/n$, in $(0, 1]$.
+- `renormalize` — `bool`, default `False`. Rescale the cleaned matrix back to
+  unit diagonal, $R = D^{-1/2}\hat\Sigma D^{-1/2}$ with $D = \mathrm{diag}(\hat\Sigma)$.
+  The RIE + overlap reconstruction preserves the *trace* but not the individual
+  diagonal entries, which drift well away from one when spikes are present
+  (≈ 0.2 on a $p = 60$ three-factor example). Renormalising restores the exact
+  correlation contract — and, since the population correlation has a unit
+  diagonal, it lowered the distance to the population in the examples tested —
+  at the cost of the reconstruction's rotation-equivariance. If any diagonal
+  entry is non-positive (not a valid covariance) the matrix is returned
+  unchanged.
 
 **Returns**
 
@@ -196,109 +205,35 @@ evecs = res["eigenvectors"]       # sample eigenvectors (descending)
 evals = res["eigenvalues"]        # RIE-cleaned eigenvalues (descending)
 overlaps = res["overlaps"]        # theoretical alignment of each eigenvector
 sigma2 = res["sigma2"]            # noise variance
+
+# Exact unit diagonal, for a bona fide correlation matrix
+corr = clean_correlation_matrix(C, c=N / T, renormalize=True)["covariance"]
+np.fill_diagonal(corr, 1.0)       # already 1 to round-off
 ```
 
-### `clean_correlation_matrix_complex(correlation, c)`
+### `clean_covariance_matrix(covariance, c)`
 
-The same estimator for a **complex Hermitian** correlation matrix. This is the
-frequency-domain case: a spectral coherence matrix
+The covariance-named twin of `clean_correlation_matrix`: the same estimator on a
+full **covariance** matrix. The estimator only ever sees a spectrum and `c`, so
+it is agnostic to whether the input is a covariance or a correlation matrix —
+the two entry points differ only in the scale of the matrix they return. Use
+this one when the input carries variances you want preserved in the output.
 
-$$C(\nu) = \mathrm{dg}(S(\nu))^{-1/2}\,S(\nu)\,\mathrm{dg}(S(\nu))^{-1/2}$$
-
-built from Fourier coefficients has unit diagonal and a Marchenko–Pastur bulk
-with aspect ratio $c = M/B$ ($M$ channels, $B$ smoothing span), so the RMT
-machinery applies unchanged — only the eigendecomposition and the reconstruction
-change (the conjugate transpose replaces the transpose).
+Note that cleaning a covariance and then standardising it is **not** the same as
+cleaning the correlation matrix directly: RIE commutes with orthogonal
+conjugation but not with the diagonal congruence $D^{-1/2} S D^{-1/2}$. If you
+want a cleaned correlation matrix, build the sample correlation matrix and call
+`clean_correlation_matrix` on it.
 
 **Parameters**
 
-- `correlation` — `np.ndarray[complex128]`, shape `(p, p)`. Hermitian (to
-  `1e-12` relative tolerance), finite. Must be contiguous.
+- `covariance` — `np.ndarray[float64]`, shape `(p, p)`. Sample covariance
+  matrix (symmetric, finite). Must be contiguous.
 - `c` — `float`. Concentration ratio $p/n$, in $(0, 1]$.
 
 **Returns**
 
-- `dict` with the same keys as `clean_correlation_matrix`. `"covariance"` is
-  `np.ndarray[complex128]` of shape `(p, p)` (Hermitian, positive definite) and
-  `"eigenvectors"` is `np.ndarray[complex128]` of shape `(p, p)`;
-  `"eigenvalues"`, `"overlaps"` and `"sigma2"` stay real.
-
-**Raises**
-
-- `ValueError` if the matrix is not square, not finite, or not Hermitian.
-
-**Example**
-
-```python
-import numpy as np
-from shrinkers import clean_correlation_matrix_complex
-
-# Smoothed periodogram coherence matrix at frequency nu (M, M), complex
-C = dg(S) ** -0.5 @ S @ dg(S) ** -0.5
-res = clean_correlation_matrix_complex(C, c=M / B)
-
-cleaned = res["covariance"]       # Hermitian cleaned correlation matrix
-```
-
-**Note.** `clean_correlation_matrix_complex` answers the *cleaning* question
-(RIE on every eigenvalue, spike directions reweighted by their angular overlap).
-The *estimation* question — how many coherent modes, their debiased eigenvalues,
-the bulk spectrum — is answered by the sibling below.
-
-### `deconvolve_correlation_matrix_complex(correlation, c, margin=1.0)`
-
-The matrix-level counterpart of `estimate_population_eigenvalues`, for a
-**complex Hermitian** correlation matrix. One pass from the matrix to the whole
-spiked split:
-
-1. the sample eigensystem of the input matrix (`"eigenvalues"` ascending,
-   `"eigenvectors"` as complex ascending columns);
-2. BEMA spike detection, inverse-BBP debiasing of the spikes, and Ledoit–Wolf /
-   RIE pointwise deconvolution of the bulk.
-
-Use this rather than calling the cleaning entry point when you want the
-population *spectrum*; the eigenvectors come back as a by-product of the same
-eigendecomposition, so a caller that also needs the coherent directions does not
-pay for a second decomposition — and the split is guaranteed to come from the
-*same* eigenvalues that are returned.
-
-**Parameters**
-
-- `correlation` — `np.ndarray[complex128]`, shape `(p, p)`. Hermitian (to
-  `1e-12` relative tolerance), finite. Must be contiguous.
-- `c` — `float`. Concentration ratio $p/n$, in $(0, 1]$.
-- `margin` — `float`, default `1.0`. Multiplicative margin above the fitted
-  bulk edge for spike detection (slightly above `1.0` adds robustness).
-
-**Returns**
-
-- `dict` with keys:
-  - `"eigenvalues"` — `np.ndarray[float64]`, shape `(p,)`. Sample eigenvalues
-    of the input matrix, ascending.
-  - `"eigenvectors"` — `np.ndarray[complex128]`, shape `(p, p)`. Sample
-    eigenvectors as columns, ascending, matching `"eigenvalues"`.
-  - `"k"`, `"spikes"`, `"spike_sample"`, `"bulk_edge"`, `"sigma2"`,
-    `"bulk_population"`, `"bulk_sample"` — the same population split as
-    `estimate_population_eigenvalues`.
-
-**Raises**
-
-- `ValueError` if the matrix is not square, not finite, or not Hermitian, or if
-  `c` / `margin` are out of range.
-
-**Example**
-
-```python
-import numpy as np
-from shrinkers import deconvolve_correlation_matrix_complex
-
-# Spectral coherence matrix at frequency nu, see above
-res = deconvolve_correlation_matrix_complex(C, c=M / B, margin=1.05)
-
-print(res["k"])                    # number of coherent modes
-print(res["spikes"])               # debiased population eigenvalues of the modes
-print(res["eigenvectors"][:, -res["k"]:])  # the coherent directions
-```
+- `dict` with the same keys as `clean_correlation_matrix`.
 
 ---
 
