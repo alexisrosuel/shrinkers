@@ -1,10 +1,24 @@
-# Enable native CPU instructions (AVX2, FMA, NEON, etc.)
-# Without this, Rust only uses baseline features for the target arch.
-# On Apple M-series this enables the full NEON ISA + FMA.
-# Also enables auto-vectorization and use of advanced SIMD instructions.
+# SIMD policy per target.
+#
+# Local Apple-silicon builds may use the full native ISA (NEON + FMA). For
+# published x86_64 wheels, `native` is wrong twice over: the manylinux
+# container is compiled on whichever CI runner picks the job, and the wheel
+# then embeds runner-specific instructions (AVX-512, ...), so it can SIGILL a
+# user CPU — or even the next CI runner through the shared cargo cache. Use
+# the portable x86-64-v2 baseline instead (SSE4.2/POPCNT, supported by every
+# x86_64 CPU since ~2009).
 #
 # Note: We do NOT set FTZ/DAZ globally via build script because it has
 # weird interactions with some libraries. Instead, we handle it at runtime
 # in the entry points (Python bindings and public API).
-[target.'cfg(all())']
+[target.aarch64-apple-darwin]
 rustflags = ["-C", "target-cpu=native"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-cpu=x86-64-v2"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v2"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=x86-64-v2"]

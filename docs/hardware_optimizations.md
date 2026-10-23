@@ -7,14 +7,17 @@ code in `src/` (file references given) or to measured artifacts under
 `docs/` and `examples/`. Documented *negative* results are included on
 purpose — they are part of why the shipped shape is what it is.
 
-## Build policy: one flag, everywhere
+## Build policy: native locally, portable for x86 wheels
 
-`.cargo/config.toml` sets `-C target-cpu=native`. All auto-vectorized
-loops therefore compile against the host ISA (NEON on Apple Silicon,
-AVX2-class on x86) without per-target code. The hand-written SIMD layer
-(`stieltjes::simd`) additionally provides a portable fallback so wheels
-built for generic targets stay correct; the release pipeline compiles on
-each platform's runner.
+`.cargo/config.toml` sets `-C target-cpu=native` for `aarch64-apple-darwin`
+(local Apple silicon, full NEON + FMA) and `-C target-cpu=x86-64-v2` for
+the x86_64 targets. Native x86 wheels are not shippable: the build runs on
+whichever CI runner picks the job and would embed that runner's ISA
+(AVX-512, ...), so the wheel can SIGILL on a user CPU — or on the next CI
+runner through the shared cargo cache. `x86-64-v2` (SSE4.2/POPCNT, every
+x86_64 CPU since ~2009) is the portable baseline. The hand-written SIMD
+layer (`stieltjes::simd`) additionally provides a portable fallback so
+wheels built for generic targets stay correct.
 
 ## The exact O(p²) kernels (`src/stieltjes/term.rs`, `cacheblock.rs`, `symmetric.rs`)
 
