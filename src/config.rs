@@ -46,7 +46,7 @@ pub enum StieltjesMethod {
     Fft3,
     /// O(p log p) 2-FFT grid convolution (packed real + Hilbert packing)
     Fft2,
-    /// Coarse-grid NUFFT: O(p + M log M) with M ≈ 6·range/η independent of p.
+    /// Coarse-grid NUFFT: O(p + M log M) with M ≈ 5·range/η independent of p.
     /// A large-p speed path (auto-selected above p = 50 000; `ChebCodeFast`
     /// wins below, where the fixed grid cost dominates).
     Nufft,
@@ -564,6 +564,13 @@ pub(crate) fn resolve_auto_method(
 /// callers apply this to *auto-resolved* methods only.
 pub(crate) fn grid_appropriate(method: StieltjesMethod, p: usize, nq: usize) -> StieltjesMethod {
     if nq.saturating_mul(4) >= p {
+        return method;
+    }
+    // The NUFFT grid is O(p + m log m) with m capped, while the treecode pays
+    // an O(p log p) build for every call. Above ~300k the NUFFT wins even for
+    // a handful of query points (measured nq = 200: 1.6 ms vs 2.9 ms at 1M),
+    // so do not redirect it.
+    if method == StieltjesMethod::Nufft && p >= 300_000 {
         return method;
     }
     match method {

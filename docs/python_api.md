@@ -100,10 +100,11 @@ spiked covariance model. It orchestrates the full pipeline:
   `"nufft"` / `"fft_fast"` is the large-p speed path: a coarse-grid FFT
   convolution whose grid is capped at 65 536 cells, so its cost grows with
   `p` only through the O(p) splat/interpolation. Measured Python-level at
-  η = 1/√p: 3.1 → 1.8 ms at p = 100 000, 6.7 → 2.8 ms at 200 000 and
-  31.9 → 8.4 ms at 1 000 000 versus `chebcode_fast`, with rel. error
-  ~2.7e-5…4.3e-5. At very small η the capped grid trades the last digit for
-  speed (~1e-4).
+  η = 1/√p: 3.5 → 2.0 ms at p = 100 000, 7.4 → 2.9 ms at 200 000 and
+  34.6 → 8.5 ms at 1 000 000 versus `chebcode_fast`, with rel. error
+  ~2.7e-5…5.1e-5. At very small η the capped grid trades the last digit for
+  speed (~1e-4). On the deconvolution grid `nq=200`, `auto` keeps the treecode
+  below p ≈ 300 000 and uses the NUFFT above it.
 
   On the deconvolution grid a
   whole-grid FFT pick is additionally re-routed to the treecode, which

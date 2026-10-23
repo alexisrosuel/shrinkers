@@ -58,6 +58,7 @@ pub mod fft5;
 mod fftplan;
 mod hodlr;
 mod naive;
+pub mod nufft;
 mod simd;
 mod term;
 #[cfg(test)]
@@ -80,6 +81,7 @@ pub use cacheblock::*;
 pub use chebcode::*;
 pub use fft5::*;
 pub use hodlr::*;
+pub use nufft::*;
 pub use term::*;
 
 use crate::config::{CutoffConfig, Parallelism, RmtConfig, StieltjesMethod};
@@ -450,7 +452,7 @@ pub fn compute_stieltjes_at_points(
             fft5::compute_stieltjes_fft_at_points(query_points, eigenvalues, eta, grid_size_opt)
         }
         StieltjesMethod::Nufft => {
-            fft5::compute_stieltjes_nufft_at_points(query_points, eigenvalues, eta, parallel)
+            nufft::compute_stieltjes_nufft_at_points(query_points, eigenvalues, eta, parallel)
         }
         // ChebCode builds its tree once and serves every query point from
         // it — previously this method family fell through to the O(p²)
@@ -638,7 +640,7 @@ pub fn compute_all_stieltjes(
             inv_p,
         ),
         StieltjesMethod::Nufft => scale_aos(
-            fft5::compute_all_stieltjes_nufft(eigenvalues, eta, parallel),
+            nufft::compute_all_stieltjes_nufft(eigenvalues, eta, parallel),
             inv_p,
         ),
         StieltjesMethod::TreeCode => scale_aos(

@@ -81,14 +81,15 @@ regenerates all three figures end-to-end, and `docs/img/readme_figures.json`
 holds the raw measurements.
 
 Above the 50k frontier the treecode's per-query work still grows; the
-coarse-grid NUFFT (`nufft`, selected by `auto` above p = 50 000) keeps the
-FFT grid at ≤65 536 cells and wins by 1.5–4×:
+coarse-grid NUFFT (`nufft`, selected by `auto` above p = 50 000; the
+measured crossover is ~40k but the auto table keeps the noisy-tie 50k bin)
+keeps the FFT grid at ≤65 536 cells and wins by 1.7–4×:
 
 | p | ChebCodeFast | `nufft` | speed-up | rel. error |
 |---|---|---|---|---|
-| 100 000 | 3.1 ms | **1.8 ms** | 1.7× | ~2.7e-5 |
-| 200 000 | 6.7 ms | **2.8 ms** | 2.4× | ~3.5e-5 |
-| 1 000 000 | 31.9 ms | **8.4 ms** | 3.8× | ~4.3e-5 |
+| 100 000 | 3.5 ms | **2.0 ms** | 1.8× | ~2.7e-5 |
+| 200 000 | 7.4 ms | **2.9 ms** | 2.5× | ~3.4e-5 |
+| 1 000 000 | 34.6 ms | **8.5 ms** | 4.0× | ~5.1e-5 |
 
 (Python-level, median of 3–5, η = 1/√p. The method caps the grid at 65 536
 cells, so at very small η the error grows toward ~1e-4 while the speed
@@ -324,6 +325,9 @@ Key findings:
 - [`docs/chebcode_algorithms.md`](docs/chebcode_algorithms.md) — deep dive
   into the ChebCode* treecodes (tree layout, Chebyshev equivalent
   densities, traversal, presets, measured parameter sensitivities);
+- [`docs/nufft_algorithms.md`](docs/nufft_algorithms.md) — deep dive into
+  the coarse-grid NUFFT (grid sizing, packed FFT convolution, padding,
+  parallel transfer, measured accuracy/speed);
 - [`CHANGELOG.md`](CHANGELOG.md) — release history and known caveats.
 
 ## Development

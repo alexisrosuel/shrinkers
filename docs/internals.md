@@ -134,7 +134,7 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 | `Fft5` | O(p log p) | Dual-convolution FFT grid | ~4e-5 rel |
 | `Fft3` | O(p log p) | Same dual-convolution kernel | ~4e-5 rel |
 | `Fft2` | O(p log p) | Same dual-convolution kernel | ~4e-5 rel |
-| `Nufft` | O(p + M log M), M ≈ 6·range/η | Coarse-grid FFT, parallel splat/interp | ~2e-5…1e-4 rel |
+| `Nufft` | O(p + M log M), M ≈ 5·range/η | Coarse-grid FFT, parallel splat/interp | ~2e-5…1e-4 rel |
 | `TreeCode` | O(p log p) | 1D balanced tree (FMM) | User-controllable |
 | `ChebCode` | O(p log p) | Chebyshev-interpolation tree | ~5e-10 rel |
 
@@ -153,17 +153,20 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 | `Dst` | O(p log p) | Alias for the `Adaptive` composition (shared FFT grid) | ~4e-5 rel |
 | `Auto` | — | Speed policy: the Pareto table pick for p (alias of `speed_auto`) | — |
 
-> **Coarse-grid NUFFT (`Nufft`, alias `nufft`/`fft_fast`).** `Fft5` sizes
+> **Coarse-grid NUFFT (`Nufft`, alias `nufft`/`fft_fast`; full reference:
+> [`nufft_algorithms.md`](nufft_algorithms.md)).** `Fft5` sizes
 > its grid by `dx ≤ η/8` **and** `m ≥ 8p`; the second bound resolves every
 > eigenvalue individually and was the reason a 50k transform needed a
 > 524 288-point grid (~12 ms). The NUFFT keeps the same dual-convolution
-> code but uses `m ≈ 6·range/η` (capped at 65 536, `range` includes
+> code but uses `m ≈ 5·range/η` (capped at 65 536, `range` includes
 > `2000·η` of padding), a Cubic transfer and parallel splat/interpolation.
 > `m` is therefore independent of `p` above ≈20k. Measured at η = 1/√p,
-> Python level: 100k 3.1 → 1.8 ms, 200k 6.7 → 2.8 ms, 1M 31.9 → 8.4 ms;
-> error 2.7e-5 → 4.3e-5. Above 50k the speed columns of the Pareto table
-> select it (`src/config/pareto_autogen.rs`); the at-points redirect still
-> sends a handful of queries to `ChebCodeFast`.
+> Python level: 100k 3.5 → 2.0 ms, 200k 7.4 → 2.9 ms, 1M 34.6 → 8.5 ms;
+> error 2.7e-5 → 5.1e-5. Above 50k the speed columns of the Pareto table
+> select it (`src/config/pareto_autogen.rs`). On the at-points path the
+> treecode still wins below p = 300k; above it the capped grid is faster
+> even for nq = 200 (1.6 ms vs 2.9 ms at p = 1M), so `grid_appropriate`
+> leaves the NUFFT pick alone.
 >
 > **Notes.** `Dst` delegates to the same FFT grid as `Adaptive`/`Fft5`
 > (identical math, fewer transforms). `Ewald` is dominated by `ChebCode` on
@@ -257,7 +260,9 @@ arm that runs the exact O(p²) `Blocked` kernel. Because the Python
 Resolution now lives in exactly one place,
 `config::resolve_auto_method(method, parallel, p)`, called by
 `RmtConfig::resolve_auto` and by both dispatchers, with
-`config::grid_appropriate(method, p, nq)` owning the at-points redirect. The
+`config::grid_appropriate(method, p, nq)` owning the at-points redirect
+(the NUFFT is exempt above p = 300k, where its capped grid beats the
+treecode's O(p log p) build even for nq = 200). The
 dead `Auto` arm is gone and `compute_all_stieltjes` `unreachable!()`s on any
 unresolved auto, so the fallback can never come back.
 

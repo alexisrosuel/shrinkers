@@ -304,12 +304,13 @@ CHANGELOG round) so they are not re-attempted.
   has *one* parallel phase and no barriers, and groups 32 panels per job.
   See the build section above for the measured 0.80 → 0.63 ms.)
 
-## Coarse-grid NUFFT (`fft5.rs`)
+## Coarse-grid NUFFT (`nufft.rs` + `fft5.rs`)
 
+Algorithm and parameter sensitivity: [`nufft_algorithms.md`](nufft_algorithms.md).
 The FFT family's grid was sized by `dx <= η/8` **and** `m >= 8p`. The second
 bound is unnecessary: the `N`-point splat already band-limits the density, so
 the grid no longer has to resolve individual eigenvalues. Dropping `8p` and
-switching to the NUFFT preset (`m ≈ 6·range/η`, capped at 65 536, Cubic
+switching to the NUFFT preset (`m ≈ 5·range/η`, capped at 65 536, Cubic
 stencil, `2000·η` padding) turns the 50k grid from 524 288 into 32 768 cells
 and the call from ~12 ms into ~1 ms.
 
@@ -318,7 +319,7 @@ The remaining p-dependent work is the O(p·N) splat and interpolation.
 into one contiguous chunk per Rayon worker, each worker fills a private
 `m`-cell density buffer, and the buffers are reduced element-wise — no
 atomics, no false sharing. Interpolation is query-parallel. At p = 1M this
-takes the sequential 11 ms to 3.5 ms; the two FFTs themselves are ~0.95 ms
+takes the sequential 9.9 ms to 2.3 ms; the two FFTs themselves are ~0.7 ms
 and stay sequential.
 
 Accuracy is periodization-limited: the 2000·η padding gives 2.1e-5 at
