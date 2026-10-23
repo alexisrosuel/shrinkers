@@ -301,6 +301,29 @@ CHANGELOG round) so they are not re-attempted.
   has *one* parallel phase and no barriers, and groups 32 panels per job.
   See the build section above for the measured 0.80 → 0.63 ms.)
 
+## Coarse-grid NUFFT (`fft5.rs`)
+
+The FFT family's grid was sized by `dx <= η/8` **and** `m >= 8p`. The second
+bound is unnecessary: the `N`-point splat already band-limits the density, so
+the grid no longer has to resolve individual eigenvalues. Dropping `8p` and
+switching to the NUFFT preset (`m ≈ 6·range/η`, capped at 65 536, Cubic
+stencil, `2000·η` padding) turns the 50k grid from 524 288 into 32 768 cells
+and the call from ~12 ms into ~1 ms.
+
+The remaining p-dependent work is the O(p·N) splat and interpolation.
+`compute_all_stieltjes_nufft(..., parallel=true)` splits the sorted sources
+into one contiguous chunk per Rayon worker, each worker fills a private
+`m`-cell density buffer, and the buffers are reduced element-wise — no
+atomics, no false sharing. Interpolation is query-parallel. At p = 1M this
+takes the sequential 11 ms to 3.5 ms; the two FFTs themselves are ~0.95 ms
+and stay sequential.
+
+Accuracy is periodization-limited: the 2000·η padding gives 2.1e-5 at
+p = 50k and 4.3e-5 at 1M for η = 1/√p. Capping `m` at 65 536 is deliberate:
+for η = 0.1/√p the uncapped rule would want 262 144 cells and lose to the
+treecode, while the capped grid stays at 4 ms / ~1e-4 at p = 200k. The
+method is exposed as `nufft` and selected by `auto` above p = 50 000.
+
 ## Methodology note
 
 Every optimization above survived an interleaved A/B measurement before

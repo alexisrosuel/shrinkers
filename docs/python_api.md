@@ -84,18 +84,29 @@ spiked covariance model. It orchestrates the full pipeline:
   `"blocked_autovec"`, `"blocked_tiled"`, `"blocked_windowed"`,
   `"blocked_hybrid"`, `"adaptive"`, `"fft5"`, `"fft3"`, `"fft2"`, `"fmm"`
   (alias `"treecode"`), `"chebcode"` (alias `"chebyshev"`),
-  `"chebcode_fast"` (alias `"chebf"`; ~2e-5, fastest at every size),
+  `"chebcode_fast"` (alias `"chebf"`; ~2e-5, fastest through p = 50 000),
   `"chebcode_balanced"` (alias `"chebb"`; ~5e-10),
-  `"chebcode_xtreme"` (alias `"chebx"`; ~6e-13), `"hodlr"`, `"ewald"`,
+  `"chebcode_xtreme"` (alias `"chebx"`; ~6e-13), `"nufft"` (alias
+  `"fft_fast"`; coarse-grid FFT speed path, auto-selected above p = 50 000), `"hodlr"`, `"ewald"`,
   `"dst"`, `"speed_auto"` (alias `"speed"`), `"accuracy_auto"`
   (alias `"accuracy"`), or `"auto"`.
   `"auto"` is the **speed policy**, not an exact fallback: it resolves
   through the same measured Pareto table as `"speed_auto"` (identical pick)
   and is therefore approximate — ~2e-5 at the retuned `chebcode_fast`
-  point, which the table now picks at every size (it used to fall back to
-  the FFT bank, ~4e-5, above p ≈ 20 000). For a machine-precision
+  point through p = 50 000, then the coarse-grid `nufft` (~3e-5…4e-5). For a
+  machine-precision
   result ask for `"blocked"` (the `stieltjes_transform` default) or
-  `"blocked_tiled"`, or for `"accuracy_auto"`. On the deconvolution grid a
+  `"blocked_tiled"`, or for `"accuracy_auto"`.
+
+  `"nufft"` / `"fft_fast"` is the large-p speed path: a coarse-grid FFT
+  convolution whose grid is capped at 65 536 cells, so its cost grows with
+  `p` only through the O(p) splat/interpolation. Measured Python-level at
+  η = 1/√p: 3.1 → 1.8 ms at p = 100 000, 6.7 → 2.8 ms at 200 000 and
+  31.9 → 8.4 ms at 1 000 000 versus `chebcode_fast`, with rel. error
+  ~2.7e-5…4.3e-5. At very small η the capped grid trades the last digit for
+  speed (~1e-4).
+
+  On the deconvolution grid a
   whole-grid FFT pick is additionally re-routed to the treecode, which
   serves exactly the `n_points` queries.
 - `parallel` — keyword-only, `bool | None`, default `False`.

@@ -9,7 +9,7 @@ pub(crate) mod pareto_autogen;
 ///
 /// Families, in rough accuracy order:
 /// - **exact O(p²)**: `Blocked*` variants — bit-stable zero-error anchor;
-/// - **FFT grid**: `Fft5/Fft3/Fft2`, `Adaptive`, `Ewald`, `Dst` —
+/// - **FFT grid**: `Fft5/Fft3/Fft2/Nufft`, `Adaptive`, `Ewald`, `Dst` —
 ///   O(p log p) but floor ~1e-4..1e-5 (dominated by ChebCode today);
 /// - **treecodes**: `TreeCode`, then the `ChebCode*` preset family —
 ///   the speed-at-accuracy frontier;
@@ -46,6 +46,10 @@ pub enum StieltjesMethod {
     Fft3,
     /// O(p log p) 2-FFT grid convolution (packed real + Hilbert packing)
     Fft2,
+    /// Coarse-grid NUFFT: O(p + M log M) with M ≈ 6·range/η independent of p.
+    /// A large-p speed path (auto-selected above p = 50 000; `ChebCodeFast`
+    /// wins below, where the fixed grid cost dominates).
+    Nufft,
     /// O(p log p) 1D tree-code / Fast Multipole Method
     TreeCode,
     /// O(p log p) Chebyshev-interpolation treecode (faster than the multipole
@@ -98,6 +102,7 @@ impl StieltjesMethod {
             Self::Fft5 => "fft5",
             Self::Fft3 => "fft3",
             Self::Fft2 => "fft2",
+            Self::Nufft => "nufft",
             Self::TreeCode => "fmm",
             Self::ChebCode => "chebcode",
             Self::ChebCodeFast => "chebcode_fast",
@@ -125,6 +130,7 @@ impl StieltjesMethod {
             Self::Fft5 => "O(p log p) FFT-grid convolution (5 FFTs)",
             Self::Fft3 => "O(p log p) fused FFT grid (3 FFTs)",
             Self::Fft2 => "O(p log p) 2-FFT grid (packed real + Hilbert)",
+            Self::Nufft => "Coarse-grid NUFFT (large-p speed path)",
             Self::TreeCode => "O(p log p) 1D tree code (FMM)",
             Self::ChebCode => "O(p log p) Chebyshev-interpolation treecode",
             Self::ChebCodeFast => "ChebCode speed preset (theta 1.0, n 8, leaf 32, f32 far field)",
@@ -158,6 +164,7 @@ impl StieltjesMethod {
             Self::Fft5,
             Self::Fft3,
             Self::Fft2,
+            Self::Nufft,
             Self::TreeCode,
             Self::ChebCode,
             Self::ChebCodeFast,
@@ -563,6 +570,7 @@ pub(crate) fn grid_appropriate(method: StieltjesMethod, p: usize, nq: usize) -> 
         StieltjesMethod::Fft5
         | StieltjesMethod::Fft3
         | StieltjesMethod::Fft2
+        | StieltjesMethod::Nufft
         | StieltjesMethod::Adaptive
         | StieltjesMethod::Dst => StieltjesMethod::ChebCodeFast,
         concrete => concrete,
@@ -602,6 +610,17 @@ mod tests {
                 100usize,
                 StieltjesMethod::ChebCodeFast,
             ),
+            (
+                Parallelism::Sequential,
+                100_000usize,
+                StieltjesMethod::Nufft,
+            ),
+            (
+                Parallelism::Sequential,
+                200_000usize,
+                StieltjesMethod::Nufft,
+            ),
+            (Parallelism::Parallel, 200_000usize, StieltjesMethod::Nufft),
         ] {
             let resolved = RmtConfig::new(0.5)
                 .with_stieltjes(StieltjesMethod::Auto)
@@ -637,7 +656,15 @@ mod tests {
         );
         assert_eq!(
             cfg.resolve_auto_at_points(50_000, 200).stieltjes_method,
-            StieltjesMethod::ChebCodeFast
+            StieltjesMethod::ChebCodeFast,
+            "precondition: the all-points table pick is ChebCodeFast here"
+        );
+        // Above 50k the table picks the coarse-grid NUFFT, but a 200-point
+        // grid must still be redirected to the treecode.
+        assert_eq!(
+            cfg.resolve_auto_at_points(200_000, 200).stieltjes_method,
+            StieltjesMethod::ChebCodeFast,
+            "the NUFFT must not be used for a handful of query points"
         );
         // Explicitly-requested FFT methods are still redirected on a small
         // grid (that rule is independent of the table).
@@ -688,7 +715,9 @@ mod preset_tests {
 
     #[test]
     fn pareto_pick_returns_concrete_methods_everywhere() {
-        for &p in &[1usize, 500, 1000, 1500, 4000, 9000, 15000, 30000, 80000] {
+        for &p in &[
+            1usize, 500, 1000, 1500, 4000, 9000, 15000, 30000, 80000, 200000,
+        ] {
             for parallel in [false, true] {
                 for speed in [false, true] {
                     let m = pareto_autogen::pareto_pick(speed, parallel, p);

@@ -371,6 +371,7 @@ fn parse_method(method: &str) -> PyResult<StieltjesMethod> {
         "fft5" => StieltjesMethod::Fft5,
         "fft3" => StieltjesMethod::Fft3,
         "fft2" => StieltjesMethod::Fft2,
+        "nufft" | "fft_fast" => StieltjesMethod::Nufft,
         "fmm" | "treecode" => StieltjesMethod::TreeCode,
         "chebcode" | "chebyshev" => StieltjesMethod::ChebCode,
         "chebcode_fast" | "chebf" => StieltjesMethod::ChebCodeFast,
@@ -443,7 +444,8 @@ fn config_from_kwargs(
 ///     detection (default 1.0; slightly above 1.0 adds robustness).
 ///   method: Stieltjes kernel used for the bulk deconvolution —
 ///     exact family: "blocked", "blocked_tiled" (zero error);
-///     treecode presets: "chebcode_fast"/"chebf" (~1e-8, fastest),
+///     treecode presets: "chebcode_fast"/"chebf" (~2e-5, fastest),
+///     "nufft"/"fft_fast" (coarse-grid FFT, large-p speed path),
 ///       "chebcode_balanced"/"chebb" (~3e-10 at fast+6%),
 ///       "chebcode" (~5e-10, default), "chebcode_xtreme"/"chebx" (~6e-13);
 ///     FFT family: "fft2", "fft3", "fft5" (~4e-5); also "fmm", "ewald",

@@ -195,7 +195,7 @@ f64 path bit-identical (same checksum) while making it ~8 % faster.
 | method | θ | n | leaf_cap | error class | note |
 |---|---|---|---|---|---|
 | `chebcode` | 0.50 | 11 | 32 | ~5e-10 | dispatch default preset |
-| `chebcode_fast` (`chebf`) | 1.00 | 8 | 32 | ~1e-5 … 2e-5 (f32 far field) | fastest at every size; owns every speed bin |
+| `chebcode_fast` (`chebf`) | 1.00 | 8 | 32 | ~1e-5 … 2e-5 (f32 far field) | fastest through p = 50k; `nufft` takes over above |
 | `chebcode_balanced` (`chebb`) | 0.55 | 11 | 32 | ~3e-10 | FAST+6 % runtime |
 | `chebcode_xtreme` (`chebx`) | 0.25 | 11 | 16 | ~1e-12/13 | precision niche |
 

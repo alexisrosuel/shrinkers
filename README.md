@@ -80,6 +80,20 @@ Every number is reproducible: `scripts/make_readme_figures.py`
 regenerates all three figures end-to-end, and `docs/img/readme_figures.json`
 holds the raw measurements.
 
+Above the 50k frontier the treecode's per-query work still grows; the
+coarse-grid NUFFT (`nufft`, selected by `auto` above p = 50 000) keeps the
+FFT grid at ≤65 536 cells and wins by 1.5–4×:
+
+| p | ChebCodeFast | `nufft` | speed-up | rel. error |
+|---|---|---|---|---|
+| 100 000 | 3.1 ms | **1.8 ms** | 1.7× | ~2.7e-5 |
+| 200 000 | 6.7 ms | **2.8 ms** | 2.4× | ~3.5e-5 |
+| 1 000 000 | 31.9 ms | **8.4 ms** | 3.8× | ~4.3e-5 |
+
+(Python-level, median of 3–5, η = 1/√p. The method caps the grid at 65 536
+cells, so at very small η the error grows toward ~1e-4 while the speed
+advantage remains; `chebcode_fast` stays the choice through the measured 50k bin.)
+
 **3 · It uses every core you give it.** The exact kernel is data-parallel
 across cache blocks — flip one argument (`parallel=True`) and the
 same call spreads over your cores with no reduction step and no false
@@ -106,7 +120,8 @@ by roughly an order of magnitude (9.1× at p≈5000).
   inverse-BBP spike debiasing → El Karoui bulk deconvolution;
 - Stieltjes-transform methods spanning the whole speed/accuracy frontier —
   machine-precision exact kernels, ChebCode treecodes (~2e-5 at the
-  `chebcode_fast` speed point, ~6e-13 at `chebcode_xtreme`), HODLR — plus
+  `chebcode_fast` speed point, ~6e-13 at `chebcode_xtreme`), a large-p
+  coarse-grid NUFFT (`nufft`, ~2e-5…4e-5), HODLR — plus
   data-driven `speed_auto` / `accuracy_auto` picks, with
   `auto` = the measured speed policy (same Pareto table, resolved in one
   place for every entry point, and on the deconvolution grid the treecode is

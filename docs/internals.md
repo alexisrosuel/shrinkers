@@ -134,6 +134,7 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 | `Fft5` | O(p log p) | Dual-convolution FFT grid | ~4e-5 rel |
 | `Fft3` | O(p log p) | Same dual-convolution kernel | ~4e-5 rel |
 | `Fft2` | O(p log p) | Same dual-convolution kernel | ~4e-5 rel |
+| `Nufft` | O(p + M log M), M ≈ 6·range/η | Coarse-grid FFT, parallel splat/interp | ~2e-5…1e-4 rel |
 | `TreeCode` | O(p log p) | 1D balanced tree (FMM) | User-controllable |
 | `ChebCode` | O(p log p) | Chebyshev-interpolation tree | ~5e-10 rel |
 
@@ -152,6 +153,18 @@ print(res["bulk"]["density"].shape)     # -> (300,), density profile
 | `Dst` | O(p log p) | Alias for the `Adaptive` composition (shared FFT grid) | ~4e-5 rel |
 | `Auto` | — | Speed policy: the Pareto table pick for p (alias of `speed_auto`) | — |
 
+> **Coarse-grid NUFFT (`Nufft`, alias `nufft`/`fft_fast`).** `Fft5` sizes
+> its grid by `dx ≤ η/8` **and** `m ≥ 8p`; the second bound resolves every
+> eigenvalue individually and was the reason a 50k transform needed a
+> 524 288-point grid (~12 ms). The NUFFT keeps the same dual-convolution
+> code but uses `m ≈ 6·range/η` (capped at 65 536, `range` includes
+> `2000·η` of padding), a Cubic transfer and parallel splat/interpolation.
+> `m` is therefore independent of `p` above ≈20k. Measured at η = 1/√p,
+> Python level: 100k 3.1 → 1.8 ms, 200k 6.7 → 2.8 ms, 1M 31.9 → 8.4 ms;
+> error 2.7e-5 → 4.3e-5. Above 50k the speed columns of the Pareto table
+> select it (`src/config/pareto_autogen.rs`); the at-points redirect still
+> sends a handful of queries to `ChebCodeFast`.
+>
 > **Notes.** `Dst` delegates to the same FFT grid as `Adaptive`/`Fft5`
 > (identical math, fewer transforms). `Ewald` is dominated by `ChebCode` on
 > both axes (faster *and* more accurate) and is kept for reference only.
@@ -296,13 +309,14 @@ that round's full record:
 > historical rows below predate that pass and are kept for the record.
 
 Among methods with usable accuracy (rel err ≤ 1e-6), `chebcode_fast` holds
-the runtime minimum at every size in BOTH columns: the f32 far field plus the
-θ=1.0 opening angle moved the point far enough ahead that even the
-whole-grid `fft5`, which used to edge it out sequentially above p ≈ 20 000
-(25 % at p = 50 000), is now beaten everywhere. The regenerated Pareto table
-(`src/config/pareto_autogen.rs`) therefore resolves the speed intent to
-`ChebCodeFast` in every bin, sequentially and under Rayon, while the accuracy
-column keeps the exact family. The price is accuracy: `fft5` sits at ~4e-5
+the runtime minimum at every size in BOTH columns **up to the 50k frontier
+measured here**: the f32 far field plus the θ=1.0 opening angle moved the
+point far enough ahead that even the whole-grid `fft5`, which used to edge it
+out sequentially above p ≈ 20 000 (25 % at p = 50 000), is now beaten
+everywhere. The Pareto table (`src/config/pareto_autogen.rs`) resolves the
+speed intent to `ChebCodeFast` through the 50k bin and above it to the
+coarse-grid `Nufft` (see the NUFFT section below); the accuracy column keeps
+the exact family. The price is accuracy: `fft5` sits at ~4e-5
 where the retuned `ChebCodeFast` sits at ~6e-6 … 1.4e-5 — the FFT bank is no
 longer more accurate *or* faster, and survives as the explicit
 `method="fft5"` choice for callers who want its grid semantics.

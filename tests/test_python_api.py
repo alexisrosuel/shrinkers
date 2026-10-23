@@ -699,6 +699,26 @@ def test_gil_released_during_compute():
     )
 
 
+# ──────────────────────────────────────────────
+#  Coarse-grid NUFFT
+# ──────────────────────────────────────────────
+
+def test_nufft_matches_chebcode_fast():
+    p = 4000
+    evals = sample_spectrum(p)
+    eta = 1.0 / np.sqrt(p)
+    nufft = rk.stieltjes_transform(evals, eta=eta, method="nufft")
+    cheb = rk.stieltjes_transform(evals, eta=eta, method="chebcode_fast")
+    num = np.linalg.norm(nufft["real"] - cheb["real"]) + np.linalg.norm(
+        nufft["imag"] - cheb["imag"]
+    )
+    den = np.linalg.norm(cheb["real"]) + np.linalg.norm(cheb["imag"])
+    assert num / den < 5e-4, f"nufft vs chebcode_fast rel {num / den:.3e}"
+    # Alias.
+    alias = rk.stieltjes_transform(evals, eta=eta, method="fft_fast")
+    np.testing.assert_allclose(alias["real"], nufft["real"])
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
 

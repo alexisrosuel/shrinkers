@@ -68,6 +68,38 @@ Docs: `docs/chebcode_algorithms.md`, `docs/internals.md` and
 `docs/hardware_optimizations.md` now describe the topology/leaf/merge build,
 the compact f32 traversal and the measured trade-offs.
 
+### Added — coarse-grid NUFFT (`nufft`) for large p
+
+`StieltjesMethod::Nufft` (Python `"nufft"` / `"fft_fast"`) is the first
+method that keeps the Stieltjes grid size independent of `p`. It reuses the
+`fft5` dual-convolution kernel but drops the `m >= 8p` bound that resolved
+every eigenvalue individually: with a Cubic splat, `m ≈ 6·range/η` (at most
+65 536 cells) and `2000·η` padding, the grid stays at 32k–64k cells from
+p = 20k to p = 1M. Splatting and interpolation are Rayon-parallel (one
+private density buffer per worker, reduced element-wise); the two FFTs stay
+sequential.
+
+Python-level, η = 1/√p, median of 3–5, versus `chebcode_fast`:
+
+| p | ChebCodeFast | `nufft` | speed-up | rel. error |
+|---|---|---|---|---|
+| 100 000 | 3.1 ms | **1.8 ms** | 1.7× | ~2.7e-5 |
+| 200 000 | 6.7 ms | **2.8 ms** | 2.4× | ~3.5e-5 |
+| 1 000 000 | 31.9 ms | **8.4 ms** | 3.8× | ~4.3e-5 |
+
+At p = 50k the two are within noise, so `auto` switches to `Nufft` only
+above p = 50 000 (`pareto_autogen` gains a final Nufft bin;
+the accuracy columns stay exact). The at-points redirect still sends a
+handful of query points to `ChebCodeFast`, since the NUFFT pays for a whole
+grid. At very small η the capped grid trades the last digit for speed
+(≈1e-4 at η = 0.1/√p, p = 200k); `chebcode_fast` remains the choice below
+p ≈ 50k.
+
+Tests: `nufft_matches_exact_and_parallel` (all-points and grid, seq/par) and
+a Python `nufft`/`fft_fast` test. Docs: `README`, `docs/internals.md`,
+`docs/python_api.md`, `docs/hardware_optimizations.md`; benchmark:
+`examples/measure_nufft.rs`.
+
 ### Fixed — rank alignment of the cleaning-quality README figure
 
 `scripts/make_readme_figures.py` sorted the cleaned estimates by value before

@@ -264,6 +264,7 @@ fn stieltjes_sum_for_one(
         | StieltjesMethod::Fft5
         | StieltjesMethod::Fft3
         | StieltjesMethod::Fft2
+        | StieltjesMethod::Nufft
         | StieltjesMethod::TreeCode
         | StieltjesMethod::ChebCode
         | StieltjesMethod::ChebCodeFast
@@ -379,7 +380,8 @@ fn grid_leaf_cap(n: usize, p: usize, nq: usize, preset_leaf: usize) -> usize {
 /// - the blocked family (`Blocked`, `BlockedTiled`, `BlockedWindowed`,
 ///   `BlockedHybrid`) uses the write-batched query-point kernel, or delegates
 ///   to the single-point kernel when parallel;
-/// - `Fft5`/`Fft3`/`Fft2` run one O(p log p) convolution over the whole grid
+/// - `Fft5`/`Fft3`/`Fft2` run one O(p log p) convolution over the whole grid;
+///   `Nufft` runs the same convolution on a coarse grid (M independent of p)
 ///   and interpolate at the query points;
 /// - the `ChebCode*` presets build the Chebyshev tree once and serve every
 ///   query point from it;
@@ -446,6 +448,9 @@ pub fn compute_stieltjes_at_points(
         // fell back to the exact per-point kernel).
         StieltjesMethod::Fft5 | StieltjesMethod::Fft3 | StieltjesMethod::Fft2 => {
             fft5::compute_stieltjes_fft_at_points(query_points, eigenvalues, eta, grid_size_opt)
+        }
+        StieltjesMethod::Nufft => {
+            fft5::compute_stieltjes_nufft_at_points(query_points, eigenvalues, eta, parallel)
         }
         // ChebCode builds its tree once and serves every query point from
         // it — previously this method family fell through to the O(p²)
@@ -630,6 +635,10 @@ pub fn compute_all_stieltjes(
         // recorded benchmarks key on the names.
         StieltjesMethod::Fft5 | StieltjesMethod::Fft3 | StieltjesMethod::Fft2 => scale_aos(
             fft5::compute_all_stieltjes_fft5(eigenvalues, eta, fft_grid_size),
+            inv_p,
+        ),
+        StieltjesMethod::Nufft => scale_aos(
+            fft5::compute_all_stieltjes_nufft(eigenvalues, eta, parallel),
             inv_p,
         ),
         StieltjesMethod::TreeCode => scale_aos(

@@ -102,6 +102,22 @@ def main():
         lines.append(f"        acc_seq: StieltjesMethod::{rust_variant(b['seq']['accuracy']['method'])},")
         lines.append(f"        acc_par: StieltjesMethod::{rust_variant(b['parallel']['accuracy']['method'])},")
         lines.append("    },")
+    # Above the recorded 50k point, the coarse-grid NUFFT was measured
+    # separately (examples/measure_nufft.rs): 1.8 ms vs 3.1 ms for
+    # ChebCodeFast at 100k, 2.8 ms vs 6.7 ms at 200k and 8.4 ms vs 32 ms at
+    # 1M, at 2e-5..1e-4 rel-L2 and for eta = 0.1..1 / sqrt(p). At 50k the
+    # two are within a few percent, so the measured 50k bin stays ChebCode
+    # and everything above it uses the NUFFT.
+    last = bins[sizes[-1]]
+    for p_max, speed in [("usize::MAX", "Nufft")]:
+        lines.append("    Bin {")
+        lines.append(f"        p_max: {p_max},")
+        lines.append(f"        speed_seq: StieltjesMethod::{speed},")
+        lines.append(f"        speed_par: StieltjesMethod::{speed},")
+        lines.append(f"        acc_seq: StieltjesMethod::{rust_variant(last['seq']['accuracy']['method'])},")
+        lines.append(f"        acc_par: StieltjesMethod::{rust_variant(last['parallel']['accuracy']['method'])},")
+        lines.append("    },")
+
     lines += [
         "];",
         "",
@@ -146,6 +162,7 @@ RUST_VARIANTS = {
     "fft5": "Fft5",
     "fft3": "Fft3",
     "fft2": "Fft2",
+    "nufft": "Nufft",
     "fmm": "TreeCode",
     "chebcode": "ChebCode",
     "chebcode_fast": "ChebCodeFast",

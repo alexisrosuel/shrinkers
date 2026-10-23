@@ -66,6 +66,7 @@
 //!   via [`Fft5Options`] rather than wired into any preset.
 
 use num_complex::Complex64;
+use rayon::prelude::*;
 use rustfft::FftDirection;
 
 use super::next_pow2;
@@ -242,11 +243,82 @@ impl Default for Fft5Options {
     }
 }
 
+/// Splat the empirical measure onto the uniform grid.
+///
+/// The `n`-point stencil weights are computed once per source (O(N²) for the
+/// small stencil), so this is the O(p·N) part of the FFT path. In parallel
+/// mode sources are split into one contiguous chunk per Rayon worker; each
+/// worker accumulates into its own `m`-cell buffer and the buffers are
+/// reduced element-wise. That avoids atomics and keeps the FFT input exact
+/// (the reduction order differs, so results are not bit-identical to the
+/// sequential path).
+fn splat_density(
+    eigenvalues: &[f64],
+    m: usize,
+    lo: f64,
+    dx: f64,
+    order: Order,
+    parallel: bool,
+) -> Vec<f64> {
+    let p = eigenvalues.len();
+    if parallel && p >= 4096 {
+        let workers = rayon::current_num_threads().max(1);
+        let chunk = p.div_ceil(workers).max(1);
+        eigenvalues
+            .par_chunks(chunk)
+            .map(|src| {
+                let mut d = vec![0.0f64; m];
+                splat_chunk(src, &mut d, m, lo, dx, order);
+                d
+            })
+            .reduce(
+                || vec![0.0f64; m],
+                |mut a, b| {
+                    for (x, y) in a.iter_mut().zip(b.iter()) {
+                        *x += *y;
+                    }
+                    a
+                },
+            )
+    } else {
+        let mut d = vec![0.0f64; m];
+        splat_chunk(eigenvalues, &mut d, m, lo, dx, order);
+        d
+    }
+}
+
+#[inline]
+fn splat_chunk(src: &[f64], density: &mut [f64], m: usize, lo: f64, dx: f64, order: Order) {
+    match order {
+        Order::Linear => {
+            for &lam in src {
+                splat::<2>(density, m, (lam - lo) / dx);
+            }
+        }
+        Order::Cubic => {
+            for &lam in src {
+                splat::<4>(density, m, (lam - lo) / dx);
+            }
+        }
+        Order::Quintic => {
+            for &lam in src {
+                splat::<6>(density, m, (lam - lo) / dx);
+            }
+        }
+        Order::Heptic => {
+            for &lam in src {
+                splat::<8>(density, m, (lam - lo) / dx);
+            }
+        }
+    }
+}
+
 /// Run the FFT dual-convolution (even + odd Cauchy kernels) once, producing
-/// the convolved grid. Both [`compute_all_stieltjes_fft5`] and
-/// [`compute_stieltjes_fft_at_points`] share this core so the O(p log p)
-/// convolution is never duplicated.
-fn fft_convolution(eigenvalues: &[f64], eta: f64, opts: &Fft5Options) -> FftGrid {
+/// the convolved grid. `compute_all_stieltjes_fft5`, the NUFFT preset and the
+/// at-points path share this core so the O(p log p) convolution is never
+/// duplicated. `parallel` enables the Rayon splat/interpolation; the FFTs
+/// themselves stay sequential.
+fn fft_convolution(eigenvalues: &[f64], eta: f64, opts: &Fft5Options, parallel: bool) -> FftGrid {
     let p = eigenvalues.len();
 
     // Adaptive padding: generous enough that the density is zero at the
@@ -280,29 +352,7 @@ fn fft_convolution(eigenvalues: &[f64], eta: f64, opts: &Fft5Options) -> FftGrid
     let half = m / 2;
 
     // --- Density on grid (order-selected splatting) ---
-    let mut density = vec![0.0; m];
-    match opts.order {
-        Order::Linear => {
-            for &lam in eigenvalues {
-                splat::<2>(&mut density, m, (lam - lo) / dx);
-            }
-        }
-        Order::Cubic => {
-            for &lam in eigenvalues {
-                splat::<4>(&mut density, m, (lam - lo) / dx);
-            }
-        }
-        Order::Quintic => {
-            for &lam in eigenvalues {
-                splat::<6>(&mut density, m, (lam - lo) / dx);
-            }
-        }
-        Order::Heptic => {
-            for &lam in eigenvalues {
-                splat::<8>(&mut density, m, (lam - lo) / dx);
-            }
-        }
-    }
+    let density = splat_density(eigenvalues, m, lo, dx, opts.order, parallel);
 
     // --- Pack density + odd kernel, one forward FFT ---
     // The even (Lorentzian) kernel decays fast, so its DFT equals the periodic
@@ -376,17 +426,36 @@ fn fft_convolution(eigenvalues: &[f64], eta: f64, opts: &Fft5Options) -> FftGrid
 ///
 /// Returns `(real, imag)` pairs (the Stieltjes transform, **not** scaled by
 /// `1/p`), one per query point. `packed_out.re = Im[m_g]`,
-/// `packed_out.im = Re[m_g]` before the `1/m` scaling.
-fn interpolate_grid(grid: &FftGrid, query_points: &[f64], order: Order) -> Vec<(f64, f64)> {
+/// `packed_out.im = Re[m_g]` before the `1/m` scaling. `parallel` maps the
+/// independent query points over Rayon above 4 096 points.
+fn interpolate_grid(
+    grid: &FftGrid,
+    query_points: &[f64],
+    order: Order,
+    parallel: bool,
+) -> Vec<(f64, f64)> {
     let inv_m = 1.0 / (grid.m as f64);
-    let mut result = Vec::with_capacity(query_points.len());
+    let do_par = parallel && query_points.len() >= 4096;
     macro_rules! interp_loop {
         ($n:literal) => {{
-            for &q in query_points {
-                let pos = (q - grid.lo) / grid.dx;
-                let (r, i) = interp_at::<$n>(&grid.packed_out, grid.m, pos, inv_m);
-                result.push((r, i));
-            }
+            let out: Vec<(f64, f64)> = if do_par {
+                query_points
+                    .par_iter()
+                    .map(|&q| {
+                        let pos = (q - grid.lo) / grid.dx;
+                        interp_at::<$n>(&grid.packed_out, grid.m, pos, inv_m)
+                    })
+                    .collect()
+            } else {
+                let mut result = Vec::with_capacity(query_points.len());
+                for &q in query_points {
+                    let pos = (q - grid.lo) / grid.dx;
+                    let (r, i) = interp_at::<$n>(&grid.packed_out, grid.m, pos, inv_m);
+                    result.push((r, i));
+                }
+                result
+            };
+            out
         }};
     }
     match order {
@@ -395,7 +464,6 @@ fn interpolate_grid(grid: &FftGrid, query_points: &[f64], order: Order) -> Vec<(
         Order::Quintic => interp_loop!(6),
         Order::Heptic => interp_loop!(8),
     }
-    result
 }
 
 /// Reference implementation of the OLD 3-FFT path: build the packed kernel
@@ -508,8 +576,68 @@ pub fn compute_all_stieltjes_fft5_with_options(
     if eigenvalues.is_empty() {
         return Vec::new();
     }
-    let grid = fft_convolution(eigenvalues, eta, opts);
-    interpolate_grid(&grid, eigenvalues, opts.order)
+    let grid = fft_convolution(eigenvalues, eta, opts, false);
+    interpolate_grid(&grid, eigenvalues, opts.order, false)
+}
+
+/// Coarse-grid NUFFT path for the all-points Stieltjes transform.
+///
+/// The standard `fft5` grid is sized by `dx <= η/8` **and** `m >= 8p`. The
+/// second bound resolves every eigenvalue individually, which is unnecessary:
+/// the density is smoothed by the `order`-point stencil before the FFT, so a
+/// grid of ~`6·range/η` cells is enough (range is the spectrum plus
+/// `2000·η` of padding). That makes `m` independent of `p` (32k–64k above
+/// p≈20k) and the cost O(p + m log m).
+///
+/// Measured against the exact O(p²) reference / the treecode, η = 1/√p:
+///   p = 50 000: 1.0 ms Rayon, 2.1e-5 rel-L2 (ChebCodeFast: 1.8 ms)
+///   p = 1 000 000: 3.5 ms Rayon / 11 ms sequential (ChebCodeFast: 28 ms)
+/// Python-level (including the binding overhead): 1.4 ms at 50k and 8.4 ms
+/// at 1M. The floor is the odd-kernel periodization, hence the 2000·η
+/// padding; the method is a large-p speed path, not a replacement for the
+/// treecode below p≈50k where its fixed grid cost dominates.
+pub fn compute_all_stieltjes_nufft(
+    eigenvalues: &[f64],
+    eta: f64,
+    parallel: bool,
+) -> Vec<(f64, f64)> {
+    if eigenvalues.is_empty() {
+        return Vec::new();
+    }
+    let opts = nufft_options(eigenvalues, eta);
+    let grid = fft_convolution(eigenvalues, eta, &opts, parallel);
+    interpolate_grid(&grid, eigenvalues, opts.order, parallel)
+}
+
+/// Options for the coarse-grid NUFFT preset: 2000·η padding, Cubic transfer,
+/// and `m ≈ 6·range/η` rounded up to a power of two.
+fn nufft_options(eigenvalues: &[f64], eta: f64) -> Fft5Options {
+    let raw_range = eigenvalues[eigenvalues.len() - 1] - eigenvalues[0];
+    let pad = (2000.0 * eta).max(0.75 * raw_range);
+    let range = raw_range + 2.0 * pad;
+    let min_grid = (6.0 * range / eta).ceil() as usize;
+    let m = next_pow2(min_grid.max(8192)).min(65_536);
+    Fft5Options {
+        order: Order::Cubic,
+        m_override: Some(m),
+        pad_eta_mult: 2000.0,
+        pad_range_frac: 0.75,
+    }
+}
+
+/// Coarse-grid NUFFT at arbitrary query points (the deconvolution grid).
+pub fn compute_stieltjes_nufft_at_points(
+    query_points: &[f64],
+    eigenvalues: &[f64],
+    eta: f64,
+    parallel: bool,
+) -> Vec<(f64, f64)> {
+    if eigenvalues.is_empty() || query_points.is_empty() {
+        return Vec::new();
+    }
+    let opts = nufft_options(eigenvalues, eta);
+    let grid = fft_convolution(eigenvalues, eta, &opts, parallel);
+    interpolate_grid(&grid, query_points, opts.order, parallel)
 }
 
 /// Compute the Stieltjes transform at arbitrary query points via the FFT
@@ -537,9 +665,9 @@ pub(crate) fn compute_stieltjes_fft_at_points(
             ..Fft5Options::default()
         };
         order = opts.order;
-        fft_convolution(eigenvalues, eta, &opts)
+        fft_convolution(eigenvalues, eta, &opts, false)
     };
-    interpolate_grid(&grid, query_points, order)
+    interpolate_grid(&grid, query_points, order, false)
 }
 
 #[cfg(test)]
@@ -619,7 +747,7 @@ mod tests {
                     },
                 );
                 let old_grid = fft_convolution_kernel_fft(&evals, eta, None);
-                let old_res = interpolate_grid(&old_grid, &evals, Order::Linear);
+                let old_res = interpolate_grid(&old_grid, &evals, Order::Linear, false);
 
                 let mut max_re = 0.0_f64;
                 let mut max_im = 0.0_f64;
@@ -761,7 +889,7 @@ mod tests {
                     lo + (u as f64 + 0.37) * dx
                 })
                 .collect();
-            let res = interpolate_grid(&grid, &queries, order);
+            let res = interpolate_grid(&grid, &queries, order, false);
             res.iter()
                 .zip(&queries)
                 .map(|((r, im), &x)| ((r - g(x)).abs()).max((im - g(x)).abs()))
@@ -845,5 +973,78 @@ mod tests {
         // The default entry point must actually BE heptic.
         let dflt = err_of_order(Fft5Options::default().order);
         assert!((dflt - e_hep).abs() < 1e-15);
+    }
+
+    #[test]
+    fn nufft_matches_exact_and_parallel() {
+        use crate::config::{CutoffConfig, Parallelism, StieltjesMethod};
+        use crate::stieltjes::{compute_all_stieltjes, compute_stieltjes_at_points};
+
+        let p = 8192;
+        let evs = crate::stieltjes::testutil::log_spectrum(p);
+        let eta = 1.0 / (p as f64).sqrt();
+        let inv_p = 1.0 / p as f64;
+
+        let exact = compute_all_stieltjes(
+            &evs,
+            eta,
+            StieltjesMethod::Blocked,
+            None,
+            CutoffConfig::Disabled,
+            64,
+            Parallelism::Parallel,
+        );
+        let got = compute_all_stieltjes_nufft(&evs, eta, false);
+        let scaled: Vec<(f64, f64)> = got.iter().map(|&(r, i)| (r * inv_p, i * inv_p)).collect();
+        let err: f64 = scaled
+            .iter()
+            .zip(&exact)
+            .map(|(g, e)| (g.0 - e.0).powi(2) + (g.1 - e.1).powi(2))
+            .sum::<f64>()
+            .sqrt()
+            / exact
+                .iter()
+                .map(|e| e.0 * e.0 + e.1 * e.1)
+                .sum::<f64>()
+                .sqrt();
+        assert!(err < 1e-4, "nufft all-points rel-L2 {err:.3e}");
+
+        // The parallel splat reduces per-worker buffers in a different order,
+        // so require numerical agreement rather than bit identity.
+        let par = compute_all_stieltjes_nufft(&evs, eta, true);
+        let max_diff = got
+            .iter()
+            .zip(&par)
+            .map(|(a, b)| (a.0 - b.0).abs().max((a.1 - b.1).abs()))
+            .fold(0.0f64, f64::max);
+        assert!(max_diff < 1e-9, "seq/par nufft max diff {max_diff:.3e}");
+
+        // Deconvolution-style grid: interpolate the same convolution at
+        // arbitrary query points.
+        let (lo, hi) = (evs[0], evs[p - 1]);
+        let grid: Vec<f64> = (0..200)
+            .map(|k| lo + (hi - lo) * (k as f64 / 199.0))
+            .collect();
+        let exact_grid = compute_stieltjes_at_points(
+            &grid,
+            &evs,
+            eta,
+            StieltjesMethod::Blocked,
+            None,
+            Parallelism::Parallel,
+            None,
+        );
+        let got_grid = compute_stieltjes_nufft_at_points(&grid, &evs, eta, false);
+        let num: f64 = got_grid
+            .iter()
+            .zip(&exact_grid)
+            .map(|(g, e)| ((g.0 - e.0) * inv_p).powi(2) + ((g.1 - e.1) * inv_p).powi(2))
+            .sum();
+        let den: f64 = exact_grid
+            .iter()
+            .map(|e| (e.0 * inv_p).powi(2) + (e.1 * inv_p).powi(2))
+            .sum();
+        let err_grid = (num / den).sqrt();
+        assert!(err_grid < 1e-4, "nufft grid rel-L2 {err_grid:.3e}");
     }
 }

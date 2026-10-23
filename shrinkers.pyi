@@ -24,6 +24,8 @@ Method: TypeAlias = Literal[
     "fft5",
     "fft3",
     "fft2",
+    "nufft",
+    "fft_fast",
     "fmm",
     "treecode",
     "chebcode",
