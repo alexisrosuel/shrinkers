@@ -5,6 +5,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed — ChebCode FAST kernel: ~19 % faster sequential, ~23 % faster Rayon
+
+A review of the fastest Stieltjes path (`chebcode_fast`, the f32 Chebyshev
+treecode) and its build. Same-binary, interleaved A/B on M1 Max, MP spectrum,
+η = 1/√p, error against the exact O(p²) reference:
+
+| p = 50 000 | before | after | gain |
+|---|---|---|---|
+| eval, sequential | 4.41 ms | 3.59 ms | **18.5 %** |
+| eval, Rayon | 0.72 ms | 0.55 ms | **23.5 %** |
+| end-to-end, sequential | 5.15 ms | 4.46 ms | **13.4 %** |
+| end-to-end, Rayon | 1.79 ms | 1.38 ms | **22.7 %** |
+| tree build (public, sequential) | 0.80 ms | 0.84 ms | −4 % |
+| tree build (dispatcher, parallel) | 0.80 ms | 0.63 ms | **21 %** |
+
+The FAST relative-L2 error is unchanged in class: worst measured over MP,
+log-spaced and clustered spectra at p = 5k/20k/50k is 2.1e-5 (was 2.0e-5);
+the benchmark spectrum at p = 50k is 2.50e-5 (was 2.47e-5). The f64 path is
+**bit-identical** to the previous revision (`measure_hotloop_ab --checksum`
+matches) and ~8 % faster.
+
+Kernel changes:
+
+- **Pre-order child links**: the left child of an internal node is always
+  `node + 1`, so the `left` array is gone. The f32 traversal now loads one
+  child index and one leaf flag per node instead of two.
+- **24-byte `NodeF32`** (interval, acceptance threshold, source range, right
+  child) replaces the separate f64 metadata loads in the fast path; each
+  accepted panel's 8 nodes + 8 weights are one 64-byte block.
+- **One-step f32 reciprocal** (`FRECPE` + one `FRECPS`) in the f32 far
+  field: ~16 bits is already far below the interpolation error, so the
+  second Newton step was pure latency.
+- **f32 partials across panels**, folded into f64 once per query; leaves
+  still sum exactly in f64.
+- **η factored out of the imaginary accumulation** (`q = w·inv`,
+  `Re += q·d`, `Im_N += q`, one final `η·Im_N`), removing one multiply per
+  far-field term.
+- **1.3× opening angle for panels outside the query** (`OUTSIDE_THETA2`):
+  only panels containing the pole keep the preset θ. This removes ~10 % of
+  accepted panels without moving the worst-case error.
+- **EVAL_CHUNK 256 → 128** (the f32 path's measured sweet spot).
+- **Small parallel requests run sequentially** (`MIN_PARALLEL_QUERIES = 2048`):
+  the default `nq = 200` grid measured 0.037 ms for a parallel request vs
+  0.021 ms sequential at p = 50 000; the same floor is applied to the
+  all-points path.
+- Build split into serial topology, independent leaf fills (Rayon-parallel
+  in groups of 32 panels when the dispatcher asked for parallelism and the
+  tree has ≥ 1 000 nodes), and a flat reverse-index parent merge. The f64
+  arithmetic and merge order are unchanged.
+- `ChebCodeBatch::build_mode_parallel` / `chebcode_tree_for_bench_parallel`
+  expose the build-parallelism choice; public batch constructors stay
+  sequential and never spawn threads on their own.
+
+Rejected after measurement: dual f32 far-field accumulator pairs (3.06 →
+4.62 ms at p = 50k — register pressure/codegen), vectorizing the
+barycentric build rows with `F64x2::recip` (~20 % slower, as recorded for
+the earlier round), and per-depth parallel merges (barrier cost exceeds the
+work). Recorded in `docs/hardware_optimizations.md`.
+
+Docs: `docs/chebcode_algorithms.md`, `docs/internals.md` and
+`docs/hardware_optimizations.md` now describe the topology/leaf/merge build,
+the compact f32 traversal and the measured trade-offs.
+
 ### Fixed — rank alignment of the cleaning-quality README figure
 
 `scripts/make_readme_figures.py` sorted the cleaned estimates by value before

@@ -29,8 +29,9 @@
 //!
 //! # Performance design
 //!
-//! - **Flat, structure-of-arrays tree** (parallel `Vec`s) instead of a
-//!   recursive `Box<TreeNode>` / `Vec<ChebNode>` — cache-friendly, iterative
+//! - **Flat, structure-of-arrays tree** (parallel `Vec`s) for the precision
+//!   path, plus a compact 24-byte AoS node record and interleaved 64-byte
+//!   Chebyshev panels for the f32 speed path — cache-friendly, iterative
 //!   traversal, no per-node heap allocations.
 //! - **Leaf points are not copied**: each node stores an index range
 //!   `[lo_idx, hi_idx)` into the sorted eigenvalue array, so the exact
@@ -39,20 +40,24 @@
 //!   `w[node*n+j]`) for sequential access in the far-field dot product.
 //! - Leaves evaluate **exactly** (handles the `z ≈ x` diagonal / singular
 //!   near-field); well-separated internal nodes use the Chebyshev far-field.
+//! - **Pre-order child links need no left pointer**: an internal node's left
+//!   child is always `node + 1`, so the hot traversal loads one child index
+//!   and one leaf flag per node instead of two.
 //! - Per-query iterative walk with a reusable stack. Optional Rayon
-//!   parallelism over the independent query points.
+//!   parallelism over the independent query points; the tree build's
+//!   independent leaf-fill phase is parallelized too.
 
 use super::simd::{F32x4, F64x2};
 use rayon::prelude::*;
 
-/// Arithmetic precision of the FAR-FIELD only.
+/// Arithmetic precision of the FAR FIELD and traversal metadata.
 ///
-/// Leaves (exact near-field sums), the traversal distance test and every
-/// returned accumulator stay f64 in both modes — only the well-separated
-/// Chebyshev dot product `Σ_j w_j/(z−t_j)` switches to f32 in
-/// [`FastMode::F32`]. The far field is an interpolation already carrying
-/// ~1e-8 relative error at the FAST preset, so f32's ~1e-6 per-term rounding
-/// is a small addition — measured in `RESULT.md`.
+/// Leaves always sum exactly in f64, and both modes fold their partials into
+/// f64 before returning. In [`FastMode::F32`] the well-separated Chebyshev
+/// dot product `Σ_j w_j/(z−t_j)` and the node distance/acceptance state use
+/// four-lane f32. The far field is already an interpolation carrying ~1e-5
+/// relative error at the FAST preset, so f32's ~1e-7 per-term rounding is a
+/// small addition — measured in `RESULT.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FastMode {
     /// Bit-identical to the historical f64 path.
@@ -64,12 +69,21 @@ pub enum FastMode {
 
 /// Chunk size for parallel query evaluation.
 ///
-/// 256-query blocks: measured plateau between 64..1024 at p=50k on M1 Max;
-/// large enough to amortize scheduling, small enough for load balance across
-/// heterogeneous P/E cores. Each task reuses one traversal stack across the
-/// block, and adjacent (sorted) values traverse nearly identical paths, so
-/// per-task cache warmth is high.
-const EVAL_CHUNK: usize = 256;
+/// 128-query blocks: measured faster than 256 at p = 50k on M1 Max with the
+/// f32 fast path (the plateau spans 64..1024), large enough to amortize
+/// scheduling and small enough for load balance across the heterogeneous
+/// P/E cores. Each task reuses one traversal stack across the block, and
+/// adjacent (sorted) values traverse nearly identical paths, so per-task
+/// cache warmth is high.
+const EVAL_CHUNK: usize = 128;
+
+/// Minimum query count for a Rayon evaluation of the ChebCode tree.
+///
+/// Below this, the thread-pool join dominates: the deconvolution grid serves
+/// `nq = 200` queries by default, where sequential evaluation measured
+/// 0.021 ms against 0.037 ms for a parallel request at p = 50 000. Same
+/// policy as the exact family's `RAYON_MIN_P`.
+const MIN_PARALLEL_QUERIES: usize = 2048;
 
 /// Maximum recursion depth of the tree build — and therefore the hard bound on
 /// the traversal stack.
@@ -79,6 +93,19 @@ const EVAL_CHUNK: usize = 256;
 /// inputs: a node at this depth becomes an (oversized) exact leaf instead of
 /// splitting further, so [`TraversalStack`]'s fixed buffer cannot overflow.
 const MAX_TREE_DEPTH: usize = 48;
+
+/// Squared opening-angle multiplier for f32 far-field panels that do NOT
+/// contain the query point.
+///
+/// A panel containing `z` sees the pole at distance η, so its interpolation
+/// error is the accuracy-critical one: those panels keep the preset's own θ.
+/// A panel outside the query is separated by a real distance, which tolerates
+/// a wider angle. `1.3²` was measured on MP, log-spaced and clustered spectra
+/// at p = 5k..50k: it accepts ~10 % fewer panels (worth ~2–5 % end-to-end)
+/// while leaving the worst-case relative-L2 error at the θ = 1 level
+/// (~2e-5). Larger multipliers buy little more time and start moving the
+/// error, so this is deliberately a constant rather than a preset knob.
+const OUTSIDE_THETA2: f32 = 1.69;
 
 /// Fixed-capacity DFS stack, replacing `Vec<i32>`.
 ///
@@ -147,12 +174,32 @@ fn eval_points_parallel<const FAST_F32: bool>(
     out
 }
 
+/// Compact f32 node record used by the [`FastMode::F32`] traversal.
+///
+/// `right == -1` marks a leaf; the left child of an internal node is the next
+/// pre-order node (`+1`), so no left link is stored. `lo_idx`/`hi_idx` are
+/// u32 because the tree never holds more sources than a slice can index
+/// anyway; this keeps the record at 24 bytes, i.e. 5 records per 128-byte
+/// Apple cache line.
+#[derive(Clone, Copy)]
+struct NodeF32 {
+    lo: f32,
+    hi: f32,
+    accept_hw: f32,
+    lo_idx: u32,
+    hi_idx: u32,
+    /// Right child, or -1 for a leaf. The left child of an internal node is
+    /// always the next node in pre-order, so it needs no stored link.
+    right: i32,
+}
+
 /// Flat, structure-of-arrays Chebyshev tree.
 ///
 /// Node `i` has bounds `[lo[i], hi[i]]`, eigenvalue index range
 /// `[lo_idx[i], hi_idx[i])` into `sorted`, Chebyshev nodes
 /// `nodes[i*n .. i*n+n]`, source weights `w[i*n .. i*n+n]`, and children
-/// `left[i]` / `right[i]` (`-1` = none). The root is node `0`.
+/// `right[i]` (`-1` = leaf). The left child of an internal node is always
+/// the next node in pre-order (`i + 1`). The root is node `0`.
 /// The barycentric weights `lam` depend only on `n` and are shared.
 struct FlatChebTree {
     /// Sorted eigenvalues (leaf exact sums read from here).
@@ -161,20 +208,29 @@ struct FlatChebTree {
     hi: Vec<f64>,
     lo_idx: Vec<usize>,
     hi_idx: Vec<usize>,
-    /// Squared half-width per panel: `(0.5·(hi−lo))²`, precomputed so the
-    /// per-visit acceptance test is one load + one multiply.
-    hw_sq: Vec<f64>,
+    /// Acceptance threshold per panel: `(0.5·(hi−lo))² / θ²`, precomputed so
+    /// the per-visit test is `threshold < cl² + η²` — one load + one compare,
+    /// with θ folded into the stored value at build time.
+    accept_hw: Vec<f64>,
     /// Flattened Chebyshev nodes: `nodes[node*n + j]`.
     nodes: Vec<f64>,
     /// Flattened source weights: `w[node*n + j]`.
     w: Vec<f64>,
-    /// f32 copies of `nodes` / `w` for the [`FastMode::F32`] far field.
+    /// f32 mirror of the traversal metadata for [`FastMode::F32`].
     ///
-    /// Same layout and length; built once alongside the f64 arrays so the
-    /// f64 traversal is untouched and both modes share one tree.
-    nodes_f32: Vec<f32>,
-    w_f32: Vec<f32>,
-    left: Vec<i32>,
+    /// One record per node packs the interval, acceptance test input, source
+    /// range and right-child link into 24 bytes, so the whole hot decision
+    /// state of a node fits in one cache line (the f64 arrays remain for the
+    /// precision path and are never touched by the f32 traversal).
+    node_f32: Vec<NodeF32>,
+    /// f32 far-field panels, `2n` floats per node: the `n` Chebyshev nodes
+    /// followed by the `n` weights.
+    ///
+    /// Keeping a panel's nodes and weights adjacent (64 bytes for n = 8)
+    /// means the far-field loop touches one cache line per accepted panel
+    /// instead of one line in each of two arrays.
+    panel_f32: Vec<f32>,
+    /// Right child per node (`-1` = leaf); see the struct docs.
     right: Vec<i32>,
     /// number of Chebyshev nodes per interval (degree+1)
     n: usize,
@@ -204,48 +260,34 @@ fn barycentric_weights_m1(n: usize) -> Vec<f64> {
         .collect()
 }
 
-/// Fill Chebyshev nodes + source weights (Lagrange basis, barycentric form)
-/// for node `idx` using `sorted[lo_idx..hi_idx]`.
+/// Write node `idx`'s `n` Chebyshev positions `t_j = c + l·s_j`.
 ///
-/// `sm1` holds the 2nd-kind Chebyshev nodes on [-1,1] (built ONCE per tree),
-/// `lam` the shared barycentric weights, and `scratch` a caller-owned buffer
-/// reused across nodes — this function performs no allocation itself.
-fn fill_weights(
-    tree: &mut FlatChebTree,
-    idx: usize,
-    lo_idx: usize,
-    hi_idx: usize,
-    sm1: &[f64],
-    lam: &[f64],
-    scratch: &mut [f64],
-) {
+/// Split out of the weight passes so the topology builder can set every
+/// position once; leaf fills and parent merges then only read them.
+#[inline]
+fn set_node_positions(tree: &mut FlatChebTree, idx: usize, sm1: &[f64]) {
     let n = tree.n;
     let lo = tree.lo[idx];
     let hi = tree.hi[idx];
     let c = 0.5 * (lo + hi);
     let l = 0.5 * (hi - lo);
-
     let base = idx * n;
-    // Node positions on [lo, hi]: t_j = c + l·s_j (written straight into the
-    // flat node array — no temporary).
     for (slot, &s) in tree.nodes[base..base + n].iter_mut().zip(sm1.iter()) {
         *slot = c + l * s;
     }
+}
 
-    // ℓ_j(x) = (λ_j/(x-t_j)) / (Σ_i λ_i/(x-t_i)); if x hits a node exactly,
-    // that single basis evaluates to 1.
-    let t = &tree.nodes[base..base + n];
-    // `scratch` is 2n long: the first half accumulates the weights, the
-    // second is the per-point barycentric scratch `v`. Sizing it from `n`
-    // (rather than a fixed [f64; 64]) is what keeps n > 64 correct.
-    let (w, v) = scratch.split_at_mut(n);
+/// Accumulate one leaf's sources into its `n` barycentric weights.
+///
+/// `w` is the destination panel (overwritten), `t` its Chebyshev nodes,
+/// `sources` this leaf's contiguous eigenvalue range and `v` an `n`-sized
+/// scratch. A leaf's sources each carry mass 1.
+#[inline]
+fn fill_leaf_weights(w: &mut [f64], t: &[f64], sources: &[f64], lam: &[f64], v: &mut [f64]) {
     w.fill(0.0);
-    // A leaf's sources each carry mass 1: the weight w_j is the number of
-    // sources whose j-th Lagrange basis contributes.
-    for &x in &tree.sorted[lo_idx..hi_idx] {
+    for &x in sources {
         barycentric_row(x, t, lam, w, v, 1.0);
     }
-    tree.w[base..base + n].copy_from_slice(w);
 }
 
 /// One barycentric row update: accumulate the Lagrange basis at `x` into `w`,
@@ -254,8 +296,8 @@ fn fill_weights(
 /// `t[j]` are the panel's Chebyshev nodes, `lam[j]` the shared barycentric
 /// weights, `v` a caller-owned `n`-sized scratch (no allocation here). The
 /// two callers differ only in `mass`: a leaf passes `1.0` for every source it
-/// owns ([`fill_weights`]), a parent passes each child's weight `w_t`
-/// ([`merge_weights`]).
+/// owns ([`fill_leaf_weights`]), a parent passes each child's weight `w_t`
+/// ([`merge_all_weights`]).
 ///
 /// Division-hoisted: `v_j = λ_j/(x-t_j)` is computed once (n divisions),
 /// `s = Σ v_j` normalizes, and the update is `w_j += mass·v_j·(1/s)` — one
@@ -294,12 +336,17 @@ fn barycentric_row(x: f64, t: &[f64], lam: &[f64], w: &mut [f64], v: &mut [f64],
     }
 }
 
+/// Recursive TOPOLOGY pass: append this node, its interval metadata, its
+/// child links and its Chebyshev positions.
+///
+/// Weights are computed afterwards (leaf fills and bottom-up merges), which
+/// is what lets the weight phase run the independent leaf work in parallel
+/// and the parent merges in a flat reverse-index sweep. Node indices are
+/// pre-order, so every child has a larger index than its parent.
 #[allow(clippy::too_many_arguments)]
-fn build_cheb(
+fn build_topology(
     tree: &mut FlatChebTree,
     sm1: &[f64],
-    lam: &[f64],
-    scratch: &mut [f64],
     lo_idx: usize,
     hi_idx: usize,
     leaf_cap: usize,
@@ -312,18 +359,18 @@ fn build_cheb(
 
     tree.lo.push(lo);
     tree.hi.push(hi);
-    tree.hw_sq.push((0.5 * (hi - lo)).powi(2));
+    tree.accept_hw
+        .push((0.5 * (hi - lo)).powi(2) / tree.theta_sq);
     tree.lo_idx.push(lo_idx);
     tree.hi_idx.push(hi_idx);
     for _ in 0..tree.n {
         tree.nodes.push(0.0);
         tree.w.push(0.0);
     }
-    tree.left.push(-1);
     tree.right.push(-1);
+    set_node_positions(tree, idx as usize, sm1);
 
     if count <= leaf_cap || depth >= MAX_TREE_DEPTH {
-        fill_weights(tree, idx as usize, lo_idx, hi_idx, sm1, lam, scratch);
         return idx;
     }
 
@@ -332,108 +379,195 @@ fn build_cheb(
     if split == lo_idx || split == hi_idx {
         split = (lo_idx + hi_idx) / 2;
     }
-    let li = build_cheb(tree, sm1, lam, scratch, lo_idx, split, leaf_cap, depth + 1);
-    let ri = build_cheb(tree, sm1, lam, scratch, split, hi_idx, leaf_cap, depth + 1);
+    let li = build_topology(tree, sm1, lo_idx, split, leaf_cap, depth + 1);
+    let ri = build_topology(tree, sm1, split, hi_idx, leaf_cap, depth + 1);
+    debug_assert_eq!(li, idx + 1, "pre-order left child must be next");
 
-    let ni = idx as usize;
-    tree.left[ni] = li;
-    tree.right[ni] = ri;
-    merge_weights(tree, ni, sm1, lam, scratch);
+    tree.right[idx as usize] = ri;
     idx
 }
 
-/// Compose a parent's barycentric weights from its two children's weights
-/// instead of re-scanning every source in the parent's range.
+/// Maximum `n` whose per-leaf barycentric scratch fits on the stack.
 ///
-/// Each child node carries the mass `w_t` (summing to the child's source
-/// count); running the same normalized barycentric row update per child
-/// node — scaled by `w_t` — reproduces the parent's weights with O(n²)
-/// work per child rather than O(count·n). Total build cost drops from
-/// ~p·n·depth source-visits to ~(p/leaf)·n² node merges. Numerically this
-/// stacks one extra interpolation level per depth; the treecode tolerance
-/// absorbs it (verified against the exact sums in tests).
-fn merge_weights(
-    tree: &mut FlatChebTree,
-    idx: usize,
-    sm1: &[f64],
-    lam: &[f64],
-    scratch: &mut [f64],
-) {
-    let n = tree.n;
-    let base_p = idx * n;
-    {
-        let lo = tree.lo[idx];
-        let hi = tree.hi[idx];
-        let c = 0.5 * (lo + hi);
-        let l = 0.5 * (hi - lo);
-        for (slot, &s) in tree.nodes[base_p..base_p + n].iter_mut().zip(sm1.iter()) {
-            *slot = c + l * s;
-        }
-    }
-    let t = &tree.nodes[base_p..base_p + n];
-    // Same 2n scratch split as `fill_weights` (n-sized, so any n is correct).
-    let (w, v) = scratch.split_at_mut(n);
-    w.fill(0.0);
+/// Every shipped preset is far below this; the heap fallback keeps arbitrary
+/// interpolation orders correct.
+const STACK_SCRATCH: usize = 64;
 
-    let l_child = tree.left[idx] as usize;
-    let r_child = tree.right[idx] as usize;
-    for child in [l_child, r_child] {
-        let base_c = child * n;
-        for ti in 0..n {
-            let x = tree.nodes[base_c + ti];
-            let m = tree.w[base_c + ti];
-            if m == 0.0 {
+/// Fill every leaf's weights, optionally in parallel.
+///
+/// Leaves write disjoint `n`-element slices of `w` and only read `nodes` /
+/// `sorted`, so the parallel form needs no locks or atomics: one
+/// `par_chunks_mut` over the panel array with non-leaves skipped.
+fn fill_leaves(tree: &mut FlatChebTree, lam: &[f64], parallel: bool) {
+    let n = tree.n;
+    let use_parallel = parallel && tree.lo.len() >= 1024;
+    if use_parallel {
+        use rayon::prelude::*;
+        // Group panels so each Rayon job owns several leaves: one task per
+        // leaf (thousands of ~0.5 µs jobs) spends more time in the scheduler
+        // than in the barycentric divisions it is meant to parallelize.
+        const GROUP: usize = 32;
+        let node_count = tree.lo.len();
+        let FlatChebTree {
+            w,
+            nodes,
+            sorted,
+            lo_idx,
+            hi_idx,
+            right,
+            ..
+        } = tree;
+        w.par_chunks_mut(n * GROUP)
+            .enumerate()
+            .for_each(|(g, chunk)| {
+                let first = g * GROUP;
+                let mut vb = [0.0f64; STACK_SCRATCH];
+                let mut vheap: Vec<f64> = Vec::new();
+                for k in 0..GROUP {
+                    let idx = first + k;
+                    if idx >= node_count {
+                        break;
+                    }
+                    if right[idx] >= 0 {
+                        continue;
+                    }
+                    let base = idx * n;
+                    let t = &nodes[base..base + n];
+                    let src = &sorted[lo_idx[idx]..hi_idx[idx]];
+                    let wchunk = &mut chunk[k * n..(k + 1) * n];
+                    if n <= STACK_SCRATCH {
+                        fill_leaf_weights(wchunk, t, src, lam, &mut vb[..n]);
+                    } else {
+                        if vheap.len() < n {
+                            vheap.resize(n, 0.0);
+                        }
+                        fill_leaf_weights(wchunk, t, src, lam, &mut vheap);
+                    }
+                }
+            });
+    } else {
+        let mut v = vec![0.0f64; n];
+        for idx in 0..tree.lo.len() {
+            if tree.right[idx] >= 0 {
                 continue;
             }
-            barycentric_row(x, t, lam, w, v, m);
+            let base = idx * n;
+            let t = &tree.nodes[base..base + n];
+            let src = &tree.sorted[tree.lo_idx[idx]..tree.hi_idx[idx]];
+            fill_leaf_weights(&mut tree.w[base..base + n], t, src, lam, &mut v);
         }
     }
-    tree.w[base_p..base_p + n].copy_from_slice(w);
+}
+
+/// Compose every internal node's weights from its two children's weights.
+///
+/// Node indices are pre-order, so iterating them in REVERSE order is a valid
+/// bottom-up sweep: both children of a node always have larger indices, and
+/// are therefore already merged. This replaces the old recursive post-order
+/// merge with a flat loop (same arithmetic, same order within each merge).
+///
+/// Each child node carries mass `w_t` (summing to its source count);
+/// running the normalized barycentric row update per child node — scaled by
+/// `w_t` — reproduces the parent's weights with O(n²) work per child rather
+/// than O(count·n), which is why build cost scales with `p/leaf_cap` rather
+/// than `p·depth`.
+fn merge_all_weights(tree: &mut FlatChebTree, lam: &[f64]) {
+    let n = tree.n;
+    let node_count = tree.lo.len();
+    let FlatChebTree {
+        w, nodes, right, ..
+    } = tree;
+    let mut v = vec![0.0f64; n];
+    for pi in (0..node_count).rev() {
+        if right[pi] < 0 {
+            continue;
+        }
+        // Destination panel, plus the tail that holds every later node's
+        // weights. Both children have index > pi, so their panels live in
+        // `rest` (child `ci` starts at offset `(ci - pi - 1)*n`).
+        let (parent_w, rest) = w[pi * n..].split_at_mut(n);
+        parent_w.fill(0.0);
+        let t = &nodes[pi * n..pi * n + n];
+        for child in [pi as i32 + 1, right[pi]] {
+            let ci = child as usize;
+            debug_assert!(ci > pi);
+            let cbase = ci * n;
+            let off = cbase - (pi * n + n);
+            for ti in 0..n {
+                let m = rest[off + ti];
+                if m == 0.0 {
+                    continue;
+                }
+                let x = nodes[cbase + ti];
+                barycentric_row(x, t, lam, parent_w, &mut v, m);
+            }
+        }
+    }
 }
 
 impl FlatChebTree {
-    fn build(sorted: &[f64], n: usize, theta: f64, leaf_cap: usize) -> Self {
+    fn build(sorted: &[f64], n: usize, theta: f64, leaf_cap: usize, parallel_build: bool) -> Self {
         // Barycentric weights depend only on `n`; they are consumed during
         // the build, so they live outside the (hot) query struct.
         let lam = barycentric_weights_m1(n);
+        // Reserve for the TYPICAL tree, not the pathological one: a balanced
+        // value-split tree has ~p/leaf_cap leaves, so ~2p/leaf_cap nodes.
+        // Reserving `2*p` for every array (the old form) over-allocated by
+        // ~20x at p=50k, i.e. ~28 MB of untouched address space per build.
+        // The 4x safety factor covers value splits that produce more leaves
+        // than the count-balanced estimate; Vec growth is the rare fallback.
+        let est_nodes = (4 * sorted.len() / leaf_cap.max(1) + 32)
+            .min(2 * sorted.len())
+            .max(1);
         let mut tree = FlatChebTree {
             sorted: sorted.to_vec(),
-            lo: Vec::with_capacity(2 * sorted.len()),
-            hi: Vec::with_capacity(2 * sorted.len()),
-            lo_idx: Vec::with_capacity(2 * sorted.len()),
-            hi_idx: Vec::with_capacity(2 * sorted.len()),
-            hw_sq: Vec::with_capacity(2 * sorted.len()),
-            nodes: Vec::with_capacity(2 * sorted.len() * n),
-            w: Vec::with_capacity(2 * sorted.len() * n),
-            nodes_f32: Vec::new(),
-            w_f32: Vec::new(),
-            left: Vec::with_capacity(2 * sorted.len()),
-            right: Vec::with_capacity(2 * sorted.len()),
+            lo: Vec::with_capacity(est_nodes),
+            hi: Vec::with_capacity(est_nodes),
+            lo_idx: Vec::with_capacity(est_nodes),
+            hi_idx: Vec::with_capacity(est_nodes),
+            accept_hw: Vec::with_capacity(est_nodes),
+            nodes: Vec::with_capacity(est_nodes * n),
+            w: Vec::with_capacity(est_nodes * n),
+            node_f32: Vec::new(),
+            panel_f32: Vec::with_capacity(est_nodes * n * 2),
+            right: Vec::with_capacity(est_nodes),
             n,
             theta_sq: theta * theta,
         };
         // Shared per-build data: Chebyshev nodes on [-1,1] (the per-node
-        // positions are affine rescalings) and one scratch buffer reused by
-        // every fill_weights/merge_weights call — no per-node allocations.
-        // `2 * n`: n weights + n barycentric terms.
+        // positions are affine rescalings).
         assert!(n >= 2, "ChebCode needs at least 2 Chebyshev nodes, got {n}");
         let sm1 = cheb_nodes_m1(n);
-        let mut scratch = vec![0.0; 2 * n];
-        build_cheb(
-            &mut tree,
-            &sm1,
-            &lam,
-            &mut scratch,
-            0,
-            sorted.len(),
-            leaf_cap,
-            0,
-        );
-        // f32 mirror of the flattened nodes/weights for `FastMode::F32`.
-        // One extra pass over the (small) panel arrays; the f64 arrays are
-        // unchanged, so the f64 path stays bit-identical.
-        tree.nodes_f32 = tree.nodes.iter().map(|&x| x as f32).collect();
-        tree.w_f32 = tree.w.iter().map(|&x| x as f32).collect();
+        build_topology(&mut tree, &sm1, 0, sorted.len(), leaf_cap, 0);
+        // Leaf fills are independent; parent merges need their children, so
+        // they run as a flat reverse-index sweep afterwards. Ordering within
+        // each merge is unchanged, so this is the same arithmetic as the old
+        // recursive post-order build.
+        fill_leaves(&mut tree, &lam, parallel_build);
+        merge_all_weights(&mut tree, &lam);
+        // f32 mirrors of the traversal metadata and panels for
+        // `FastMode::F32`. One extra pass over the (small) node/panel arrays;
+        // the f64 arrays are unchanged, so the f64 path stays bit-identical.
+        tree.node_f32 = (0..tree.lo.len())
+            .map(|i| NodeF32 {
+                lo: tree.lo[i] as f32,
+                hi: tree.hi[i] as f32,
+                accept_hw: tree.accept_hw[i] as f32,
+                lo_idx: tree.lo_idx[i] as u32,
+                hi_idx: tree.hi_idx[i] as u32,
+                right: tree.right[i],
+            })
+            .collect();
+        let node_count = tree.lo.len();
+        tree.panel_f32 = vec![0.0f32; node_count * 2 * n];
+        for i in 0..node_count {
+            let src = i * n;
+            let dst = i * 2 * n;
+            for j in 0..n {
+                tree.panel_f32[dst + j] = tree.nodes[src + j] as f32;
+                tree.panel_f32[dst + n + j] = tree.w[src + j] as f32;
+            }
+        }
         tree
     }
 
@@ -461,47 +595,56 @@ impl FlatChebTree {
         eta: f64,
         stack: &mut TraversalStack,
     ) -> (f64, f64) {
+        if FAST_F32 {
+            self.contribution_fast32(lambda_i, eta, stack)
+        } else {
+            self.contribution_f64(lambda_i, eta, stack)
+        }
+    }
+
+    /// Full-precision traversal: f64 near field and f64 far field.
+    #[inline]
+    fn contribution_f64(&self, lambda_i: f64, eta: f64, stack: &mut TraversalStack) -> (f64, f64) {
         let n = self.n;
         stack.clear();
         stack.push(0);
 
         let mut re = 0.0;
         let mut im = 0.0;
+        let eta2 = eta * eta;
 
         while let Some(node) = stack.pop() {
             let ni = node as usize;
-            let is_leaf = self.left[ni] < 0 && self.right[ni] < 0;
-
-            if is_leaf {
+            // The builder writes `right = -1` only for leaves, so one sign
+            // test is enough to identify one.
+            if self.right[ni] < 0 {
                 // Exact pairwise sum over the leaf's sources (contiguous range
                 // into the sorted array — cache friendly).
                 let lo_idx = self.lo_idx[ni];
                 let hi_idx = self.hi_idx[ni];
-                // Same lane layout as the far-field: pairs of SOURCE POINTS.
                 let xs = &self.sorted[lo_idx..hi_idx];
                 let zv = F64x2::splat(lambda_i);
-                let etav = F64x2::splat(eta);
-                let eta2v = F64x2::splat(eta * eta);
+                let eta2v = F64x2::splat(eta2);
                 let (mut ar, mut ai) = (F64x2::zero(), F64x2::zero());
                 let mut k = 0;
                 while k + 2 <= xs.len() {
                     let d = zv - F64x2::load(xs, k);
                     let inv = eta2v.fma(d, d).recip();
                     ar = ar.fma(d, inv);
-                    ai = ai.fma(etav, inv);
+                    ai = ai.add(inv);
                     k += 2;
                 }
                 let mut lr = ar.hsum();
                 let mut li = ai.hsum();
                 while k < xs.len() {
                     let d = lambda_i - xs[k];
-                    let inv = 1.0 / (d * d + eta * eta);
+                    let inv = 1.0 / (d * d + eta2);
                     lr += d * inv;
-                    li += eta * inv;
+                    li += inv;
                     k += 1;
                 }
                 re += lr;
-                im += li;
+                im += eta * li;
                 continue;
             }
 
@@ -509,18 +652,12 @@ impl FlatChebTree {
             let lo = self.lo[ni];
             let hi = self.hi[ni];
             let cl = (lo - lambda_i).max(lambda_i - hi).max(0.0);
-            let d_sq = cl.mul_add(cl, eta * eta);
+            let d_sq = cl.mul_add(cl, eta2);
 
-            if self.hw_sq[ni] < self.theta_sq * d_sq {
+            if self.accept_hw[ni] < d_sq {
                 // Well-separated: Chebyshev far-field
                 //     F(z) = Σ_j w_j / (z - t_j),
                 // evaluated term-by-term (n reciprocal magnitudes).
-                //
-                // NOTE (documented negative): processing these panels in
-                // PAIRS with an interleaved loop measured ~10% SLOWER —
-                // the n-loop iterations are already independent, so the
-                // out-of-order core already overlaps their reciprocal
-                // chains; pairing only doubles live registers and loads.
                 //
                 // Why per-term evaluation rather than polynomial
                 // coefficients P/Q via a single Horner division? Monomial
@@ -531,96 +668,163 @@ impl FlatChebTree {
                 // near-field loop — same conditioning, unconditional
                 // stability.
                 let nbase = ni * n;
-                // Vectorized across the panel's nodes. The f64 path uses
-                // 2-lane F64x2 (AArch64 has no FP64 vector divide — see
-                // stieltjes::simd); the f32 path uses 4-lane F32x4, which is
-                // 2x the lane count and a cheaper refined reciprocal, at the
-                // cost of f32 rounding inside an already-approximate
-                // far-field term.
-                let (fr, fi) = if FAST_F32 {
-                    let ts = &self.nodes_f32[nbase..nbase + n];
-                    let ws = &self.w_f32[nbase..nbase + n];
-                    let lam = lambda_i as f32;
-                    let e32 = eta as f32;
-                    let zv = F32x4::splat(lam);
-                    let etav = F32x4::splat(e32);
-                    let eta2v = F32x4::splat(e32 * e32);
-                    let (mut afr, mut afi) = (F32x4::zero(), F32x4::zero());
-                    let mut j = 0;
-                    while j + 4 <= n {
-                        let d = zv - F32x4::load(ts, j);
-                        let inv = eta2v.fma(d, d).recip();
-                        let wj = F32x4::load(ws, j);
-                        afr = afr.fma(wj * d, inv);
-                        afi = afi.fma(wj * etav, inv);
-                        j += 4;
-                    }
-                    // n not a multiple of 4: pack the remaining nodes into
-                    // ONE more 4-lane op with zero weights in the dead lanes
-                    // (measured faster than a scalar `1.0f32/x` tail, whose
-                    // hardware divide does not pipeline like FRECPE).
-                    if j < n {
-                        let mut dt = [0.0f32; 4];
-                        let mut wt = [0.0f32; 4];
-                        for k in 0..(n - j) {
-                            dt[k] = lam - ts[j + k];
-                            wt[k] = ws[j + k];
-                        }
-                        let d = F32x4::from_array(dt);
-                        let inv = eta2v.fma(d, d).recip();
-                        let wj = F32x4::from_array(wt);
-                        afr = afr.fma(wj * d, inv);
-                        afi = afi.fma(wj * etav, inv);
-                    }
-                    // Accumulate the f32 lanes into f64 scalars (never f32).
-                    let fr = afr.hsum() as f64;
-                    let fi = afi.hsum() as f64;
-                    (fr, fi)
-                } else {
-                    let ts = &self.nodes[nbase..nbase + n];
-                    let ws = &self.w[nbase..nbase + n];
-                    let zv = F64x2::splat(lambda_i);
-                    let etav = F64x2::splat(eta);
-                    let eta2v = F64x2::splat(eta * eta);
-                    let (mut afr, mut afi) = (F64x2::zero(), F64x2::zero());
-                    let mut j = 0;
-                    while j + 2 <= n {
-                        let d = zv - F64x2::load(ts, j);
-                        let inv = eta2v.fma(d, d).recip();
-                        let wj = F64x2::load(ws, j);
-                        afr = afr.fma(wj * d, inv);
-                        afi = afi.fma(wj * etav, inv);
-                        j += 2;
-                    }
-                    let mut fr = afr.hsum();
-                    let mut fi = afi.hsum();
-                    while j < n {
-                        // Scalar tail (n is typically odd).
-                        let dj = lambda_i - ts[j];
-                        let inv = 1.0 / (dj * dj + eta * eta);
-                        let wj = ws[j];
-                        fr += wj * dj * inv;
-                        fi += wj * eta * inv;
-                        j += 1;
-                    }
-                    (fr, fi)
-                };
+                let ts = &self.nodes[nbase..nbase + n];
+                let ws = &self.w[nbase..nbase + n];
+                let zv = F64x2::splat(lambda_i);
+                let eta2v = F64x2::splat(eta2);
+                let (mut afr, mut afi) = (F64x2::zero(), F64x2::zero());
+                let mut j = 0;
+                while j + 2 <= n {
+                    let d = zv - F64x2::load(ts, j);
+                    let inv = eta2v.fma(d, d).recip();
+                    let q = F64x2::load(ws, j) * inv;
+                    afr = afr.fma(q, d);
+                    afi = afi.add(q);
+                    j += 2;
+                }
+                let mut fr = afr.hsum();
+                let mut fi = afi.hsum();
+                while j < n {
+                    // Scalar tail (n is typically odd).
+                    let dj = lambda_i - ts[j];
+                    let q = ws[j] / (dj * dj + eta2);
+                    fr += q * dj;
+                    fi += q;
+                    j += 1;
+                }
                 re += fr;
-                im += fi;
+                im += eta * fi;
             } else {
-                // Otherwise descend.
+                // Otherwise descend. Push right first so the left (lower
+                // values) subtree is visited first: queries arrive sorted, so
+                // this keeps source reads closer to sequential.
+                // Pre-order layout: the left child is node+1.
                 let r = self.right[ni];
-                let l = self.left[ni];
                 if r >= 0 {
                     stack.push(r);
-                }
-                if l >= 0 {
-                    stack.push(l);
+                    stack.push(node + 1);
                 }
             }
         }
 
         (re, im)
+    }
+
+    /// f32 far-field traversal (the FAST preset).
+    ///
+    /// Everything the branchy traversal touches — node bounds, the
+    /// acceptance threshold, the right-child link and the source range —
+    /// lives in one 24-byte [`NodeF32`] record, and each accepted panel's
+    /// nodes and weights are adjacent. Far-field partial sums stay in
+    /// `F32x4` registers across panels and are folded into f64 once per
+    /// query; leaves still sum exactly in f64.
+    #[inline]
+    fn contribution_fast32(
+        &self,
+        lambda_i: f64,
+        eta: f64,
+        stack: &mut TraversalStack,
+    ) -> (f64, f64) {
+        let n = self.n;
+        stack.clear();
+        stack.push(0);
+
+        let x = lambda_i as f32;
+        let e32 = eta as f32;
+        let eta2 = e32 * e32;
+        let eta2v = F32x4::splat(eta2);
+        let zv = F32x4::splat(x);
+
+        let mut far_re = F32x4::zero();
+        let mut far_im = F32x4::zero();
+        let mut leaf_re = 0.0f64;
+        let mut leaf_im = 0.0f64;
+
+        while let Some(node) = stack.pop() {
+            let nd = &self.node_f32[node as usize];
+            if nd.right < 0 {
+                let lo_idx = nd.lo_idx as usize;
+                let hi_idx = nd.hi_idx as usize;
+                let xs = &self.sorted[lo_idx..hi_idx];
+                let zvd = F64x2::splat(lambda_i);
+                let eta2vd = F64x2::splat(eta * eta);
+                let (mut ar, mut ai) = (F64x2::zero(), F64x2::zero());
+                let mut k = 0;
+                while k + 2 <= xs.len() {
+                    let d = zvd - F64x2::load(xs, k);
+                    let inv = eta2vd.fma(d, d).recip();
+                    ar = ar.fma(d, inv);
+                    ai = ai.add(inv);
+                    k += 2;
+                }
+                let mut lr = ar.hsum();
+                let mut li = ai.hsum();
+                while k < xs.len() {
+                    let d = lambda_i - xs[k];
+                    let inv = 1.0 / (d * d + eta * eta);
+                    lr += d * inv;
+                    li += inv;
+                    k += 1;
+                }
+                leaf_re += lr;
+                leaf_im += eta * li;
+                continue;
+            }
+
+            let cl = (nd.lo - x).max(x - nd.hi).max(0.0);
+            let d_sq = cl.mul_add(cl, eta2);
+            // Panels that CONTAIN the query are the accuracy-critical ones;
+            // panels outside it tolerate a wider angle (see the constant).
+            let outside = if cl == 0.0 {
+                d_sq
+            } else {
+                OUTSIDE_THETA2 * d_sq
+            };
+            if nd.accept_hw < outside {
+                let base = node as usize * 2 * n;
+                let ts = &self.panel_f32[base..base + n];
+                let ws = &self.panel_f32[base + n..base + 2 * n];
+                // n is a runtime preset value. n = 8 (the FAST preset) is
+                // two independent 4-lane iterations; a dedicated unrolled
+                // n=8 branch measured within noise of this loop, so the
+                // generic form is kept (less code, better I-cache).
+                let mut j = 0;
+                while j + 4 <= n {
+                    let d = zv - F32x4::load(ts, j);
+                    let inv = eta2v.fma(d, d).recip_fast();
+                    let q = F32x4::load(ws, j) * inv;
+                    far_re = far_re.fma(q, d);
+                    far_im = far_im.add(q);
+                    j += 4;
+                }
+                // n not a multiple of 4: pack the remaining nodes into
+                // ONE more 4-lane op with zero weights in the dead lanes
+                // (measured faster than a scalar `1.0f32/x` tail, whose
+                // hardware divide does not pipeline like FRECPE).
+                if j < n {
+                    let mut dt = [0.0f32; 4];
+                    let mut wt = [0.0f32; 4];
+                    for k in 0..(n - j) {
+                        dt[k] = x - ts[j + k];
+                        wt[k] = ws[j + k];
+                    }
+                    let d = F32x4::from_array(dt);
+                    let inv = eta2v.fma(d, d).recip_fast();
+                    let q = F32x4::from_array(wt) * inv;
+                    far_re = far_re.fma(q, d);
+                    far_im = far_im.add(q);
+                }
+            } else {
+                // Pre-order layout: the left child is node+1.
+                stack.push(nd.right);
+                stack.push(node + 1);
+            }
+        }
+
+        (
+            leaf_re + far_re.hsum() as f64,
+            leaf_im + eta * far_im.hsum() as f64,
+        )
     }
 
     /// Same traversal evaluating TWO η values simultaneously — one η per
@@ -645,7 +849,7 @@ impl FlatChebTree {
 
         while let Some(node) = stack.pop() {
             let ni = node as usize;
-            let is_leaf = self.left[ni] < 0 && self.right[ni] < 0;
+            let is_leaf = self.right[ni] < 0;
 
             if is_leaf {
                 let lo_idx = self.lo_idx[ni];
@@ -696,13 +900,11 @@ impl FlatChebTree {
                     acc_im = acc_im.fma(wj.mul(eta_v), inv);
                 }
             } else {
+                // Pre-order layout: the left child is node+1.
                 let r = self.right[ni];
-                let l = self.left[ni];
                 if r >= 0 {
                     stack.push(r);
-                }
-                if l >= 0 {
-                    stack.push(l);
+                    stack.push(node + 1);
                 }
             }
         }
@@ -745,7 +947,7 @@ impl ChebPreset {
     };
     /// Speed preset (`"chebcode_fast"` / `"chebf"`): the fastest measured
     /// operating point of the family, ~2.4x the historical (0.5, 9) point at
-    /// a ~1e-5-class relative-L2 error (theta 1.0, n 8 — a multiple of the
+    /// a ~2e-5-class relative-L2 error (theta 1.0, n 8 — a multiple of the
     /// 4-lane f32 width — leaf 32, f32 far field).
     pub const FAST: Self = Self {
         theta: 1.0,
@@ -900,9 +1102,11 @@ fn compute_all_stieltjes_chebcode_impl_mode<const FAST_F32: bool>(
         &sorted_buf
     };
 
-    let tree = FlatChebTree::build(sorted, n, theta, leaf_cap);
+    let tree = FlatChebTree::build(sorted, n, theta, leaf_cap, parallel);
 
-    if parallel {
+    // Below `MIN_PARALLEL_QUERIES`, a Rayon request runs sequentially: the
+    // join costs more than the whole evaluation.
+    if parallel && p >= MIN_PARALLEL_QUERIES {
         eval_points_parallel::<FAST_F32>(&tree, eigenvalues, eta)
     } else {
         let mut stack = TraversalStack::new();
@@ -919,6 +1123,19 @@ fn compute_all_stieltjes_chebcode_impl_mode<const FAST_F32: bool>(
 /// the build/eval split.
 pub fn chebcode_tree_for_bench(eigenvalues: &[f64], preset: ChebPreset) -> ChebCodeBatch {
     ChebCodeBatch::build_preset(eigenvalues, preset)
+}
+
+/// [`chebcode_tree_for_bench`] with an explicit build-parallelism choice.
+///
+/// Benchmark helper: lets the harnesses separate the sequential and parallel
+/// build phases without going through a full evaluation.
+pub fn chebcode_tree_for_bench_parallel(
+    eigenvalues: &[f64],
+    preset: ChebPreset,
+    parallel_build: bool,
+) -> ChebCodeBatch {
+    let (theta, n, leaf_cap, mode) = preset.parts_mode();
+    ChebCodeBatch::build_mode_parallel(eigenvalues, theta, n, leaf_cap, mode, parallel_build)
 }
 
 /// Amortized multi-η driver for ChebCode (γ-sweeps).
@@ -957,10 +1174,27 @@ impl ChebCodeBatch {
         leaf_cap: usize,
         mode: FastMode,
     ) -> Self {
+        Self::build_mode_parallel(eigenvalues, theta, n, leaf_cap, mode, false)
+    }
+
+    /// [`Self::build_mode`] with an explicit build-parallelism choice.
+    ///
+    /// Only the dispatcher's parallel branches pass `true`: the leaf-weight
+    /// phase (the largest part of the build) then runs on the Rayon pool.
+    /// Public batch builders stay sequential so constructing a tree never
+    /// spawns threads behind the caller's back.
+    pub(crate) fn build_mode_parallel(
+        eigenvalues: &[f64],
+        theta: f64,
+        n: usize,
+        leaf_cap: usize,
+        mode: FastMode,
+        parallel_build: bool,
+    ) -> Self {
         let already_sorted = crate::stieltjes::is_sorted_ascending(eigenvalues);
         if already_sorted {
             return Self {
-                tree: FlatChebTree::build(eigenvalues, n, theta, leaf_cap),
+                tree: FlatChebTree::build(eigenvalues, n, theta, leaf_cap, parallel_build),
                 perm: None,
                 mode,
             };
@@ -976,7 +1210,7 @@ impl ChebCodeBatch {
         // Scatter: row s of an evaluation is the s-th smallest eigenvalue,
         // which came from original index idx[s].
         Self {
-            tree: FlatChebTree::build(&sorted_buf, n, theta, leaf_cap),
+            tree: FlatChebTree::build(&sorted_buf, n, theta, leaf_cap, parallel_build),
             perm: Some(idx),
             mode,
         }
@@ -1009,6 +1243,11 @@ impl ChebCodeBatch {
     }
 
     /// [`Self::evaluate_points`] with an explicit [`FastMode`].
+    ///
+    /// A `parallel` request below `MIN_PARALLEL_QUERIES` queries runs
+    /// sequentially: the Rayon join costs more than the whole evaluation at
+    /// the deconvolution grid's default `nq = 200` (measured 0.037 ms
+    /// parallel vs 0.021 ms sequential at p = 50 000).
     pub fn evaluate_points_mode(
         &self,
         points: &[f64],
@@ -1016,6 +1255,7 @@ impl ChebCodeBatch {
         parallel: bool,
         mode: FastMode,
     ) -> Vec<(f64, f64)> {
+        let parallel = parallel && points.len() >= MIN_PARALLEL_QUERIES;
         match (mode, parallel) {
             (FastMode::F64, false) => {
                 let mut stack = TraversalStack::new();
@@ -1243,6 +1483,24 @@ mod tests {
         let bp = compute_all_stieltjes_chebcode_impl_f32(&evals, eta, 0.5, 9, 32, true);
         for i in 0..p {
             assert_eq!(b[i], bp[i], "seq/par f32 mismatch at {i}");
+        }
+    }
+
+    #[test]
+    fn parallel_build_is_bit_identical() {
+        // Leaf fills are disjoint, so the parallel build must produce exactly
+        // the sequential tree — for both far-field arithmetics.
+        let p = 50_000;
+        let evals = crate::stieltjes::testutil::log_spectrum(p);
+        let eta = 1.0 / (p as f64).sqrt();
+        for mode in [FastMode::F64, FastMode::F32] {
+            let seq = ChebCodeBatch::build_mode(&evals, 1.0, 8, 32, mode);
+            let par = ChebCodeBatch::build_mode_parallel(&evals, 1.0, 8, 32, mode, true);
+            assert_eq!(
+                seq.evaluate(eta),
+                par.evaluate(eta),
+                "parallel build changed {mode:?} results"
+            );
         }
     }
 

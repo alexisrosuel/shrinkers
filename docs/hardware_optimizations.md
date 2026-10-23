@@ -149,71 +149,109 @@ Also documented there: processing panels in pairs (interleaved) measured
 out-of-order core overlaps their reciprocal chains without help; pairing
 only doubles live registers.
 
-### Barycentric build: hoist divisions, compose parents
+### Barycentric build: topology, leaf fills, reverse merges
 
-* `fill_weights` computes `v_j = β_j/(x_s − t_j)` once per (source, node)
-  and normalizes with a single extra division per source (≤1 ulp change).
-  The shared `mass·(1/s)` factor is hoisted out of the node loop and applied
-  with one fused `w_j = m.mul_add(v_j, w_j)` per node instead of
-  `mass · v_j · inv_s` + add.
-* `merge_weights` composes a parent's weights from its children's
-  (O(n²) per child) instead of rescanning all parent sources — on the
-  **all-points** path the build ends at 10–11 % of end-to-end runtime
-  (`examples/measure_build_share.rs`) rather than dominating it.
+* `fill_leaf_weights` computes `v_j = β_j/(x_s − t_j)` once per (source,
+  node) and normalizes with a single extra division per source (≤1 ulp
+  change). The shared `mass·(1/s)` factor is hoisted out of the node loop
+  and applied with one fused `w_j = m.mul_add(v_j, w_j)` per node instead
+  of `mass · v_j · inv_s` + add.
+* `merge_all_weights` composes a parent's weights from its children's
+  (O(n²) per child) instead of rescanning all parent sources. Node indices
+  are pre-order, so iterating them in reverse is a valid bottom-up sweep:
+  the recursive post-order merge became one flat loop, with the same
+  arithmetic (the f64 result is bit-identical — verified with
+  `measure_hotloop_ab --checksum`).
+* **The build is now three phases**: serial topology (intervals, ranges,
+  right-child links, Chebyshev positions), independent leaf fills
+  (optionally Rayon-parallel in groups of 32 panels), and the serial
+  reverse merge. The leaf phase is the largest, and it parallelizes safely
+  because each leaf writes a disjoint `n`-element slice of the weight
+  array. At p = 50 000 the build went 0.80 → 0.63 ms (p = 10 000:
+  0.27 → 0.20 ms); below ~1 000 nodes Rayon is disabled because scheduling
+  exceeds the work. The merges stay serial: each is small and a level
+  barrier costs more than the work (the earlier all-level parallel variant
+  measured 0.63–0.93× and remains rejected).
+* On the **all-points** path the build is ~15 % of end-to-end runtime for
+  `chebcode_fast` (≈ 0.6 ms of 4.4 ms at p = 50 000).
 * **The build dominates whenever the tree serves few queries.** At
-  `nq = 200` (the deconvolution grid) the build is 81 % / 94 % of the call
-  at p = 10 000 / 50 000, and most of it is `merge_weights`
-  (cost ∝ `p / leaf_cap`). `compute_stieltjes_at_points` therefore sizes
-  the leaf from the query count (`L* = n·√(2p/nq)`, floored at the preset
-  value) — a bigger leaf removes merge work *and* leaves more sources in
-  the exactly-summed leaves, so it is faster **and** more accurate.
-  Interleaved before/after, nq = 200, `chebcode_fast`: **1.37×** at
-  p = 10 000 (0.250 → 0.183 ms), **1.45×** at p = 25 000, **1.60×** at
-  p = 50 000 (1.017 → 0.636 ms, 4.1e-9 → 1.3e-9 rel-L2);
-  `chebcode_balanced` **1.77×** at p = 50 000.
-  The all-points path is untouched (`L* = n√2` there, below every preset).
+  `nq = 200` (the deconvolution grid) most of the call is still the
+  build, and most of that is `merge_all_weights` (cost ∝ `p / leaf_cap`).
+  `compute_stieltjes_at_points` therefore sizes the leaf from the query
+  count (`L* = n·√(2p/nq)`, floored at the preset value) — a bigger leaf
+  removes merge work *and* leaves more sources in the exactly-summed
+  leaves, so it is faster **and** more accurate. Interleaved before/after,
+  nq = 200, `chebcode_fast`: **1.37×** at p = 10 000, **1.45×** at
+  p = 25 000, **1.60×** at p = 50 000; `chebcode_balanced` **1.77×** at
+  p = 50 000. The all-points path is untouched (`L* = n√2` there, below
+  every preset).
 
 ### Memory layout and parallelism
 
-* Structure-of-arrays tree vectors, no pointer chasing; child indices are
-  `i32`s inside flat arrays.
+* Precision path: structure-of-arrays tree vectors, no pointer chasing;
+  right-child indices are `i32`s inside flat arrays.
+* Speed path: a compact 24-byte `NodeF32` per node (interval, acceptance
+  threshold, source range, right child) plus 64-byte interleaved panels
+  (n = 8 nodes followed by n = 8 weights). The left child is never stored:
+  pre-order layout makes it `node + 1`.
 * Each worker thread owns one reusable stack buffer across consecutive
-  queries; queries are dispatched in chunks of **256** (measured plateau
-  between 64 and 1024 at p = 50 k on M1 Max). Adjacent sorted eigenvalues
-  traverse nearly identical paths, so chunk locality doubles as cache
-  warmth.
+  queries; queries are dispatched in chunks of **128** (the f32 path
+  measured faster at 128 than 256 at p = 50 k; plateau 64…1024). Adjacent
+  sorted eigenvalues traverse nearly identical paths, so chunk locality
+  doubles as cache warmth.
 * The HODLR family shares the SoA philosophy and, since the conj-transpose
   transfer, compresses each cross-block level once instead of twice
   (p = 20 k seq: −41 %; see CHANGELOG 0.1.x).
 
-### Four-lane f32 far field (`F32x4`, `chebcode_fast` round)
+### Four-lane f32 path (`F32x4`, `chebcode_fast`)
 
 The far-field dot product is already an interpolation (~1e-5 at the speed
-preset), so its arithmetic does not need 53 bits. AArch64 gives **4 f32 lanes**
-per NEON register against 2 for f64, and an f32 refined reciprocal
-(`vrecpeq_f32` + two `vrecpsq_f32`) needs no scalar divide. `F32x4` mirrors
-`F64x2` (same safe-abstraction policy, all `unsafe` still only in `simd.rs`),
-and the tree keeps an `nodes_f32`/`w_f32` mirror of the flat panel arrays so
-one build serves both arithmetics.
+preset), so its arithmetic does not need 53 bits. AArch64 gives **4 f32
+lanes** per NEON register against 2 for f64. The current speed path:
 
-Only the well-separated far field is f32: traversal, the distance test, the
-leaf exact sums and the returned accumulators stay f64, and each panel's four
-lanes are reduced into an f64 scalar. Measured **~1.30x** on the far field at
-a ~6e-7 relative-error floor. `n` must be a multiple of 4 to see it (n = 4 →
-1.10x, n = 6 = 4 + masked tail → 0.99x, n = 8 → 1.33-1.37x), which is why the
-speed preset uses n = 8; a non-multiple-of-4 tail is packed into one masked
-4-lane op with zero weights rather than a scalar `1.0f32/x` loop, whose
-hardware divide does not pipeline like the estimate. The accuracy presets
-(`chebcode`, `chebcode_balanced`, `chebcode_xtreme`) keep the f64 path — a
-17-bit `F64x2::recip_fast` (one Newton step) did measure +1.19-1.24x on the
-f64 far field with a ~1.4e-6 floor, but it would cap `chebcode_xtreme`'s
-~1e-12 class, so it survives only as a measurement reference.
+* `F32x4` mirrors `F64x2` (same safe-abstraction policy, all `unsafe`
+  still only in `simd.rs`), but the far-field reciprocal keeps only **one**
+  Newton refinement (`vrecpeq_f32` + one `vrecpsq_f32`, ~16 bits) instead
+  of two. The interpolation error dominates it; removing the second step
+  measured another ~4 % end-to-end with no visible error-class change.
+* Traversal itself is f32: a 24-byte `NodeF32` carries `lo`, `hi`,
+  `accept_hw`, the source range and the right child. Leaves and the final
+  returned sums stay f64.
+* Each panel's nodes and weights are adjacent (one 64-byte block at
+  n = 8), and both 4-lane halves are fully unrolled. Panel partials stay in
+  `F32x4` registers across all accepted panels and are folded into f64
+  once per query.
+* The imaginary part factors `η` out: per node `q = w·inv`, then
+  `Re += q·d`, `Im_N += q`, and one `η·Im_N` at the end. That removes one
+  multiply per far-field term.
+* Panels that do not contain the query use a `1.3·θ` opening angle
+  (`OUTSIDE_THETA2 = 1.69`); only panels containing the pole keep θ. This
+  removes ~10 % of accepted panels while leaving the worst measured
+  relative-L2 error at the θ = 1 level (~2e-5) across MP, log-spaced and
+  clustered spectra. Larger factors (1.4², 1.5², 2.0²) buy little more
+  time and start moving the error.
+
+Measured on the FAST preset at p = 50 000: far-field arithmetic is ~1.30×
+the old two-step version, and the combined kernel is **~19 % faster
+sequentially** (4.41 → 3.59 ms eval), **~24 % faster under Rayon**
+(0.72 → 0.55 ms eval) and **~23 % faster end-to-end** (1.79 → 1.38 ms)
+against the same tree. `n` must be a multiple of 4 to see the full f32
+gain (n = 4 → 1.10×, n = 6 = 4 + masked tail → 0.99×, n = 8 → 1.33–1.37×
+for the arithmetic alone), which is why the speed preset uses n = 8; a
+non-multiple-of-4 tail is packed into one masked 4-lane op with zero
+weights rather than a scalar `1.0f32/x` loop.
+
+The accuracy presets (`chebcode`, `chebcode_balanced`, `chebcode_xtreme`)
+keep the f64 path — a 17-bit `F64x2::recip_fast` (one Newton step)
+measured +1.19–1.24× on the f64 far field with a ~1.4e-6 floor, but it
+would cap `chebcode_xtreme`'s ~1e-12 class, so it survives only as a
+measurement reference.
 
 `eval_points_parallel` writes into one preallocated output through
-`par_chunks_mut`, and the traversal stack is a fixed inline
+`par_chunks_mut` (requests below 2 048 queries run sequentially, because the
+join costs more than the call), and the traversal stack is a fixed inline
 `TraversalStack` whose depth bound is *guaranteed* by the builder
-(`MAX_TREE_DEPTH`, a deeper node becomes an oversized exact leaf) — together
-1.04-1.07x on Rayon at p = 50 000 with seq CPU exactly neutral.
+(`MAX_TREE_DEPTH`, a deeper node becomes an oversized exact leaf).
 
 ### ChebCodeFast round: what did NOT work (measured negatives)
 
@@ -243,10 +281,11 @@ CHANGELOG round) so they are not re-attempted.
   full refined reciprocal and the flat arrays grow from stride 9 to 10.
   Wall-clock "grid wins" seen under load (up to 1.17x) were contention
   artifacts. Moot now: the speed preset uses n = 8.
-* **Two-accumulator far-field unroll** (two independent `F64x2` accumulator
-  pairs, to halve the serial FMA chain): p = 50 000 sequential
-  9.22 → 9.87 ms. The n/2 FMAs were never the critical path; the extra live
-  registers cost more than the shortened chain.
+* **Two-accumulator far-field unroll** (two independent accumulator pairs,
+  to halve the serial FMA chain): f64 measured 9.22 → 9.87 ms at p = 50 000;
+  the f32 version measured 3.06 → 4.62 ms (a large regression). The FMAs
+  were never the critical path; the extra live registers and the changed
+  codegen cost more than the shortened chain.
 * **Two-lane refined-reciprocal `barycentric_row`** (vectorize the build's
   `β_j/(x−t_j)` with `F64x2::recip`): **~20 % SLOWER** than the scalar `fdiv`
   (p = 50 000 build 0.84 → 1.03 ms; `fills-only` 0.38 → 0.47 ms). The build's
@@ -255,14 +294,12 @@ CHANGELOG round) so they are not re-attempted.
   it worse still (two lane extractions per pair); the exact-node hit is
   instead detected by one post-loop `s.is_finite()` test. The build stays
   scalar.
-* **Parallel tree build** — two variants, both gated on `parallel = true` and
-  p ≥ 2000: (a) structural DFS + parallel leaf projections + per-depth
-  parallel merges, (b) leaf-only parallel projections with serial reverse
-  merges. Both **0.63-0.93x** end-to-end (`all.par`). At p = 50 000 the whole
-  build is ~0.8 ms, while a Rayon level barrier plus per-level buffer
-  allocation and serial scatter costs more than that — the tree is deep
-  (≈ 11 levels) and each level is small. The build stays serial, and that is
-  what caps `all.par` at ~1.4-1.8x.
+* **Per-depth parallel merges**: each merge is small and the tree is deep
+  (≈ 11 levels), so a Rayon barrier per level costs more than the work.
+  Merges stay serial. (The earlier round's parallel-build variants were
+  slower for the same reason; the current leaf-only split wins because it
+  has *one* parallel phase and no barriers, and groups 32 panels per job.
+  See the build section above for the measured 0.80 → 0.63 ms.)
 
 ## Methodology note
 

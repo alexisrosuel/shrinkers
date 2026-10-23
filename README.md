@@ -59,16 +59,19 @@ vectorized NumPy version:
 
 | p | Naive Python | NumPy | shrinkers exact ¹ | shrinkers ChebCode ² |
 |---|---|---|---|---|
-| 1 024 | 0.33 s | 2.3 ms | **0.23 ms** · 10× | **0.19 ms** · 12× |
-| 4 096 | 5.3 s | 91 ms | **1.19 ms** · 77× | **0.35 ms** · 260× |
-| 50 000 | *(~2 h extrapolated)* | 12.4 s | **0.115 s** · 108× | **2.2 ms** · ≈5600× |
+| 1 024 | 0.33 s | 2.0 ms | **0.18 ms** · 11× | **0.081 ms** · 25× |
+| 4 096 | 5.3 s | 76 ms | **0.87 ms** · 87× | **0.24 ms** · 320× |
+| 50 000 | *(~13 min extrapolated)* | 12.9 s | **0.113 s** · 114× | **1.52 ms** · ≈8 500× |
 
 ¹ machine precision — the zero-error anchor.  ² `chebcode_fast` preset
-(θ=1.0, n=8, leaf 32, four-lane f32 far field), rel. error ~1e-5: trading the
-exact family's zero error for it buys **~50×** at p = 50 000, while the
+(θ=1.0, n=8, leaf 32, four-lane f32 far field), rel. error ~2e-5: trading the
+exact family's zero error for it buys **~74×** at p = 50 000, while the
 `chebcode` (~5e-10) and `chebcode_xtreme` (~1e-12) presets cost 4–8× more
 than `chebcode_fast` (see [docs/internals.md](docs/internals.md) and the
-`[Unreleased]` CHANGELOG round for the full record). At microsecond scales
+`[Unreleased]` CHANGELOG round for the full record). That round cut the Rust
+evaluation by **~19 % sequentially** and **~23 % under Rayon** at p = 50 000
+(4.41 → 3.59 ms / 0.72 → 0.55 ms), and the f64 presets remain bit-identical.
+At microsecond scales
 both shrinkers curves flatten onto their fixed Python-call overhead — a
 Rayon request on tiny inputs runs sequential automatically rather than
 paying the thread-pool floor (details in
@@ -91,8 +94,8 @@ sharing. Measured with `examples/measure_runtime_audit.rs readme_par <p>`
 The all-cores times are unchanged by that exact-kernel round; the *ratios*
 moved down only because the single-thread kernel got 15 % faster (interleaved
 before/after in [docs/internals.md](docs/internals.md)).
-`chebcode_fast` scales too — ×4.1 at p = 10 000 and ×5.7 at p = 50 000
-(0.75 → 0.19 ms, 4.35 → 0.76 ms; measured with
+`chebcode_fast` scales too — ×4.4 at p = 10 000 and ×6.5 at p = 50 000
+(0.65 → 0.15 ms, 3.59 → 0.55 ms; measured with
 `examples/measure_chebfast.rs compare`). Note also that the NumPy baseline in figure 2
 is itself single-core — even pinned to one thread, shrinkers still wins
 by roughly an order of magnitude (9.1× at p≈5000).
@@ -102,7 +105,7 @@ by roughly an order of magnitude (9.1× at p≈5000).
 - `deconvolve_spiked(evals, c)` — the one-call pipeline: BEMA detection →
   inverse-BBP spike debiasing → El Karoui bulk deconvolution;
 - Stieltjes-transform methods spanning the whole speed/accuracy frontier —
-  machine-precision exact kernels, ChebCode treecodes (~1e-5 at the
+  machine-precision exact kernels, ChebCode treecodes (~2e-5 at the
   `chebcode_fast` speed point, ~6e-13 at `chebcode_xtreme`), HODLR — plus
   data-driven `speed_auto` / `accuracy_auto` picks, with
   `auto` = the measured speed policy (same Pareto table, resolved in one

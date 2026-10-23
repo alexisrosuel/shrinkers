@@ -332,7 +332,7 @@ fn cheb_preset(method: StieltjesMethod) -> chebcode::ChebPreset {
 /// queries amortize a fine tree. On the grid path `nq` is the caller's
 /// `n_points` (200 by default, often ≪ p) and the call is
 /// **build-dominated**: measured at p = 10 000 / 50 000 the build is 81 % /
-/// 94 % of the total, and most of that build is `merge_weights`, whose cost
+/// 94 % of the total, and most of that build is `merge_all_weights`, whose cost
 /// scales as `p / leaf_cap`.
 ///
 /// Raising `leaf_cap` on this path therefore *removes* work from the build —
@@ -460,7 +460,14 @@ pub fn compute_stieltjes_at_points(
             // This tree serves `query_points.len()` queries, not p — relax the
             // leaf capacity accordingly (see `grid_leaf_cap`).
             let leaf_cap = grid_leaf_cap(n, eigenvalues.len(), query_points.len(), leaf_cap);
-            let batch = chebcode::ChebCodeBatch::build_mode(eigenvalues, theta, n, leaf_cap, mode);
+            let batch = chebcode::ChebCodeBatch::build_mode_parallel(
+                eigenvalues,
+                theta,
+                n,
+                leaf_cap,
+                mode,
+                parallel,
+            );
             batch.evaluate_points(query_points, eta, parallel)
         }
         _ => {

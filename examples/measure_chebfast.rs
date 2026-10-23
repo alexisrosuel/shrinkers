@@ -10,7 +10,8 @@
 //! ```
 //!
 //! Keys emitted by `compare`:
-//!   chebf.build.p{p}      tree build only (FAST preset)
+//!   chebf.build.p{p}      tree build only (FAST preset, sequential)
+//!   chebf.build.par.p{p}  tree build only (FAST preset, parallel leaf fills)
 //!   chebf.eval.seq.p{p}   evaluate all p points, sequential
 //!   chebf.eval.par.p{p}   evaluate all p points, Rayon
 //!   chebf.all.seq.p{p}    impl entry point (build + seq eval)
@@ -23,7 +24,7 @@ mod support;
 
 use shrinkers::config::{CutoffConfig, Parallelism, StieltjesMethod};
 use shrinkers::stieltjes::{
-    ChebCodeBatch, ChebPreset, FastMode, compute_all_stieltjes,
+    ChebCodeBatch, ChebPreset, FastMode, chebcode_tree_for_bench_parallel, compute_all_stieltjes,
     compute_all_stieltjes_chebcode_impl, compute_all_stieltjes_chebcode_impl_f32,
 };
 use std::time::Instant;
@@ -172,6 +173,11 @@ fn main() {
                 std::hint::black_box(b);
             });
             println!("chebf.build.p{p}\t{t:.4}");
+            let t = bench(15, || {
+                let b = chebcode_tree_for_bench_parallel(&evs, preset, true);
+                std::hint::black_box(b);
+            });
+            println!("chebf.build.par.p{p}\t{t:.4}");
         }
         "ab" => {
             // Interleaved f64-vs-f32 FAR-FIELD A/B on one shared tree.
@@ -295,6 +301,11 @@ fn main() {
                 std::hint::black_box(b);
             });
             println!("chebf.build.p{p}\t{t:.4}");
+            let t = bench(15, || {
+                let b = chebcode_tree_for_bench_parallel(&evs, preset, true);
+                std::hint::black_box(b);
+            });
+            println!("chebf.build.par.p{p}\t{t:.4}");
 
             let t = bench(reps, || {
                 let _ = tree.evaluate(eta);

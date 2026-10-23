@@ -53,7 +53,7 @@ pub enum StieltjesMethod {
     ChebCode,
     /// Speed-tuned ChebCode preset (theta=1.0, n=8, leaf=32, 4-lane f32
     /// far field): ~2.3x the historical (0.5, 9) f64 point at a
-    /// ~1e-5-class relative-L2 error. `chebcode`/`chebcode_balanced` keep
+    /// ~2e-5-class relative-L2 error. `chebcode`/`chebcode_balanced` keep
     /// the accuracy-grade operating points.
     ChebCodeFast,
     /// Precision-tuned ChebCode preset (theta=0.25, n=11, leaf=16):

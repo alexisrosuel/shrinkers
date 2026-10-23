@@ -285,6 +285,16 @@ that round's full record:
 | `Hodlr` (Random/sketch) | ~1e-3 (rank-capped) | 1.9 s | 0.86 s |
 | `BlockedTiled` (exact) | 0 | ~640 ms | ~114 ms |
 
+> **Latest kernel pass (`[Unreleased]`).** The f32 speed path was reworked
+> (compact 24-byte nodes, interleaved panels, one-step reciprocal, f32
+> partials, η factoring, pre-order child links, 1.3× outside angle) and the
+> build split into topology / parallel leaf fills / reverse merges. At
+> p = 50 000, η = 1/√p, same-binary interleaved A/B (9-run medians): FAST
+> eval 4.41 → 3.59 ms sequential (0.72 → 0.55 ms Rayon), end-to-end
+> 5.15 → 4.46 ms sequential (1.79 → 1.38 ms Rayon). The f64 path is
+> bit-identical (`measure_hotloop_ab --checksum`) and ~8 % faster. The
+> historical rows below predate that pass and are kept for the record.
+
 Among methods with usable accuracy (rel err ≤ 1e-6), `chebcode_fast` holds
 the runtime minimum at every size in BOTH columns: the f32 far field plus the
 θ=1.0 opening angle moved the point far enough ahead that even the
@@ -437,28 +447,37 @@ dS/dx in a single exact pass.
 The Chebyshev tree is a flat-array structure over the sorted spectrum: each
 panel stores its interval `[lo, hi]`, a contiguous source range into the
 sorted array, `n` Chebyshev node positions and `n` barycentric weights, plus
-child indices. Panels split at their interval midpoint until they hold at
-most `leaf_cap` sources; leaves are summed EXACTLY, interior panels are
-approximated.
+the right-child index. Node indices are pre-order, so the left child is
+always the next node and needs no stored link. Panels split at their
+interval midpoint until they hold at most `leaf_cap` sources; leaves are
+summed EXACTLY, interior panels are approximated.
 
 **Build — once per spectrum, independent of η:**
 
 1. sort (skipped when input is pre-sorted; the permutation is kept so every
    result lands back in the caller's original order);
-2. recursive partitioning of panels;
+2. serial topology: recursive partitioning of panels, writing intervals,
+   source ranges, right-child links and Chebyshev node positions;
 3. leaf weights: each source spreads unit mass onto its panel's Chebyshev
    nodes through the normalized barycentric row `(λⱼ/(x−tⱼ))/Σᵢλᵢ/(x−tᵢ)` —
-   mass-preserving by construction;
+   mass-preserving by construction. Leaves are independent, so this phase
+   runs on Rayon (groups of 32 panels) when the dispatcher asked for a
+   parallel call and the tree has ≥ 1 000 nodes;
 4. interior weights: MERGED from children instead of rescanning sources —
    each child node acts as a point mass `w·δₜ` in the parent's barycentric
-   update, O(n²) per child instead of O(count·n). This is what made builds
-   ~10× cheaper overall.
+   update, O(n²) per child instead of O(count·n). Because indices are
+   pre-order, iterating nodes in reverse is a valid bottom-up sweep, so the
+   merge is a flat loop with no recursion and no per-level barriers.
 
 **Evaluation of one query `z = x − iη`** walks the tree with an explicit
-stack: a panel well-separated from z (`half_width² < θ²·dist²`) contributes
-the rational far field `F(z) = Σⱼ wⱼ/(z−tⱼ)` evaluated on vectorized node
-pairs; anything closer descends; leaves add an exact SIMD pairwise sum.
-Cost per query: O(log p · n); for all p eigenvalues: O(p log p).
+stack: a panel well-separated from z (`half_width² < θ²·dist²`, stored as
+`accept_hw = half_width²/θ²`) contributes the rational far field
+`F(z) = Σⱼ wⱼ/(z−tⱼ)`; anything closer descends; leaves add an exact SIMD
+pairwise sum. The FAST preset runs this traversal and the far field in f32
+on a compact 24-byte node record and 64-byte interleaved panels, keeps
+`η` out of the per-term imaginary accumulation (one multiply at the end),
+and gives panels outside the query a `1.3·θ` opening angle. Cost per query:
+O(log p · n); for all p eigenvalues: O(p log p).
 
 On top of that, `ChebCodeBatch` adds three amortizations:
 

@@ -84,14 +84,14 @@ spiked covariance model. It orchestrates the full pipeline:
   `"blocked_autovec"`, `"blocked_tiled"`, `"blocked_windowed"`,
   `"blocked_hybrid"`, `"adaptive"`, `"fft5"`, `"fft3"`, `"fft2"`, `"fmm"`
   (alias `"treecode"`), `"chebcode"` (alias `"chebyshev"`),
-  `"chebcode_fast"` (alias `"chebf"`; ~1e-5, fastest at every size),
+  `"chebcode_fast"` (alias `"chebf"`; ~2e-5, fastest at every size),
   `"chebcode_balanced"` (alias `"chebb"`; ~5e-10),
   `"chebcode_xtreme"` (alias `"chebx"`; ~6e-13), `"hodlr"`, `"ewald"`,
   `"dst"`, `"speed_auto"` (alias `"speed"`), `"accuracy_auto"`
   (alias `"accuracy"`), or `"auto"`.
   `"auto"` is the **speed policy**, not an exact fallback: it resolves
   through the same measured Pareto table as `"speed_auto"` (identical pick)
-  and is therefore approximate — ~1e-5 at the retuned `chebcode_fast`
+  and is therefore approximate — ~2e-5 at the retuned `chebcode_fast`
   point, which the table now picks at every size (it used to fall back to
   the FFT bank, ~4e-5, above p ≈ 20 000). For a machine-precision
   result ask for `"blocked"` (the `stieltjes_transform` default) or

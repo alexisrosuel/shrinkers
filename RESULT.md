@@ -1,3 +1,8 @@
+> **Historical report.** This documents the original f32 far-field round.
+> The path has since been reworked into the compact `NodeF32`/interleaved-panel
+> traversal with a one-step reciprocal, f32 partials and an outside-angle rule;
+> see the `[Unreleased]` CHANGELOG entry and `docs/chebcode_algorithms.md`.
+
 # f32 4-lane far-field path for the Chebyshev treecode (`chebcode_fast`)
 
 Worktree: `/Users/alexisrosuel/fast_rmt_shrinkage/.wt/f32` (branch `wt/f32`).

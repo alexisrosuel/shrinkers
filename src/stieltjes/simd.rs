@@ -145,6 +145,19 @@ impl F64x2 {
         }
     }
 
+    /// Lane-wise `self + rhs`.
+    #[inline(always)]
+    pub(crate) fn add(self, rhs: Self) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            Self(unsafe { std::arch::aarch64::vaddq_f64(self.0, rhs.0) })
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            Self([self.0[0] + rhs.0[0], self.0[1] + rhs.0[1]])
+        }
+    }
+
     /// Lane-wise `self * rhs`.
     #[inline(always)]
     pub(crate) fn mul(self, rhs: Self) -> Self {
@@ -403,6 +416,24 @@ impl F32x4 {
         }
     }
 
+    /// Lane-wise `self + rhs`.
+    #[inline(always)]
+    pub(crate) fn add(self, rhs: Self) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            Self(unsafe { std::arch::aarch64::vaddq_f32(self.0, rhs.0) })
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            Self([
+                self.0[0] + rhs.0[0],
+                self.0[1] + rhs.0[1],
+                self.0[2] + rhs.0[2],
+                self.0[3] + rhs.0[3],
+            ])
+        }
+    }
+
     /// Lane-wise `self * rhs`.
     #[inline(always)]
     pub(crate) fn mul(self, rhs: Self) -> Self {
@@ -444,6 +475,11 @@ impl F32x4 {
     /// NEON: initial FRECPE estimate (~8 bits) plus two FRECPS refinement
     /// steps (8 → 16 → ≥24 bits, i.e. near-correctly-rounded f32), staying on
     /// the multiply/add pipelines. Elsewhere: plain division.
+    ///
+    /// The ChebCode FAST far field uses [`Self::recip_fast`] (one refinement
+    /// step, ~16 bits); this full-precision form is kept as the reference the
+    /// SIMD unit tests compare against.
+    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn recip(self) -> Self {
         #[cfg(target_arch = "aarch64")]
@@ -452,6 +488,33 @@ impl F32x4 {
                 use std::arch::aarch64::*;
                 let e = vrecpeq_f32(self.0);
                 let e = vmulq_f32(e, vrecpsq_f32(self.0, e));
+                vmulq_f32(e, vrecpsq_f32(self.0, e))
+            })
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            Self([
+                1.0 / self.0[0],
+                1.0 / self.0[1],
+                1.0 / self.0[2],
+                1.0 / self.0[3],
+            ])
+        }
+    }
+
+    /// One-refinement-step reciprocal: `FRECPE` + a single `FRECPS`/mul
+    /// Newton step, i.e. ~16 significant bits (~1.5e-5 relative).
+    ///
+    /// The ChebCode FAST far field already carries ~1e-5 relative
+    /// interpolation error, so this leaves the result's error class intact
+    /// while removing one refinement step from every panel term.
+    #[inline(always)]
+    pub(crate) fn recip_fast(self) -> Self {
+        #[cfg(target_arch = "aarch64")]
+        {
+            Self(unsafe {
+                use std::arch::aarch64::*;
+                let e = vrecpeq_f32(self.0);
                 vmulq_f32(e, vrecpsq_f32(self.0, e))
             })
         }
